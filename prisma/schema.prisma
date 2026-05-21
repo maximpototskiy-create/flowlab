@@ -1,0 +1,286 @@
+// FlowLab — Database schema (Step 3)
+//
+// Hierarchy:
+//   User → Brand → Project → Workflow → Run → RunStep → Asset
+//   Brand → BrandKit (1:1) → BrandKitAsset (many)
+//
+// Future tables prepared but not heavily used yet:
+//   Assets (will fill in Step 5/6), Runs/RunSteps (Step 6), UsageLog (Step 6).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ────────────────────────────────────────────────────────────
+// USERS
+// ────────────────────────────────────────────────────────────
+model User {
+  id         String    @id @db.Uuid
+  email      String    @unique
+  name       String?
+  avatarUrl  String?   @map("avatar_url")
+  role       String    @default("member")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime? @map("last_seen_at")
+
+  brands       Brand[]
+  projects     Project[]
+  workflows    Workflow[]
+  uploadedAssets Asset[]  @relation("UploadedBy")
+  triggeredRuns  Run[]
+
+  @@map("users")
+}
+
+// ────────────────────────────────────────────────────────────
+// BRANDS — mobile apps / products
+// e.g. Cleaner Pro, Wonderly, etc.
+// ────────────────────────────────────────────────────────────
+model Brand {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String    @unique // url-safe id
+  description String?
+  color       String    @default("emerald") // visual tag
+  iconUrl     String?   @map("icon_url")
+  createdBy   String    @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  archivedAt  DateTime? @map("archived_at")
+
+  creator   User       @relation(fields: [createdBy], references: [id])
+  projects  Project[]
+  brandKit  BrandKit?
+  assets    Asset[]
+
+  @@index([archivedAt])
+  @@index([createdAt(sort: Desc)])
+  @@map("brands")
+}
+
+// ────────────────────────────────────────────────────────────
+// BRAND KIT — design system + tone-of-voice per brand
+// ────────────────────────────────────────────────────────────
+model BrandKit {
+  id        String   @id @default(uuid()) @db.Uuid
+  brandId   String   @unique @map("brand_id") @db.Uuid
+
+  // Visual identity
+  colors    String?  // newline-separated hex codes
+  fonts     String?  // font names + URLs
+
+  // Voice
+  voice         String? // tone of voice description
+  voiceCloneIds String? @map("voice_clone_ids") // ElevenLabs voice IDs
+
+  // Lexicon
+  lexiconAllow String? @map("lexicon_allow") // words/phrases preferred
+  lexiconAvoid String? @map("lexicon_avoid") // banned words
+
+  // Safety
+  bannedThemes String? @map("banned_themes") // gambling, dating, etc.
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  brand  Brand              @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  assets BrandKitAsset[]
+
+  @@map("brand_kits")
+}
+
+// ────────────────────────────────────────────────────────────
+// BRAND KIT ASSETS — logos, screenshots, reference creatives
+// Each is a reference to a global asset, categorized.
+// ────────────────────────────────────────────────────────────
+model BrandKitAsset {
+  id          String  @id @default(uuid()) @db.Uuid
+  brandKitId  String  @map("brand_kit_id") @db.Uuid
+  assetId     String  @map("asset_id") @db.Uuid
+  category    String  // 'logo' | 'ui_screenshot' | 'reference_creative'
+  displayOrder Int    @default(0) @map("display_order")
+
+  brandKit BrandKit @relation(fields: [brandKitId], references: [id], onDelete: Cascade)
+  asset    Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([brandKitId])
+  @@map("brand_kit_assets")
+}
+
+// ────────────────────────────────────────────────────────────
+// PROJECTS — campaigns / experiments inside a brand
+// ────────────────────────────────────────────────────────────
+model Project {
+  id          String    @id @default(uuid()) @db.Uuid
+  brandId     String?   @map("brand_id") @db.Uuid  // nullable for legacy projects
+  name        String
+  description String?
+  color       String    @default("emerald")
+  createdBy   String    @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  archivedAt  DateTime? @map("archived_at")
+
+  brand     Brand?     @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  creator   User       @relation(fields: [createdBy], references: [id])
+  workflows Workflow[]
+  assets    Asset[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([archivedAt])
+  @@index([brandId])
+  @@map("projects")
+}
+
+// ────────────────────────────────────────────────────────────
+// WORKFLOWS — node graphs
+// ────────────────────────────────────────────────────────────
+model Workflow {
+  id        String   @id @default(uuid()) @db.Uuid
+  projectId String   @map("project_id") @db.Uuid
+  name      String
+  graph     Json     @default("{\"nodes\":[],\"edges\":[]}")
+
+  // For Variation Lab (Phase 2 — see brief)
+  // Workflows sharing the same variation_group_id are A/B/C variations
+  variationGroupId String? @map("variation_group_id")
+
+  createdBy String   @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  creator User    @relation(fields: [createdBy], references: [id])
+  runs    Run[]
+
+  @@index([projectId])
+  @@index([updatedAt(sort: Desc)])
+  @@index([variationGroupId])
+  @@map("workflows")
+}
+
+// ────────────────────────────────────────────────────────────
+// ASSETS — global file library
+// Sources: 'upload' | 'generated' | 'brand_kit'
+// Used by: brand_kit_assets, run_steps (output), uploads, etc.
+// ────────────────────────────────────────────────────────────
+model Asset {
+  id          String   @id @default(uuid()) @db.Uuid
+  brandId     String?  @map("brand_id") @db.Uuid
+  projectId   String?  @map("project_id") @db.Uuid
+
+  // Storage
+  storagePath String   @map("storage_path") // path inside Supabase Storage bucket
+  cdnUrl      String   @map("cdn_url")      // public CDN URL
+
+  // Media metadata
+  kind        String   // 'image' | 'video' | 'audio' | 'text'
+  mimeType    String?  @map("mime_type")
+  sizeBytes   BigInt?  @map("size_bytes")
+  width       Int?
+  height      Int?
+  durationSec Float?   @map("duration_sec")
+
+  // Provenance
+  source      String   // 'upload' | 'generated' | 'brand_kit'
+  model       String?  // for generated: 'fal-ai/flux/dev', 'elevenlabs/...', etc.
+  prompt      String?  // for generated: the prompt used
+  seed        BigInt?  // for generated: random seed
+  metadata    Json?    // any extra info
+
+  // Linkage
+  runStepId   String?  @map("run_step_id") @db.Uuid // if generated by a run
+  uploadedBy  String?  @map("uploaded_by") @db.Uuid
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  brand          Brand?           @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  project        Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  uploader       User?            @relation("UploadedBy", fields: [uploadedBy], references: [id])
+  runStep        RunStep?         @relation(fields: [runStepId], references: [id], onDelete: SetNull)
+  brandKitUsages BrandKitAsset[]
+
+  @@index([brandId])
+  @@index([projectId])
+  @@index([source])
+  @@index([kind])
+  @@index([createdAt(sort: Desc)])
+  @@map("assets")
+}
+
+// ────────────────────────────────────────────────────────────
+// RUNS — workflow executions
+// One Run per "Run all" or single-node execution
+// ────────────────────────────────────────────────────────────
+model Run {
+  id              String    @id @default(uuid()) @db.Uuid
+  workflowId      String    @map("workflow_id") @db.Uuid
+  triggeredBy     String    @map("triggered_by") @db.Uuid
+  status          String    @default("pending") // 'pending' | 'running' | 'done' | 'error' | 'cancelled'
+  startedAt       DateTime  @default(now()) @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  totalCostUsd    Float     @default(0) @map("total_cost_usd")
+  errorMessage    String?   @map("error_message")
+  graphSnapshot   Json      @map("graph_snapshot")
+
+  workflow Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  trigger  User      @relation(fields: [triggeredBy], references: [id])
+  steps    RunStep[]
+
+  @@index([workflowId])
+  @@index([triggeredBy])
+  @@index([startedAt(sort: Desc)])
+  @@map("runs")
+}
+
+// ────────────────────────────────────────────────────────────
+// RUN STEPS — individual node executions inside a Run
+// ────────────────────────────────────────────────────────────
+model RunStep {
+  id            String    @id @default(uuid()) @db.Uuid
+  runId         String    @map("run_id") @db.Uuid
+  nodeId        String    @map("node_id") // ID inside the graph
+  nodeType      String    @map("node_type")
+  model         String?
+  status        String    @default("pending")
+  startedAt     DateTime  @default(now()) @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  costUsd       Float     @default(0) @map("cost_usd")
+  inputParams   Json?     @map("input_params")
+  outputData    Json?     @map("output_data")
+  errorMessage  String?   @map("error_message")
+  falRequestId  String?   @map("fal_request_id")
+
+  run    Run     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  assets Asset[]
+
+  @@index([runId])
+  @@index([model])
+  @@map("run_steps")
+}
+
+// ────────────────────────────────────────────────────────────
+// USAGE LOG — denormalized for fast analytics queries
+// Populated when a RunStep finishes.
+// ────────────────────────────────────────────────────────────
+model UsageLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  brandId     String?  @map("brand_id") @db.Uuid
+  projectId   String?  @map("project_id") @db.Uuid
+  workflowId  String?  @map("workflow_id") @db.Uuid
+  model       String
+  costUsd     Float    @map("cost_usd")
+  durationSec Float?   @map("duration_sec")
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+
+  @@index([userId, occurredAt(sort: Desc)])
+  @@index([brandId, occurredAt(sort: Desc)])
+  @@index([model, occurredAt(sort: Desc)])
+  @@map("usage_log")
+}

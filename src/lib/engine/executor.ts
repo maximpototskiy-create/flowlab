@@ -1,0 +1,243 @@
+// Workflow execution engine.
+// - Topologically sorts nodes
+// - Runs independent branches in parallel
+// - Sequential when dependencies require it
+// - Updates DB run/run_steps as it goes
+
+import { prisma } from "@/lib/prisma";
+import { runNode, type RunnerContext, type RunnerResult } from "./runners";
+import { kindFromMime } from "@/lib/storage";
+import type { Graph, GraphNode } from "@/lib/canvas/types";
+
+type NodeStatus = "pending" | "running" | "done" | "error" | "skipped";
+
+type ExecState = {
+  graph: Graph;
+  outputs: Map<string, Record<string, unknown>>;
+  status: Map<string, NodeStatus>;
+  errors: Map<string, string>;
+  results: Map<string, { value: string; mime?: string }[]>;
+  costByNode: Map<string, number>;
+  durationByNode: Map<string, number>;
+  runId: string;
+  ctx: RunnerContext;
+  /** Only execute these nodes (subset). null = all nodes */
+  scope: Set<string> | null;
+};
+
+/** Topological sort. Throws on cycles. */
+export function topoSort(graph: Graph, scope?: Set<string>): string[] {
+  const nodes = scope ? graph.nodes.filter((n) => scope.has(n.id)) : graph.nodes;
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const inDeg = new Map<string, number>();
+  for (const n of nodes) inDeg.set(n.id, 0);
+  const adj = new Map<string, string[]>();
+  for (const n of nodes) adj.set(n.id, []);
+
+  for (const e of graph.edges) {
+    if (!nodeIds.has(e.from.nodeId) || !nodeIds.has(e.to.nodeId)) continue;
+    adj.get(e.from.nodeId)!.push(e.to.nodeId);
+    inDeg.set(e.to.nodeId, (inDeg.get(e.to.nodeId) ?? 0) + 1);
+  }
+
+  const queue: string[] = [];
+  for (const [id, d] of inDeg.entries()) if (d === 0) queue.push(id);
+  const out: string[] = [];
+
+  while (queue.length) {
+    const id = queue.shift()!;
+    out.push(id);
+    for (const next of adj.get(id) ?? []) {
+      const d = (inDeg.get(next) ?? 1) - 1;
+      inDeg.set(next, d);
+      if (d === 0) queue.push(next);
+    }
+  }
+  if (out.length !== nodes.length) throw new Error("Graph contains a cycle");
+  return out;
+}
+
+/** Group topologically-sorted nodes by depth — nodes in same layer can run in parallel */
+export function layerByDepth(graph: Graph, order: string[]): string[][] {
+  const depth = new Map<string, number>();
+  for (const id of order) {
+    const incoming = graph.edges.filter((e) => e.to.nodeId === id);
+    let d = 0;
+    for (const e of incoming) {
+      d = Math.max(d, (depth.get(e.from.nodeId) ?? 0) + 1);
+    }
+    depth.set(id, d);
+  }
+  const layers: string[][] = [];
+  for (const id of order) {
+    const d = depth.get(id) ?? 0;
+    if (!layers[d]) layers[d] = [];
+    layers[d].push(id);
+  }
+  return layers;
+}
+
+/** Resolve a node's input map from upstream outputs + edge connections */
+function resolveInputs(graph: Graph, node: GraphNode, outputs: Map<string, Record<string, unknown>>) {
+  const inputs: Record<string, unknown> = {};
+  for (const edge of graph.edges) {
+    if (edge.to.nodeId !== node.id) continue;
+    const upstream = outputs.get(edge.from.nodeId);
+    if (!upstream) continue;
+    inputs[edge.to.port] = upstream[edge.from.port];
+  }
+  return inputs;
+}
+
+/** Find all ancestor nodes of `targetId` (for subgraph execution) */
+export function ancestorsOf(graph: Graph, targetId: string): Set<string> {
+  const need = new Set<string>();
+  function visit(id: string) {
+    if (need.has(id)) return;
+    need.add(id);
+    for (const e of graph.edges) if (e.to.nodeId === id) visit(e.from.nodeId);
+  }
+  visit(targetId);
+  return need;
+}
+
+/** Execute a single node and persist its run_step */
+async function executeOne(
+  node: GraphNode,
+  state: ExecState,
+): Promise<void> {
+  state.status.set(node.id, "running");
+  const inputs = resolveInputs(state.graph, node, state.outputs);
+
+  const runStep = await prisma.runStep.create({
+    data: {
+      runId: state.runId,
+      nodeId: node.id,
+      nodeType: node.type,
+      model: (node.config?.model as string) ?? null,
+      status: "running",
+      inputParams: node.config as never,
+    },
+  });
+
+  try {
+    const result: RunnerResult = await runNode(node.type, node.config, inputs, {
+      ...state.ctx,
+      runStepId: runStep.id,
+    });
+
+    state.outputs.set(node.id, result.outputs);
+    if (result.results) state.results.set(node.id, result.results);
+    state.costByNode.set(node.id, result.costUsd);
+    state.durationByNode.set(node.id, result.durationMs);
+    state.status.set(node.id, "done");
+
+    // Persist asset rows for any URLs in outputs
+    const assetIds: string[] = [];
+    for (const [port, value] of Object.entries(result.outputs)) {
+      if (typeof value === "string" && value.startsWith("http")) {
+        const kind = inferKindFromUrl(value, port);
+        const asset = await prisma.asset.create({
+          data: {
+            brandId: state.ctx.brandId ?? null,
+            projectId: state.ctx.projectId ?? null,
+            storagePath: "", // we store the cdnUrl which is already signed
+            cdnUrl: value,
+            kind,
+            source: "generated",
+            model: (node.config?.model as string) ?? null,
+            prompt: (node.config?.instructions as string) ?? null,
+            runStepId: runStep.id,
+          },
+        });
+        assetIds.push(asset.id);
+      }
+    }
+
+    await prisma.runStep.update({
+      where: { id: runStep.id },
+      data: {
+        status: "done",
+        finishedAt: new Date(),
+        costUsd: result.costUsd,
+        outputData: result.outputs as never,
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    state.status.set(node.id, "error");
+    state.errors.set(node.id, msg);
+    await prisma.runStep.update({
+      where: { id: runStep.id },
+      data: { status: "error", finishedAt: new Date(), errorMessage: msg },
+    });
+    throw err;
+  }
+}
+
+function inferKindFromUrl(url: string, port: string): "image" | "video" | "audio" | "text" {
+  if (port.toLowerCase().includes("image") || port === "character" || port === "composed") return "image";
+  if (port.toLowerCase().includes("video") || port === "section") return "video";
+  if (port.toLowerCase().includes("audio")) return "audio";
+  // Fallback: extension
+  const ext = url.split(".").pop()?.toLowerCase().split("?")[0] ?? "";
+  if (["mp4", "webm", "mov"].includes(ext)) return "video";
+  if (["mp3", "wav", "m4a", "ogg"].includes(ext)) return "audio";
+  if (["jpg", "jpeg", "png", "webp", "gif"].includes(ext)) return "image";
+  return "text";
+}
+
+/** Execute a whole graph (or scope) — parallel within depth layers */
+export async function executeGraph(
+  graph: Graph,
+  ctx: RunnerContext,
+  opts: { scope?: Set<string>; runId: string },
+): Promise<{
+  outputs: Map<string, Record<string, unknown>>;
+  errors: Map<string, string>;
+  totalCost: number;
+  results: Map<string, { value: string; mime?: string }[]>;
+  durations: Map<string, number>;
+}> {
+  const state: ExecState = {
+    graph,
+    outputs: new Map(),
+    status: new Map(),
+    errors: new Map(),
+    results: new Map(),
+    costByNode: new Map(),
+    durationByNode: new Map(),
+    runId: opts.runId,
+    ctx,
+    scope: opts.scope ?? null,
+  };
+
+  const order = topoSort(graph, opts.scope ?? undefined);
+  const layers = layerByDepth(graph, order);
+
+  for (const layer of layers) {
+    if (!layer) continue;
+    // Parallel within layer
+    await Promise.all(
+      layer.map(async (nodeId) => {
+        const node = graph.nodes.find((n) => n.id === nodeId);
+        if (!node) return;
+        try {
+          await executeOne(node, state);
+        } catch {
+          // already recorded
+        }
+      }),
+    );
+    // If any failed in this layer, downstream layers won't have inputs — they'll fail naturally
+  }
+
+  const totalCost = [...state.costByNode.values()].reduce((a, b) => a + b, 0);
+  return {
+    outputs: state.outputs,
+    errors: state.errors,
+    totalCost,
+    results: state.results,
+    durations: state.durationByNode,
+  };
+}

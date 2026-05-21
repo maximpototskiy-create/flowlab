@@ -1,0 +1,139 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ────────────────────────────────────────
+   THEME TOKENS — CSS variables for light/dark
+   Use rgb-triplet format so Tailwind can apply alpha.
+   ──────────────────────────────────────── */
+:root {
+  /* Light theme (default) */
+  --bg: 250 250 249;            /* near-white */
+  --bg-subtle: 244 244 242;     /* subtle gray */
+  --bg-card: 255 255 255;       /* pure white */
+  --bg-input: 250 250 249;
+  --bg-hover: 244 244 242;
+
+  --fg: 15 15 15;               /* near-black */
+  --fg-muted: 100 100 100;
+  --fg-subtle: 150 150 150;
+
+  --border: 230 230 230;
+  --border-strong: 200 200 200;
+
+  --brand: 16 185 129;          /* emerald-500 */
+  --brand-fg: 255 255 255;
+
+  --grid-dot: 220 220 220;
+
+  --shadow-color: 0 0 0;
+}
+
+html.dark {
+  --bg: 10 10 10;
+  --bg-subtle: 15 15 15;
+  --bg-card: 20 20 20;
+  --bg-input: 26 26 26;
+  --bg-hover: 30 30 30;
+
+  --fg: 232 232 232;
+  --fg-muted: 170 170 170;
+  --fg-subtle: 110 110 110;
+
+  --border: 38 38 38;
+  --border-strong: 60 60 60;
+
+  --brand: 16 185 129;
+  --brand-fg: 0 0 0;
+
+  --grid-dot: 38 38 38;
+
+  --shadow-color: 0 0 0;
+}
+
+html, body {
+  height: 100%;
+  background: rgb(var(--bg));
+  color: rgb(var(--fg));
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+body { margin: 0; }
+
+* { box-sizing: border-box; }
+
+/* Grain noise for hero pages */
+.grain { position: relative; }
+.grain::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence baseFrequency='1.5'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.4'/></svg>");
+  opacity: 0.03;
+  mix-blend-mode: overlay;
+}
+html.dark .grain::before { opacity: 0.06; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--border-strong)); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--fg-subtle)); }
+
+/* Canvas dot grid background */
+.canvas-grid {
+  background-image: radial-gradient(circle, rgb(var(--grid-dot)) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* Spinner */
+.spinner {
+  width: 12px; height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+
+/* Status colors used by both themes */
+:root { --status-running: 251 191 36; --status-done: 16 185 129; --status-error: 239 68 68; }
+
+/* Pre-applied small transitions */
+button, a, input, select, textarea { transition: background-color 120ms, border-color 120ms, color 120ms, box-shadow 120ms; }
+button:active:not(:disabled) { transform: scale(0.985); }
+
+/* Hide native textarea resize handle by default; we restyle */
+textarea { resize: vertical; }
+
+/* Remove native select arrows — we add our own ChevronDown icon */
+select.appearance-none,
+select.no-native-arrow {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: none;
+}
+
+/* The canvas node body */
+.node-card {
+  /* Establish positioning context for ports */
+  position: absolute;
+}
+
+/* Smooth drag — hint compositor */
+.node-card.dragging {
+  cursor: grabbing;
+  will-change: transform;
+}
+
+/* Canvas viewport — allow tachpad pan */
+.canvas-viewport {
+  touch-action: none;
+  user-select: none;
+  overscroll-behavior: contain;
+}

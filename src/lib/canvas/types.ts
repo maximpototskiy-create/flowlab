@@ -1,0 +1,1252 @@
+// Node catalog — full Step 4 spec.
+// Mirrors creative-studio-v4 HTML prototype + structural nodes.
+// Execution logic lives server-side in lib/engine/runners.ts.
+
+export type Vec2 = { x: number; y: number };
+
+export type PortKind = "image" | "video" | "audio" | "text" | "any";
+
+export type Port = { name: string; type: PortKind; optional?: boolean; label?: string };
+
+export type NodeCategory = "text" | "image" | "video" | "audio" | "structural" | "integration" | "tools";
+
+export const CATEGORY_LABELS: Record<NodeCategory, string> = {
+  text: "Text",
+  image: "Image",
+  video: "Video",
+  audio: "Audio",
+  structural: "Structural",
+  integration: "Integration",
+  tools: "Tools",
+};
+
+export const CATEGORY_DESC: Record<NodeCategory, string> = {
+  text: "Generate messaging, scripts, and prompts for ads across formats.",
+  image: "Create and modify static ad visuals and assets.",
+  video: "Build, animate, and assemble video ads from scripts and scenes.",
+  audio: "Generate voiceovers, music, and audio assets for video ads.",
+  structural: "Define the shape of your ad — sections that map to AE comps.",
+  integration: "Call external APIs and send webhooks.",
+  tools: "Annotations and exports for your canvas.",
+};
+
+export const CATEGORY_COLORS: Record<NodeCategory, string> = {
+  text: "#3b82f6",
+  image: "#10b981",
+  video: "#ec4899",
+  audio: "#f97316",
+  structural: "#8b5cf6",
+  integration: "#a855f7",
+  tools: "#facc15",
+};
+
+export const CATEGORY_ORDER: NodeCategory[] = [
+  "text",
+  "image",
+  "video",
+  "audio",
+  "structural",
+  "integration",
+  "tools",
+];
+
+// ─────────────────────────────────────────────
+// LLM models — via fal-ai/any-llm endpoint
+// (Vision-capable models indicated by `vision: true`)
+// ─────────────────────────────────────────────
+export const LLM_MODELS = [
+  // Anthropic — latest first
+  { id: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", vision: true },
+  { id: "anthropic/claude-opus-4-6", label: "Claude Opus 4.6", vision: true },
+  { id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", vision: true },
+  { id: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5", vision: true },
+  // Legacy Claude (still on fal in some endpoints)
+  { id: "anthropic/claude-3-5-sonnet", label: "Claude 3.5 Sonnet (legacy)", vision: true },
+  { id: "anthropic/claude-3-5-haiku", label: "Claude 3.5 Haiku (legacy)", vision: false },
+  // OpenAI
+  { id: "openai/gpt-5.5", label: "GPT-5.5", vision: true },
+  { id: "openai/gpt-5.5-mini", label: "GPT-5.5 mini", vision: true },
+  { id: "openai/gpt-5.4", label: "GPT-5.4", vision: true },
+  { id: "openai/gpt-5", label: "GPT-5", vision: true },
+  { id: "openai/gpt-4o", label: "GPT-4o (legacy)", vision: true },
+  // Google
+  { id: "google/gemini-3.1-pro", label: "Gemini 3.1 Pro", vision: true },
+  { id: "google/gemini-3.5-flash", label: "Gemini 3.5 Flash", vision: true },
+  { id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro", vision: true },
+  // DeepSeek
+  { id: "deepseek/deepseek-v4-pro", label: "DeepSeek V4 Pro", vision: false },
+  { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash", vision: false },
+  // Meta
+  { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", vision: true },
+];
+
+// ─────────────────────────────────────────────
+// Field schemas — what shows in node settings panel
+// ─────────────────────────────────────────────
+export type FieldDef =
+  | { name: string; label: string; type: "text"; placeholder?: string }
+  | { name: string; label: string; type: "textarea"; placeholder?: string; rows?: number }
+  | { name: string; label: string; type: "textarea-mono"; placeholder?: string }
+  | { name: string; label: string; type: "number"; min?: number; max?: number; step?: number }
+  | { name: string; label: string; type: "select"; options: { value: string; label: string }[]; icon?: string }
+  | { name: string; label: string; type: "toggle" };
+
+// ─────────────────────────────────────────────
+// Node type definitions — what's in the palette
+// ─────────────────────────────────────────────
+export type NodeTypeDef = {
+  name: string;
+  category: NodeCategory;
+  icon: string; // lucide name
+  description: string;
+  inputs: Port[];
+  outputs: Port[];
+  /** Default values of config */
+  defaults: Record<string, unknown>;
+  /** Fields exposed in node UI (settings panel) */
+  fields: FieldDef[];
+  /** Field names to show as quick controls in collapsed node */
+  quickFields?: string[];
+  /** Primary textarea field name (in node body) */
+  primaryField?: string;
+  primaryLabel?: string;
+  primaryPlaceholder?: string;
+  /** Example chips */
+  examples?: string[];
+  starters?: string[];
+  /** Custom node body (file uploads etc.) */
+  custom?: "upload-image" | "upload-video" | "upload-audio" | "note";
+  /** Special: force expanded modal (no primary textarea) */
+  forceExpanded?: boolean;
+};
+
+const ASPECT_OPTS = [
+  { value: "1:1", label: "1:1 Square" },
+  { value: "9:16", label: "9:16 Portrait" },
+  { value: "16:9", label: "16:9 Landscape" },
+  { value: "4:5", label: "4:5 Portrait" },
+  { value: "3:4", label: "3:4 Portrait" },
+];
+
+const LLM_OPTS = LLM_MODELS.map((m) => ({ value: m.id, label: m.label }));
+
+function llmFields(): FieldDef[] {
+  return [
+    { name: "model", label: "Model", type: "select", options: LLM_OPTS, icon: "settings" },
+    { name: "temperature", label: "Temperature", type: "number", min: 0, max: 2, step: 0.1 },
+  ];
+}
+
+function llmNode(opts: {
+  name: string;
+  icon: string;
+  description: string;
+  examples?: string[];
+  starters?: string[];
+  defaultInstructions: string;
+  defaultModel?: string;
+  defaultTemp?: number;
+  inputs?: Port[];
+  outputs?: Port[];
+}): NodeTypeDef {
+  return {
+    name: opts.name,
+    category: "text",
+    icon: opts.icon,
+    description: opts.description,
+    inputs: opts.inputs ?? [
+      { name: "context", type: "text", optional: true },
+      { name: "image", type: "image", optional: true, label: "Image (for vision)" },
+    ],
+    outputs: opts.outputs ?? [{ name: "text", type: "text" }],
+    defaults: {
+      instructions: opts.defaultInstructions,
+      model: opts.defaultModel ?? "anthropic/claude-haiku-4-5",
+      temperature: opts.defaultTemp ?? 0.7,
+    },
+    fields: llmFields(),
+    primaryField: "instructions",
+    primaryLabel: "Instructions",
+    primaryPlaceholder: "Write or paste text input here…",
+    examples: opts.examples,
+    starters: opts.starters,
+    quickFields: ["model"],
+  };
+}
+
+export const NODE_TYPES: Record<string, NodeTypeDef> = {
+  // ═════════════════════════════════════════════ TEXT
+  yourText: {
+    name: "Your Text",
+    category: "text",
+    icon: "type",
+    description: "Paste your brief, inputs, or any text to use in the workflow.",
+    inputs: [],
+    outputs: [{ name: "text", type: "text" }],
+    defaults: { text: "" },
+    fields: [],
+    primaryField: "text",
+    primaryLabel: "Your text",
+    primaryPlaceholder: "Type or paste text…",
+  },
+
+  textGen: llmNode({
+    name: "Text Generation",
+    icon: "sparkles",
+    description: "Generate headlines, copy, or ideas based on your inputs.",
+    examples: ["Headline variations for fitness app"],
+    starters: ["Write ad copy for…"],
+    defaultInstructions: "Generate 3 punchy ad hooks (max 8 words each) for the app described in the context.",
+  }),
+
+  creativeBrief: llmNode({
+    name: "Creative Brief",
+    icon: "clipboard-list",
+    description: "Turn insights into a testable ad concept with clear messaging and visuals.",
+    examples: ["Meal planning app brief"],
+    starters: ["Write a brief for…"],
+    defaultInstructions: "Generate a creative brief: target audience, key insight, message, tone, visual direction, CTA.",
+    defaultModel: "anthropic/claude-sonnet-4-6",
+  }),
+
+  adAnalysis: {
+    name: "Ad Analysis",
+    category: "text",
+    icon: "file-search",
+    description: "Analyse a winning ad creative — extract hook, structure, visual style.",
+    inputs: [
+      { name: "image", type: "image", optional: true },
+      { name: "description", type: "text", optional: true },
+    ],
+    outputs: [{ name: "analysis", type: "text" }],
+    defaults: {
+      instructions: "Analyse the ad. Extract: 1) main hook 2) target emotion 3) visual style 4) what makes it work 5) ideas for variations.",
+      model: "anthropic/claude-sonnet-4-6",
+      temperature: 0.4,
+    },
+    fields: llmFields(),
+    primaryField: "instructions",
+    primaryLabel: "Instructions",
+    examples: ["Reverse-engineer competitor ad"],
+    quickFields: ["model"],
+  },
+
+  imageAdPrompt: llmNode({
+    name: "Image Ad Prompt",
+    icon: "megaphone",
+    description: "Turn a concept into a detailed image-generation prompt.",
+    examples: ["Premium hero shot prompt"],
+    starters: ["Visualize as a static ad…"],
+    defaultInstructions: "Convert the context into a detailed image generation prompt (≤80 words). Include subject, style, lighting, mood, composition.",
+    defaultTemp: 0.8,
+  }),
+
+  adVariation: llmNode({
+    name: "Ad Variation",
+    icon: "copy",
+    description: "Generate A/B test variations from a base hook or copy.",
+    examples: ["5 headline variations"],
+    starters: ["Make 5 versions of…"],
+    defaultInstructions: "Generate 5 distinct variations from the context. Different angles: emotional, FOMO, social proof, contrarian, playful. One per line, no numbering.",
+    defaultTemp: 1.0,
+  }),
+
+  videoScript: llmNode({
+    name: "Video Script",
+    icon: "scroll-text",
+    description: "Write a short ad script with scene-by-scene structure.",
+    examples: ["15s app demo script"],
+    starters: ["Write a 15-second script…"],
+    defaultInstructions: "Write a 15-second mobile ad script with: HOOK (0-3s), VALUE (3-10s), CTA (10-15s). Include voice-over and visual direction.",
+  }),
+
+  videoFramePrompt: llmNode({
+    name: "Prompt for Video Frame",
+    icon: "scan-eye",
+    description: "Generate the first frame image prompt for a video ad.",
+    examples: ["Opening frame for hook"],
+    defaultInstructions: "Create a detailed first-frame image prompt for the video described in context. Focus on what grabs attention in 1 second.",
+  }),
+
+  videoAdPrompt: llmNode({
+    name: "Video Ad Prompt",
+    icon: "film",
+    description: "Detailed motion prompt for video generation models.",
+    examples: ["Cinematic reveal prompt"],
+    defaultInstructions: "Write a detailed video generation prompt: subject, camera movement, lighting, mood, pacing. ≤80 words.",
+  }),
+
+  voiceoverScript: llmNode({
+    name: "Voiceover Script",
+    icon: "mic",
+    description: "Voice-over copy timed for short-form video.",
+    examples: ["15s VO for fitness app"],
+    defaultInstructions: "Write a punchy 15-second voice-over script. Spoken style, no marketing speak. Aim for ~40 words.",
+  }),
+
+  musicPrompt: llmNode({
+    name: "Music Prompt",
+    icon: "notebook-pen",
+    description: "Describe the music vibe for AI generation.",
+    examples: ["Upbeat workout track"],
+    defaultInstructions: "Describe a 10-second background music track for the ad: genre, tempo, mood, instruments. ≤30 words.",
+  }),
+
+  characterPrompt: llmNode({
+    name: "Character Prompt",
+    icon: "user",
+    description: "Describe a character for consistent generation.",
+    examples: ["Friendly app mascot"],
+    defaultInstructions: "Describe a character for ad creatives: age, ethnicity, style, expression, clothing, vibe. Keep it consistent and ad-friendly.",
+  }),
+
+  // ═════════════════════════════════════════════ IMAGE
+  imageGen: {
+    name: "Image Generation",
+    category: "image",
+    icon: "image-plus",
+    description: "Generate a new ad image from a prompt.",
+    inputs: [{ name: "prompt", type: "text", optional: true }],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: {
+      instructions: "",
+      model: "fal-ai/nano-banana-2",
+      aspect: "1:1",
+      num_results: 1,
+    },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/nano-banana-2", label: "Nano Banana 2 ⭐" },
+          { value: "fal-ai/nano-banana", label: "Nano Banana" },
+          { value: "fal-ai/flux-pro/v1.1-ultra", label: "FLUX 1.1 Pro Ultra" },
+          { value: "fal-ai/flux-pro/v1.1", label: "FLUX Pro 1.1" },
+          { value: "fal-ai/flux/dev", label: "FLUX Dev" },
+          { value: "fal-ai/flux/schnell", label: "FLUX Schnell (fast)" },
+          { value: "fal-ai/imagen4/ultra", label: "Imagen 4 Ultra" },
+          { value: "fal-ai/imagen4", label: "Imagen 4" },
+          { value: "fal-ai/gpt-image-1", label: "GPT Image 1" },
+          { value: "fal-ai/recraft-v3", label: "Recraft V3" },
+          { value: "fal-ai/ideogram/v3", label: "Ideogram V3" },
+          { value: "fal-ai/ideogram/v2", label: "Ideogram V2" },
+          { value: "fal-ai/stable-diffusion-v35-large", label: "SD 3.5 Large" },
+        ],
+      },
+      { name: "aspect", label: "Aspect ratio", type: "select", options: ASPECT_OPTS },
+      { name: "num_results", label: "Number of results in a run", type: "number", min: 1, max: 4, step: 1 },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Instructions",
+    primaryPlaceholder: "Your prompt here…",
+    examples: ["Static ad — earbuds"],
+    starters: ["Lifestyle scene showing…"],
+    quickFields: ["model", "aspect"],
+  },
+
+  imageResize: {
+    name: "Image Resize",
+    category: "image",
+    icon: "maximize",
+    description: "Smart-crop or extend an image to a new aspect ratio.",
+    inputs: [{ name: "image", type: "image" }],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { aspect: "9:16", mode: "outpaint", instructions: "" },
+    fields: [
+      { name: "aspect", label: "Target aspect", type: "select", options: ASPECT_OPTS },
+      {
+        name: "mode",
+        label: "Mode",
+        type: "select",
+        options: [
+          { value: "outpaint", label: "Outpaint (AI)" },
+          { value: "crop", label: "Crop (local)" },
+        ],
+      },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Optional context for outpaint",
+    primaryPlaceholder: "e.g. 'extend the cafe background naturally'",
+    quickFields: ["aspect", "mode"],
+  },
+
+  elementChange: {
+    name: "Element Change",
+    category: "image",
+    icon: "wand-sparkles",
+    description: "Edit an element in an image — replace, add, restyle.",
+    inputs: [
+      { name: "image", type: "image" },
+      { name: "instruction", type: "text", optional: true },
+    ],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { instructions: "", model: "fal-ai/flux-pro/kontext" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/flux-pro/kontext", label: "FLUX Kontext" },
+          { value: "fal-ai/flux-pro/kontext/max", label: "FLUX Kontext Max" },
+          { value: "fal-ai/nano-banana/edit", label: "Nano Banana Edit" },
+        ],
+      },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Edit instruction",
+    examples: ["Replace background with neon city", "Add coffee cup on table"],
+    quickFields: ["model"],
+  },
+
+  imageTranslation: {
+    name: "Image Translation",
+    category: "image",
+    icon: "languages",
+    description: "Translate text in an image while keeping the visual style.",
+    inputs: [{ name: "image", type: "image" }],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { target_language: "Spanish", model: "fal-ai/flux-pro/kontext/max" },
+    fields: [
+      {
+        name: "target_language",
+        label: "Target language",
+        type: "select",
+        options: [
+          "Spanish", "German", "French", "Portuguese", "Japanese", "Korean",
+          "Chinese (Simplified)", "Arabic", "Russian", "Italian", "Turkish", "Polish",
+        ].map((l) => ({ value: l, label: l })),
+      },
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/flux-pro/kontext", label: "FLUX Kontext" },
+          { value: "fal-ai/flux-pro/kontext/max", label: "FLUX Kontext Max" },
+          { value: "fal-ai/nano-banana/edit", label: "Nano Banana Edit" },
+        ],
+      },
+    ],
+    quickFields: ["target_language", "model"],
+  },
+
+  productScreenPlacement: {
+    name: "Product Screen Placement",
+    category: "image",
+    icon: "smartphone",
+    description: "Place an app screenshot into a device frame with background and headline.",
+    inputs: [
+      { name: "screenshot", type: "image" },
+      { name: "headline", type: "text", optional: true },
+    ],
+    outputs: [{ name: "composed", type: "image" }],
+    defaults: { device: "iphone15pro", background: "gradient-purple", headline_position: "top" },
+    fields: [
+      {
+        name: "device",
+        label: "Device frame",
+        type: "select",
+        options: [
+          { value: "iphone15pro", label: "iPhone 15 Pro" },
+          { value: "iphone16promax", label: "iPhone 16 Pro Max" },
+          { value: "pixel9pro", label: "Pixel 9 Pro" },
+          { value: "no-frame", label: "No frame" },
+        ],
+      },
+      {
+        name: "background",
+        label: "Background",
+        type: "select",
+        options: [
+          { value: "gradient-purple", label: "Gradient Purple" },
+          { value: "gradient-blue", label: "Gradient Blue" },
+          { value: "gradient-warm", label: "Gradient Warm" },
+          { value: "gradient-mint", label: "Gradient Mint" },
+          { value: "solid-dark", label: "Solid Dark" },
+          { value: "solid-light", label: "Solid Light" },
+        ],
+      },
+      {
+        name: "headline_position",
+        label: "Headline position",
+        type: "select",
+        options: [
+          { value: "top", label: "Top" },
+          { value: "bottom", label: "Bottom" },
+          { value: "overlay-bottom", label: "Overlay bottom" },
+          { value: "none", label: "None" },
+        ],
+      },
+    ],
+    quickFields: ["device", "background"],
+  },
+
+  characterGen: {
+    name: "Character Generation",
+    category: "image",
+    icon: "person-standing",
+    description: "Generate a character image from description.",
+    inputs: [{ name: "description", type: "text", optional: true }],
+    outputs: [{ name: "character", type: "image" }],
+    defaults: { instructions: "", model: "fal-ai/flux/dev", style: "photorealistic", aspect: "3:4" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/flux/schnell", label: "FLUX Schnell" },
+          { value: "fal-ai/flux/dev", label: "FLUX Dev" },
+          { value: "fal-ai/flux-pro/v1.1", label: "FLUX Pro 1.1" },
+          { value: "fal-ai/imagen4/preview", label: "Imagen 4" },
+        ],
+      },
+      {
+        name: "style",
+        label: "Style",
+        type: "select",
+        options: ["photorealistic", "3d render", "illustration", "cartoon", "anime"].map((v) => ({ value: v, label: v })),
+      },
+      { name: "aspect", label: "Aspect", type: "select", options: ASPECT_OPTS },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Character description",
+    quickFields: ["model", "style", "aspect"],
+  },
+
+  upscale: {
+    name: "Upscale",
+    category: "image",
+    icon: "zoom-in",
+    description: "Upscale an image to higher resolution.",
+    inputs: [{ name: "image", type: "image" }],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { model: "fal-ai/clarity-upscaler", scale: 2 },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/clarity-upscaler", label: "Clarity Upscaler" },
+          { value: "fal-ai/aura-sr", label: "Aura SR" },
+          { value: "fal-ai/ccsr", label: "CCSR" },
+        ],
+      },
+      { name: "scale", label: "Scale", type: "number", min: 2, max: 4, step: 1 },
+    ],
+    quickFields: ["model", "scale"],
+  },
+
+  removeBg: {
+    name: "Remove Background",
+    category: "image",
+    icon: "scissors",
+    description: "Cleanly remove the background from an image.",
+    inputs: [{ name: "image", type: "image" }],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { model: "fal-ai/birefnet" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/birefnet", label: "BiRefNet" },
+          { value: "fal-ai/imageutils/rembg", label: "RemBG" },
+        ],
+      },
+    ],
+    quickFields: ["model"],
+  },
+
+  faceSwap: {
+    name: "Face Swap",
+    category: "image",
+    icon: "drama",
+    description: "Swap a face onto another image while preserving expression.",
+    inputs: [
+      { name: "source", type: "image", label: "Source (scene)" },
+      { name: "face", type: "image", label: "Face image" },
+    ],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { model: "fal-ai/face-swap" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/face-swap", label: "Face Swap" },
+          { value: "fal-ai/photomaker", label: "PhotoMaker" },
+        ],
+      },
+    ],
+    quickFields: ["model"],
+  },
+
+  inpaint: {
+    name: "Inpaint",
+    category: "image",
+    icon: "brush",
+    description: "Fill or replace a region with new content.",
+    inputs: [
+      { name: "image", type: "image" },
+      { name: "prompt", type: "text", optional: true },
+    ],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { instructions: "", model: "fal-ai/flux-pro/kontext" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/flux-pro/kontext", label: "FLUX Kontext" },
+          { value: "fal-ai/nano-banana/edit", label: "Nano Banana Edit" },
+        ],
+      },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Inpaint instruction",
+    quickFields: ["model"],
+  },
+
+  uploadImage: {
+    name: "Upload Image",
+    category: "image",
+    icon: "file-image",
+    description: "Upload your own image to use in the workflow.",
+    inputs: [],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { dataUrl: "", filename: "", cdnUrl: "" },
+    fields: [],
+    custom: "upload-image",
+  },
+
+  // ═════════════════════════════════════════════ VIDEO
+  videoGen: {
+    name: "Video Generation",
+    category: "video",
+    icon: "clapperboard",
+    description: "Generate a video scene. Optional start frame, end frame (transition), or reference image.",
+    inputs: [
+      { name: "prompt", type: "text", optional: true },
+      { name: "start_frame", type: "image", optional: true, label: "Start frame" },
+      { name: "end_frame", type: "image", optional: true, label: "End frame (transition)" },
+      { name: "reference", type: "image", optional: true, label: "Reference / style" },
+    ],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: {
+      instructions: "",
+      model: "fal-ai/kling-video/v3/standard/image-to-video",
+      duration: "5",
+      aspect: "9:16",
+    },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          // Kling 3.0 (latest)
+          { value: "fal-ai/kling-video/v3/standard/image-to-video", label: "Kling 3.0 Standard (I2V) ⭐" },
+          { value: "fal-ai/kling-video/v3/master/image-to-video", label: "Kling 3.0 Master (I2V) ⭐" },
+          { value: "fal-ai/kling-video/v3/standard/text-to-video", label: "Kling 3.0 Standard (T2V)" },
+          { value: "fal-ai/kling-video/v3-omni", label: "Kling Video 3.0 Omni" },
+          // Kling 2.6 / 2.5
+          { value: "fal-ai/kling-video/v2.6/master/image-to-video", label: "Kling 2.6 Master (I2V)" },
+          { value: "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", label: "Kling 2.5 Turbo Pro (I2V)" },
+          { value: "fal-ai/kling-video/v2.1/master/image-to-video", label: "Kling 2.1 Master (I2V) (legacy)" },
+          // Seedance 2.0 (ByteDance)
+          { value: "fal-ai/bytedance/seedance/v2-pro/image-to-video", label: "Seedance 2.0 Pro (I2V) ⭐" },
+          { value: "fal-ai/bytedance/seedance/v2-fast/image-to-video", label: "Seedance 2.0 Fast (I2V)" },
+          { value: "fal-ai/bytedance/seedance/v1-pro/image-to-video", label: "Seedance 1.5 Pro (I2V)" },
+          // Veo 3.1
+          { value: "fal-ai/veo3.1", label: "Veo 3.1" },
+          { value: "fal-ai/veo3.1/fast", label: "Veo 3.1 Fast" },
+          { value: "fal-ai/veo3.1/lite", label: "Veo 3.1 Lite" },
+          { value: "fal-ai/veo3", label: "Veo 3 (legacy)" },
+          // Runway / Hailuo / Ray / Pixverse
+          { value: "fal-ai/runway-gen4/image-to-video", label: "Runway Gen 4 (I2V)" },
+          { value: "fal-ai/minimax/hailuo-02/standard/image-to-video", label: "Hailuo 02 (I2V)" },
+          { value: "fal-ai/luma-dream-machine/ray-2/image-to-video", label: "Ray 2 (I2V)" },
+          { value: "fal-ai/pixverse/v6/image-to-video", label: "Pixverse V6 (I2V)" },
+        ],
+      },
+      {
+        name: "duration",
+        label: "Duration (s)",
+        type: "select",
+        options: [
+          { value: "5", label: "5s" },
+          { value: "10", label: "10s" },
+          { value: "15", label: "15s (Pixverse)" },
+        ],
+      },
+      {
+        name: "aspect",
+        label: "Aspect ratio",
+        type: "select",
+        options: [
+          { value: "9:16", label: "9:16" },
+          { value: "1:1", label: "1:1" },
+          { value: "16:9", label: "16:9" },
+        ],
+      },
+      { name: "generate_audio", label: "Generate audio (Veo only)", type: "toggle" },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Instructions",
+    primaryPlaceholder: "Your prompt here…",
+    examples: ["Product 360° orbit"],
+    starters: ["Animated background for…"],
+    quickFields: ["model", "duration", "aspect"],
+  },
+
+  talkingHead: {
+    name: "Talking Head",
+    category: "video",
+    icon: "video",
+    description: "Lip-sync an audio track to a face video for UGC-style ads.",
+    inputs: [
+      { name: "video", type: "video" },
+      { name: "audio", type: "audio" },
+    ],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: { model: "fal-ai/sync-lipsync" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/sync-lipsync", label: "Sync Lipsync" },
+          { value: "fal-ai/latentsync", label: "LatentSync" },
+        ],
+      },
+    ],
+    quickFields: ["model"],
+  },
+
+  lipsync: {
+    name: "Lipsync",
+    category: "video",
+    icon: "speech",
+    description: "Sync mouth movements in any video to a new audio.",
+    inputs: [
+      { name: "video", type: "video" },
+      { name: "audio", type: "audio" },
+    ],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: { model: "fal-ai/sync-lipsync" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/sync-lipsync", label: "Sync Lipsync" },
+          { value: "fal-ai/latentsync", label: "LatentSync" },
+        ],
+      },
+    ],
+    quickFields: ["model"],
+  },
+
+  motionTransfer: {
+    name: "Motion Transfer",
+    category: "video",
+    icon: "move-3d",
+    description: "Apply motion from a reference video to a still image (Kling Motion Control).",
+    inputs: [
+      { name: "image", type: "image", label: "Target subject" },
+      { name: "video", type: "video", label: "Reference motion" },
+    ],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: { model: "fal-ai/kling-video/v3/master/image-to-video", prompt: "" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/kling-video/v3/master/image-to-video", label: "Kling 3.0 Master ⭐" },
+          { value: "fal-ai/kling-video/v2.6/master/image-to-video", label: "Kling 2.6 Master" },
+          { value: "fal-ai/runway-gen4/image-to-video", label: "Runway Gen 4" },
+        ],
+      },
+      { name: "prompt", label: "Extra prompt (optional)", type: "text" },
+    ],
+    quickFields: ["model"],
+  },
+
+  uploadVideo: {
+    name: "Upload Video",
+    category: "video",
+    icon: "file-video",
+    description: "Drop a video file or paste a URL.",
+    inputs: [],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: { url: "", cdnUrl: "" },
+    fields: [],
+    custom: "upload-video",
+  },
+
+  // ═════════════════════════════════════════════ AUDIO
+  voiceover: {
+    name: "Voiceover",
+    category: "audio",
+    icon: "audio-lines",
+    description: "Text-to-speech with selectable voices.",
+    inputs: [{ name: "text", type: "text" }],
+    outputs: [{ name: "audio", type: "audio" }],
+    defaults: { voice: "Rachel", stability: 0.5, model: "fal-ai/elevenlabs/tts/multilingual-v2" },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/elevenlabs/tts/multilingual-v2", label: "ElevenLabs Multilingual v2" },
+        ],
+      },
+      {
+        name: "voice",
+        label: "Voice",
+        type: "select",
+        options: ["Rachel", "Adam", "Antoni", "Bella", "Domi", "Elli", "Josh", "Sam", "Arnold", "Charlie"].map(
+          (v) => ({ value: v, label: v }),
+        ),
+      },
+      { name: "stability", label: "Stability (0-1)", type: "number", min: 0, max: 1, step: 0.05 },
+    ],
+    quickFields: ["voice"],
+  },
+
+  musicGen: {
+    name: "Music Generation",
+    category: "audio",
+    icon: "music",
+    description: "Generate background music or jingles from a text prompt.",
+    inputs: [{ name: "description", type: "text", optional: true }],
+    outputs: [{ name: "audio", type: "audio" }],
+    defaults: { instructions: "", model: "fal-ai/stable-audio", duration: 10 },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "fal-ai/stable-audio", label: "Stable Audio" },
+          { value: "fal-ai/cassetteai/music-generator", label: "Cassette AI" },
+        ],
+      },
+      { name: "duration", label: "Duration (s)", type: "number", min: 1, max: 60, step: 1 },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Music description",
+    examples: ["Background music for product ad"],
+    starters: ["Create a jingle for…"],
+    quickFields: ["model", "duration"],
+  },
+
+  sfxGen: {
+    name: "SFX Generation",
+    category: "audio",
+    icon: "bell-ring",
+    description: "Generate a sound effect from a text prompt.",
+    inputs: [{ name: "description", type: "text", optional: true }],
+    outputs: [{ name: "audio", type: "audio" }],
+    defaults: { instructions: "", model: "fal-ai/elevenlabs/sound-effects", duration: 3 },
+    fields: [
+      {
+        name: "model",
+        label: "Model",
+        type: "select",
+        icon: "settings",
+        options: [{ value: "fal-ai/elevenlabs/sound-effects", label: "ElevenLabs SFX" }],
+      },
+      { name: "duration", label: "Duration (s)", type: "number", min: 1, max: 22, step: 1 },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "SFX description",
+    quickFields: ["duration"],
+  },
+
+  uploadAudio: {
+    name: "Upload Audio",
+    category: "audio",
+    icon: "file-audio",
+    description: "Drop an audio file or paste a URL.",
+    inputs: [],
+    outputs: [{ name: "audio", type: "audio" }],
+    defaults: { url: "", cdnUrl: "" },
+    fields: [],
+    custom: "upload-audio",
+  },
+
+  // ═════════════════════════════════════════════ STRUCTURAL
+  hook: {
+    name: "Hook",
+    category: "structural",
+    icon: "anchor",
+    description: "Opening 0-3 seconds — designed to stop the scroll.",
+    inputs: [
+      { name: "video", type: "video", optional: true },
+      { name: "image", type: "image", optional: true },
+      { name: "audio", type: "audio", optional: true },
+      { name: "text", type: "text", optional: true },
+    ],
+    outputs: [{ name: "section", type: "video" }],
+    defaults: { label: "Hook" },
+    fields: [{ name: "label", label: "Section label", type: "text" }],
+  },
+  body: {
+    name: "Body",
+    category: "structural",
+    icon: "package",
+    description: "Main content — value proposition or story.",
+    inputs: [
+      { name: "video", type: "video", optional: true },
+      { name: "image", type: "image", optional: true },
+      { name: "audio", type: "audio", optional: true },
+      { name: "text", type: "text", optional: true },
+    ],
+    outputs: [{ name: "section", type: "video" }],
+    defaults: { label: "Body" },
+    fields: [{ name: "label", label: "Section label", type: "text" }],
+  },
+  packShot: {
+    name: "Pack Shot",
+    category: "structural",
+    icon: "package-2",
+    description: "Product/screen reveal moment.",
+    inputs: [
+      { name: "image", type: "image", optional: true },
+      { name: "video", type: "video", optional: true },
+    ],
+    outputs: [{ name: "section", type: "video" }],
+    defaults: { label: "Pack Shot" },
+    fields: [{ name: "label", label: "Section label", type: "text" }],
+  },
+  cta: {
+    name: "CTA",
+    category: "structural",
+    icon: "mouse-pointer-click",
+    description: "Call-to-action ending.",
+    inputs: [
+      { name: "video", type: "video", optional: true },
+      { name: "image", type: "image", optional: true },
+      { name: "text", type: "text", optional: true },
+    ],
+    outputs: [{ name: "section", type: "video" }],
+    defaults: { label: "CTA", text: "Download now" },
+    fields: [
+      { name: "label", label: "Section label", type: "text" },
+      { name: "text", label: "CTA text", type: "text" },
+    ],
+  },
+  scene: {
+    name: "Scene",
+    category: "structural",
+    icon: "film",
+    description: "Generic scene container — use for any section.",
+    inputs: [
+      { name: "video", type: "video", optional: true },
+      { name: "image", type: "image", optional: true },
+      { name: "audio", type: "audio", optional: true },
+    ],
+    outputs: [{ name: "section", type: "video" }],
+    defaults: { label: "Scene" },
+    fields: [{ name: "label", label: "Scene label", type: "text" }],
+  },
+  transition: {
+    name: "Transition",
+    category: "structural",
+    icon: "arrow-right-left",
+    description: "Transition between sections.",
+    inputs: [
+      { name: "from", type: "video" },
+      { name: "to", type: "video" },
+    ],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: { kind: "cut" },
+    fields: [
+      {
+        name: "kind",
+        label: "Transition type",
+        type: "select",
+        options: ["cut", "crossfade", "wipe", "morph"].map((v) => ({ value: v, label: v })),
+      },
+    ],
+  },
+  logoReveal: {
+    name: "Logo Reveal",
+    category: "structural",
+    icon: "badge-check",
+    description: "Brand outro with logo animation.",
+    inputs: [{ name: "logo", type: "image" }],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: { duration: 2 },
+    fields: [{ name: "duration", label: "Duration (s)", type: "number", min: 1, max: 5, step: 0.5 }],
+  },
+
+  // ═════════════════════════════════════════════ INTEGRATION
+  customApi: {
+    name: "Custom API",
+    category: "integration",
+    icon: "code",
+    description: "Connect any HTTP API endpoint.",
+    inputs: [{ name: "input", type: "any", optional: true }],
+    outputs: [{ name: "output", type: "any" }],
+    defaults: {
+      url: "https://api.example.com/endpoint",
+      method: "POST",
+      headers: '{\n  "Content-Type": "application/json"\n}',
+      body: '{\n  "prompt": "{{input}}"\n}',
+      response_path: "",
+    },
+    fields: [
+      { name: "url", label: "Endpoint URL", type: "text" },
+      {
+        name: "method",
+        label: "HTTP method",
+        type: "select",
+        options: ["GET", "POST", "PUT", "PATCH", "DELETE"].map((v) => ({ value: v, label: v })),
+      },
+      { name: "headers", label: "Headers (JSON)", type: "textarea-mono" },
+      { name: "body", label: "Body — {{input}} = upstream value", type: "textarea-mono" },
+      { name: "response_path", label: "Response path (e.g. data.0.url)", type: "text" },
+    ],
+    forceExpanded: true,
+  },
+
+  webhook: {
+    name: "Webhook (out)",
+    category: "integration",
+    icon: "webhook",
+    description: "POST result to Slack, Discord, Zapier, or your dashboard.",
+    inputs: [{ name: "payload", type: "any" }],
+    outputs: [{ name: "response", type: "any" }],
+    defaults: { url: "", method: "POST" },
+    fields: [
+      { name: "url", label: "Webhook URL", type: "text" },
+      {
+        name: "method",
+        label: "Method",
+        type: "select",
+        options: [
+          { value: "POST", label: "POST" },
+          { value: "PUT", label: "PUT" },
+        ],
+      },
+    ],
+  },
+
+  // ═════════════════════════════════════════════ TOOLS
+  note: {
+    name: "Note",
+    category: "tools",
+    icon: "sticky-note",
+    description: "Pin a note on the canvas — for context, todos, or labels.",
+    inputs: [],
+    outputs: [],
+    defaults: { text: "A note for your team…" },
+    fields: [],
+    primaryField: "text",
+    primaryLabel: "Note",
+    custom: "note",
+  },
+
+  output: {
+    name: "Output / Preview",
+    category: "tools",
+    icon: "monitor",
+    description: "Final preview pane — connect any result here.",
+    inputs: [{ name: "result", type: "any" }],
+    outputs: [],
+    defaults: {},
+    fields: [],
+  },
+
+  exportMP4: {
+    name: "Export MP4",
+    category: "tools",
+    icon: "download",
+    description: "Export composed video as MP4 file.",
+    inputs: [
+      { name: "video", type: "video" },
+      { name: "audio", type: "audio", optional: true },
+    ],
+    outputs: [],
+    defaults: { quality: "1080p" },
+    fields: [
+      {
+        name: "quality",
+        label: "Quality",
+        type: "select",
+        options: [
+          { value: "720p", label: "720p" },
+          { value: "1080p", label: "1080p" },
+          { value: "4k", label: "4K" },
+        ],
+      },
+    ],
+  },
+
+  exportAE: {
+    name: "Export to AE",
+    category: "tools",
+    icon: "layers",
+    description: "Package assets + metadata for After Effects.",
+    inputs: [
+      { name: "video", type: "video", optional: true },
+      { name: "audio", type: "audio", optional: true },
+    ],
+    outputs: [],
+    defaults: {},
+    fields: [],
+  },
+
+  exportImage: {
+    name: "Export Image",
+    category: "tools",
+    icon: "image-down",
+    description: "Save image as PNG/JPG.",
+    inputs: [{ name: "image", type: "image" }],
+    outputs: [],
+    defaults: { format: "png" },
+    fields: [
+      {
+        name: "format",
+        label: "Format",
+        type: "select",
+        options: [
+          { value: "png", label: "PNG" },
+          { value: "jpg", label: "JPG" },
+        ],
+      },
+    ],
+  },
+
+  exportAudio: {
+    name: "Export Audio",
+    category: "tools",
+    icon: "music-2",
+    description: "Save audio as MP3/WAV.",
+    inputs: [{ name: "audio", type: "audio" }],
+    outputs: [],
+    defaults: { format: "mp3" },
+    fields: [
+      {
+        name: "format",
+        label: "Format",
+        type: "select",
+        options: [
+          { value: "mp3", label: "MP3" },
+          { value: "wav", label: "WAV" },
+        ],
+      },
+    ],
+  },
+};
+
+// ─────────────────────────────────────────────
+// Graph types
+// ─────────────────────────────────────────────
+export type GraphNode = {
+  id: string;
+  type: string;
+  position: Vec2;
+  config: Record<string, unknown>;
+  // Runtime/UI state (not persisted)
+  status?: "idle" | "pending" | "running" | "done" | "error";
+  outputs?: Record<string, unknown>;
+  error?: string;
+  costUsd?: number;
+  durationMs?: number;
+  /** Multi-result: list of output URLs/values when num_results > 1 */
+  results?: { value: string; mime?: string }[];
+  /** Currently selected result index (for multi-result nodes) */
+  selectedResult?: number;
+};
+
+export type GraphEdge = {
+  id: string;
+  from: { nodeId: string; port: string };
+  to: { nodeId: string; port: string };
+};
+
+export type Graph = { nodes: GraphNode[]; edges: GraphEdge[] };
+
+export const EMPTY_GRAPH: Graph = { nodes: [], edges: [] };
+
+export function makeNode(type: string, position: Vec2): GraphNode {
+  const def = NODE_TYPES[type];
+  if (!def) throw new Error(`Unknown node type: ${type}`);
+  return {
+    id: `n_${Math.random().toString(36).slice(2, 10)}`,
+    type,
+    position,
+    config: structuredClone(def.defaults),
+  };
+}
+
+export function makeEdge(fromNode: string, fromPort: string, toNode: string, toPort: string): GraphEdge {
+  return {
+    id: `e_${Math.random().toString(36).slice(2, 10)}`,
+    from: { nodeId: fromNode, port: fromPort },
+    to: { nodeId: toNode, port: toPort },
+  };
+}
+
+export function portsCompatible(out: PortKind, inp: PortKind): boolean {
+  if (out === inp) return true;
+  if (out === "any" || inp === "any") return true;
+  return false;
+}
+
+// ─────────────────────────────────────────────
+// Quick actions — top section of palette
+// ─────────────────────────────────────────────
+export type QuickAction = { id: string; label: string; icon: string; type: string; group: "generate" | "add" };
+
+export const QUICK_ACTIONS: QuickAction[] = [
+  { id: "qa-gen-text", label: "Text", icon: "sparkles", type: "textGen", group: "generate" },
+  { id: "qa-gen-image", label: "Image", icon: "image-plus", type: "imageGen", group: "generate" },
+  { id: "qa-gen-video", label: "Video", icon: "clapperboard", type: "videoGen", group: "generate" },
+  { id: "qa-gen-voice", label: "Voice", icon: "audio-lines", type: "voiceover", group: "generate" },
+  { id: "qa-gen-music", label: "Music", icon: "music", type: "musicGen", group: "generate" },
+  { id: "qa-add-text", label: "Text", icon: "type", type: "yourText", group: "add" },
+  { id: "qa-add-image", label: "Image", icon: "file-image", type: "uploadImage", group: "add" },
+  { id: "qa-add-video", label: "Video", icon: "file-video", type: "uploadVideo", group: "add" },
+  { id: "qa-add-audio", label: "Audio", icon: "file-audio", type: "uploadAudio", group: "add" },
+  { id: "qa-add-note", label: "Note", icon: "sticky-note", type: "note", group: "add" },
+];
+
+// Port-kind to category color (for visual edge coloring)
+export const PORT_COLORS: Record<PortKind, string> = {
+  text: "#3b82f6",
+  image: "#10b981",
+  video: "#ec4899",
+  audio: "#f97316",
+  any: "#facc15",
+};
