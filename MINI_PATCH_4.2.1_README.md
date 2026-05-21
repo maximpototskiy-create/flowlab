@@ -21,6 +21,8 @@ src/app/globals.css
 src/components/canvas/Canvas.tsx
 ```
 
+
+
 ## Как накатить
 
 GitHub веб → Upload files → перетащить эти 2 файла в правильные пути → Commit.
