@@ -537,7 +537,7 @@ export default function Canvas({
   function pollRun(runId: string) {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/runs/${runId}`);
+        const res = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as {
           status: "pending" | "running" | "done" | "error" | "cancelled";
@@ -597,7 +597,7 @@ export default function Canvas({
       } catch (err) {
         console.error("Poll error:", err);
       }
-    }, 2000);
+    }, 3000);
     activeRunPoll.current.set(runId, interval);
   }
 
