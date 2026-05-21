@@ -669,8 +669,13 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "fal-ai/kling-video/v3/pro/image-to-video", label: "Kling 3.0 Pro (I2V) ⭐" },
           { value: "fal-ai/kling-video/v3/standard/image-to-video", label: "Kling 3.0 Standard (I2V)" },
           { value: "fal-ai/kling-video/v3/pro/text-to-video", label: "Kling 3.0 Pro (T2V)" },
+          { value: "fal-ai/kling-video/v3/standard/text-to-video", label: "Kling 3.0 Standard (T2V)" },
           { value: "fal-ai/kling-video/v3/4k/image-to-video", label: "Kling 3.0 4K (I2V)" },
+          { value: "fal-ai/kling-video/v3/4k/text-to-video", label: "Kling 3.0 4K (T2V)" },
+          // Kling 2.5 Turbo
+          { value: "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", label: "Kling 2.5 Turbo Pro (T2V)" },
           // Kling 2.1
+          { value: "fal-ai/kling-video/v2.1/master/text-to-video", label: "Kling 2.1 Master (T2V)" },
           { value: "fal-ai/kling-video/v2.1/master/image-to-video", label: "Kling 2.1 Master (I2V)" },
           { value: "fal-ai/kling-video/v2.1/pro/image-to-video", label: "Kling 2.1 Pro (I2V)" },
           // Seedance 2.0 (ByteDance) — confirmed model IDs
@@ -680,8 +685,8 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "bytedance/seedance-2.0/fast/text-to-video", label: "Seedance 2.0 Fast (T2V)" },
           { value: "bytedance/seedance-2.0/reference-to-video", label: "Seedance 2.0 Reference (multi-modal)" },
           // Veo 3.1
-          { value: "fal-ai/veo3.1", label: "Veo 3.1" },
-          { value: "fal-ai/veo3.1/fast", label: "Veo 3.1 Fast" },
+          { value: "fal-ai/veo3.1", label: "Veo 3.1 (T2V)" },
+          { value: "fal-ai/veo3.1/fast", label: "Veo 3.1 Fast (T2V)" },
           { value: "fal-ai/veo3.1/first-last-frame-to-video", label: "Veo 3.1 First-Last Frame (I2V)" },
           // Other video models
           { value: "fal-ai/minimax/hailuo-02/standard/image-to-video", label: "Hailuo 02 (I2V)" },
