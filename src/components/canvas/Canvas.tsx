@@ -308,25 +308,74 @@ export default function Canvas({
     };
   }, [drag, edgeDraft, isPanning, zoom, screenToCanvas]);
 
-  // ─────────────────────────────── Keyboard
+  // ─────────────────────────────── Keyboard shortcuts
+  const clipboard = useRef<GraphNode | null>(null);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       // Ignore when typing in input/textarea
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      const meta = e.metaKey || e.ctrlKey;
+
+      // Delete / Backspace → delete selected
       if ((e.key === "Delete" || e.key === "Backspace") && selected && !expandedNodeId) {
         e.preventDefault();
         deleteNode(selected);
+        return;
       }
+
+      // Escape → clear selection, close menus
       if (e.key === "Escape") {
         setSelected(null);
         setCtxMenu(null);
         setConnPicker(null);
+        return;
+      }
+
+      // Cmd/Ctrl+C → copy selected node to clipboard
+      if (meta && e.key.toLowerCase() === "c" && selected) {
+        e.preventDefault();
+        const n = graph.nodes.find((x) => x.id === selected);
+        if (n) clipboard.current = n;
+        return;
+      }
+
+      // Cmd/Ctrl+V → paste clipboard node at offset
+      if (meta && e.key.toLowerCase() === "v" && clipboard.current) {
+        e.preventDefault();
+        const src = clipboard.current;
+        const newNode = makeNode(src.type, { x: src.position.x + 30, y: src.position.y + 30 });
+        newNode.config = JSON.parse(JSON.stringify(src.config));
+        setGraph((g) => ({ ...g, nodes: [...g.nodes, newNode] }));
+        setSelected(newNode.id);
+        return;
+      }
+
+      // Cmd/Ctrl+D → duplicate selected (copy+paste in one shot)
+      if (meta && e.key.toLowerCase() === "d" && selected) {
+        e.preventDefault();
+        const src = graph.nodes.find((x) => x.id === selected);
+        if (src) {
+          const newNode = makeNode(src.type, { x: src.position.x + 30, y: src.position.y + 30 });
+          newNode.config = JSON.parse(JSON.stringify(src.config));
+          setGraph((g) => ({ ...g, nodes: [...g.nodes, newNode] }));
+          setSelected(newNode.id);
+        }
+        return;
+      }
+
+      // Cmd/Ctrl+Enter → run selected node
+      if (meta && e.key === "Enter" && selected) {
+        e.preventDefault();
+        startRun(selected);
+        return;
       }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selected, expandedNodeId, deleteNode]);
+  }, [selected, expandedNodeId, deleteNode, graph.nodes, ]);
 
   // ─────────────────────────────── Pan & background interaction
   function onCanvasPointerDown(e: React.PointerEvent) {
@@ -349,33 +398,41 @@ export default function Canvas({
     setCtxMenu({ x: e.clientX, y: e.clientY, canvasX: pt.x, canvasY: pt.y });
   }
 
-  function onWheel(e: React.WheelEvent) {
-    // Ctrl/Cmd + wheel → zoom (pinch-zoom on mac also sends ctrlKey=true)
-    if (e.ctrlKey || e.metaKey) {
+  // Wheel/trackpad pan + zoom — must use native non-passive listener
+  // so we can preventDefault and stop the page from scrolling.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+
+    function onWheel(e: WheelEvent) {
+      if (!el) return;
+      // Ctrl/Cmd + wheel → zoom (pinch-zoom on mac sends ctrlKey=true)
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const factor = Math.exp(-e.deltaY * 0.0015);
+        setZoom((curZ) => {
+          const newZ = Math.max(0.3, Math.min(2.5, curZ * factor));
+          setPan((curP) => {
+            const worldX = (mouseX - curP.x) / curZ;
+            const worldY = (mouseY - curP.y) / curZ;
+            return { x: mouseX - worldX * newZ, y: mouseY - worldY * newZ };
+          });
+          return newZ;
+        });
+        return;
+      }
+      // Otherwise: trackpad two-finger scroll → pan
       e.preventDefault();
-      const rect = canvasRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const factor = Math.exp(-e.deltaY * 0.0015);
-      const newZoom = Math.max(0.3, Math.min(2.5, zoom * factor));
-      // Zoom toward cursor
-      const worldX = (mouseX - pan.x) / zoom;
-      const worldY = (mouseY - pan.y) / zoom;
-      setPan({
-        x: mouseX - worldX * newZoom,
-        y: mouseY - worldY * newZoom,
-      });
-      setZoom(newZoom);
-      return;
+      setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
     }
-    // Otherwise: trackpad two-finger scroll → pan (also normal wheel)
-    e.preventDefault();
-    setPan((p) => ({
-      x: p.x - e.deltaX,
-      y: p.y - e.deltaY,
-    }));
-  }
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
 
   // ─────────────────────────────── File upload helper (used by upload nodes)
   async function uploadFile(file: File): Promise<{ cdnUrl: string }> {
@@ -391,22 +448,27 @@ export default function Canvas({
 
   // ─────────────────────────────── Run execution
   async function startRun(scopeNodeId?: string) {
-    if (isRunning) return;
+    // No global "isRunning" block — allow parallel runs of different scopes.
+    // Just guard against double-clicking the SAME scope while it's already running.
+    if (scopeNodeId && Array.from(activeRunPoll.current.keys()).some((rid) => runs.find((r) => r.id === rid && r.scopeNodeId === scopeNodeId && r.status === "running"))) {
+      toast("This node is already running");
+      return;
+    }
     setIsRunning(true);
-    // Reset node statuses in scope
-    const scopeName = scopeNodeId ? NODE_TYPES[graph.nodes.find((n) => n.id === scopeNodeId)?.type ?? ""]?.name ?? "subgraph" : "Run all";
+    // Reset node statuses in scope. Note: for single-node runs, only reset that node + downstream chain.
+    // Upstream nodes keep their cached outputs (server-side executor will reuse them).
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) =>
         scopeNodeId && n.id !== scopeNodeId
           ? n
-          : { ...n, status: "idle", outputs: undefined, error: undefined, results: undefined },
+          : { ...n, status: "running", outputs: undefined, error: undefined, results: undefined },
       ),
     }));
 
     try {
       const cleaned: Graph = {
-        nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, config: n.config })),
+        nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, config: n.config, outputs: n.outputs, results: n.results })),
         edges: graph.edges,
       };
       const res = await fetch("/api/runs/start", {
@@ -414,8 +476,15 @@ export default function Canvas({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workflowId, graph: cleaned, scope: scopeNodeId }),
       });
-      if (!res.ok) throw new Error(`Run failed to start: ${res.status}`);
+      if (!res.ok) {
+        const errTxt = await res.text().catch(() => "");
+        throw new Error(`Run failed to start: ${res.status} ${errTxt.slice(0, 200)}`);
+      }
       const { runId } = (await res.json()) as { runId: string };
+
+      const scopeName = scopeNodeId
+        ? NODE_TYPES[graph.nodes.find((n) => n.id === scopeNodeId)?.type ?? ""]?.name ?? "subgraph"
+        : "Run all";
 
       // Add to runs panel as running
       setRuns((rs) => [
@@ -425,6 +494,7 @@ export default function Canvas({
           status: "running",
           startedAt: Date.now(),
           steps: [],
+          scopeNodeId,
         },
         ...rs.slice(0, 19),
       ]);
@@ -433,8 +503,37 @@ export default function Canvas({
       pollRun(runId);
     } catch (err) {
       console.error(err);
-      setIsRunning(false);
+      // Reset the scoped nodes back to idle so user can retry
+      setGraph((g) => ({
+        ...g,
+        nodes: g.nodes.map((n) =>
+          scopeNodeId && n.id !== scopeNodeId ? n : { ...n, status: "error", error: err instanceof Error ? err.message : "Run failed" },
+        ),
+      }));
+      if (activeRunPoll.current.size === 0) setIsRunning(false);
       toast("Run failed: " + (err instanceof Error ? err.message : "Unknown error"));
+    }
+  }
+
+  async function stopRun(runId: string) {
+    try {
+      await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+    } catch (err) {
+      console.error("Stop failed:", err);
+    }
+    const interval = activeRunPoll.current.get(runId);
+    if (interval) {
+      clearInterval(interval);
+      activeRunPoll.current.delete(runId);
+    }
+    setRuns((rs) => rs.map((r) => (r.id === runId ? { ...r, status: "cancelled" } : r)));
+    if (activeRunPoll.current.size === 0) setIsRunning(false);
+  }
+
+  async function stopAllRuns() {
+    const ids = Array.from(activeRunPoll.current.keys());
+    for (const id of ids) {
+      await stopRun(id);
     }
   }
 
@@ -523,6 +622,7 @@ export default function Canvas({
         isRunning={isRunning}
         runCount={runs.length}
         onRunAll={() => startRun()}
+        onStopAll={() => stopAllRuns()}
         brandSlug={workflowMeta.brandSlug}
         projectId={workflowMeta.projectId}
         workflowId={workflowId}
@@ -545,7 +645,6 @@ export default function Canvas({
           className="flex-1 relative overflow-hidden canvas-grid canvas-viewport"
           onPointerDown={onCanvasPointerDown}
           onContextMenu={onCanvasContextMenu}
-          onWheel={onWheel}
           style={{ cursor: isPanning ? "grabbing" : drag ? "grabbing" : "default" }}
         >
           {/* Background hit area for selection-clear */}
@@ -583,6 +682,13 @@ export default function Canvas({
                 onDelete={() => deleteNode(node.id)}
                 onConfigChange={(k, v) => updateNodeConfig(node.id, k, v)}
                 onRun={() => startRun(node.id)}
+                onStop={() => {
+                  // Find any active run that touches this node and cancel it
+                  const targetRun = runs.find(
+                    (r) => r.status === "running" && (r.scopeNodeId === node.id || !r.scopeNodeId),
+                  );
+                  if (targetRun) stopRun(targetRun.id);
+                }}
                 onExpand={() => setExpandedNodeId(node.id)}
                 onUploadFile={uploadFile}
                 workflowMeta={{ ...workflowMeta, workflowId }}

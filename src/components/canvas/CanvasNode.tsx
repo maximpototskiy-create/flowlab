@@ -36,6 +36,7 @@ function CanvasNodeImpl({
   onDelete,
   onConfigChange,
   onRun,
+  onStop,
   onExpand,
   onUploadFile,
   workflowMeta,
@@ -50,6 +51,7 @@ function CanvasNodeImpl({
   onDelete: () => void;
   onConfigChange: (key: string, value: unknown) => void;
   onRun: () => void;
+  onStop?: () => void;
   onExpand: () => void;
   onUploadFile: (file: File) => Promise<{ cdnUrl: string }>;
   workflowMeta: { brandId: string | null; projectId: string; workflowId: string };
@@ -64,7 +66,11 @@ function CanvasNodeImpl({
   return (
     <div
       className={`absolute group select-none rounded-xl border bg-bg-card shadow-node transition-all ${
-        isSelected
+        status === "running"
+          ? "border-amber-400 shadow-[0_0_0_2px_rgb(251_191_36_/_0.35)]"
+          : status === "error"
+          ? "border-red-400 shadow-[0_0_0_2px_rgb(239_68_68_/_0.25)]"
+          : isSelected
           ? "border-brand shadow-[0_0_0_2px_rgb(var(--brand)/0.3)]"
           : "border-border hover:border-border-strong"
       }`}
@@ -291,16 +297,28 @@ function CanvasNodeImpl({
               return <QuickField key={fname} field={f} value={node.config[fname]} onChange={(v) => onConfigChange(fname, v)} />;
             })}
             <div className="flex-1" />
-            {def.outputs.length > 0 && (
+            {def.outputs.length > 0 && status === "running" && (
               <button
-                className="w-7 h-7 rounded-full bg-fg text-bg flex items-center justify-center hover:opacity-80 disabled:opacity-30 disabled:cursor-not-allowed"
-                disabled={isRunning}
-                onMouseDown={(e) => e.stopPropagation()}
+                className="w-7 h-7 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStop?.();
+                }}
+                title="Stop this run"
+              >
+                <div className="w-2.5 h-2.5 bg-white rounded-sm" />
+              </button>
+            )}
+            {def.outputs.length > 0 && status !== "running" && (
+              <button
+                className="w-7 h-7 rounded-full bg-fg text-bg flex items-center justify-center hover:opacity-80"
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   onRun();
                 }}
-                title="Run up to this node"
+                title="Run this node"
               >
                 <Play size={11} strokeWidth={2} fill="currentColor" />
               </button>

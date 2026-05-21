@@ -1,6 +1,6 @@
 "use client";
 
-import { Play, Save, Loader2, Check, History, BookOpen } from "lucide-react";
+import { Play, Square, Loader2, Check, History, BookOpen } from "lucide-react";
 import ThemeToggle from "../ThemeToggle";
 import Link from "next/link";
 
@@ -10,6 +10,7 @@ export default function CanvasToolbar({
   isRunning,
   runCount,
   onRunAll,
+  onStopAll,
   brandSlug,
   projectId,
   workflowId,
@@ -19,6 +20,7 @@ export default function CanvasToolbar({
   isRunning: boolean;
   runCount: number;
   onRunAll: () => void;
+  onStopAll?: () => void;
   brandSlug?: string | null;
   projectId: string;
   workflowId: string;
@@ -62,10 +64,20 @@ export default function CanvasToolbar({
 
         <ThemeToggle />
 
+        {isRunning && onStopAll && (
+          <button
+            onClick={onStopAll}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 text-[12px] font-medium"
+            title="Stop all running nodes"
+          >
+            <Square size={11} fill="currentColor" />
+            Stop
+          </button>
+        )}
+
         <button
           onClick={onRunAll}
-          disabled={isRunning}
-          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md bg-fg text-bg hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed text-[12px] font-medium"
+          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md bg-fg text-bg hover:opacity-90 text-[12px] font-medium"
         >
           {isRunning ? (
             <>
