@@ -191,7 +191,7 @@ function inferKindFromUrl(url: string, port: string): "image" | "video" | "audio
 export async function executeGraph(
   graph: Graph,
   ctx: RunnerContext,
-  opts: { scope?: Set<string>; runId: string },
+  opts: { scope?: Set<string>; runId: string; scopeNodeId?: string },
 ): Promise<{
   outputs: Map<string, Record<string, unknown>>;
   errors: Map<string, string>;
@@ -212,14 +212,47 @@ export async function executeGraph(
     scope: opts.scope ?? null,
   };
 
+  // CACHING: when running a single-node scope (▶ on one node), reuse cached
+  // outputs from upstream nodes that already have results — don't re-execute them.
+  // Only the requested node + downstream nodes that depend on its NEW output are run.
+  // When user hits "Run All" (no scopeNodeId), nothing is cached — full re-run.
+  const isSubgraphRun = Boolean(opts.scopeNodeId);
+  if (isSubgraphRun) {
+    for (const node of graph.nodes) {
+      // For ancestors of the scope node — if they have cached outputs in the graph snapshot, use them.
+      // The scope node itself is always re-executed.
+      if (node.id === opts.scopeNodeId) continue;
+      const cached = (node as GraphNode & { outputs?: Record<string, unknown> }).outputs;
+      if (cached && Object.keys(cached).length > 0) {
+        state.outputs.set(node.id, cached);
+        state.status.set(node.id, "done");
+      }
+    }
+  }
+
   const order = topoSort(graph, opts.scope ?? undefined);
   const layers = layerByDepth(graph, order);
 
   for (const layer of layers) {
     if (!layer) continue;
-    // Parallel within layer
+
+    // Check if the run was cancelled between layers
+    const fresh = await prisma.run.findUnique({ where: { id: opts.runId }, select: { status: true } });
+    if (fresh?.status === "cancelled") {
+      // Stop processing further layers
+      return {
+        outputs: state.outputs,
+        errors: state.errors,
+        totalCost: [...state.costByNode.values()].reduce((a, b) => a + b, 0),
+        results: state.results,
+        durations: state.durationByNode,
+      };
+    }
+
+    // Parallel within layer — but skip already-cached nodes
     await Promise.all(
       layer.map(async (nodeId) => {
+        if (state.status.get(nodeId) === "done") return; // cached
         const node = graph.nodes.find((n) => n.id === nodeId);
         if (!node) return;
         try {
