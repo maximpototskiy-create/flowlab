@@ -625,7 +625,7 @@ export default function Canvas({
       } catch (err) {
         console.error("Poll error:", err);
       }
-    }, 3000);
+    }, 4000);
     activeRunPoll.current.set(runId, interval);
   }
 
