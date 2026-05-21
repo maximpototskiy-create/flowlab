@@ -7,24 +7,24 @@
    Use rgb-triplet format so Tailwind can apply alpha.
    ──────────────────────────────────────── */
 :root {
-  /* Light theme (default) */
-  --bg: 250 250 249;            /* near-white */
-  --bg-subtle: 244 244 242;     /* subtle gray */
-  --bg-card: 255 255 255;       /* pure white */
-  --bg-input: 250 250 249;
-  --bg-hover: 244 244 242;
+  /* Light theme (default) — improved contrast */
+  --bg: 252 252 252;            /* near-white but warmer */
+  --bg-subtle: 246 246 246;
+  --bg-card: 255 255 255;       /* pure white cards */
+  --bg-input: 252 252 252;
+  --bg-hover: 242 242 242;
 
-  --fg: 15 15 15;               /* near-black */
-  --fg-muted: 100 100 100;
-  --fg-subtle: 150 150 150;
+  --fg: 17 24 39;               /* near-black with slight blue (gray-900) */
+  --fg-muted: 71 85 105;        /* slate-600 — much more readable */
+  --fg-subtle: 100 116 139;     /* slate-500 */
 
-  --border: 230 230 230;
-  --border-strong: 200 200 200;
+  --border: 226 232 240;        /* slate-200 */
+  --border-strong: 203 213 225; /* slate-300 */
 
   --brand: 16 185 129;          /* emerald-500 */
   --brand-fg: 255 255 255;
 
-  --grid-dot: 220 220 220;
+  --grid-dot: 226 232 240;
 
   --shadow-color: 0 0 0;
 }
