@@ -31,7 +31,7 @@ const ASPECT_TO_SIZE: Record<string, string> = {
   "3:4": "portrait_4_3",
 };
 
-/** Helper: store a fal.ai result image URL in Supabase Storage, return signed URL */
+/** Helper: store a fal.ai result URL in Supabase Storage; on failure, return the original URL. */
 async function persistAsset(remoteUrl: string, ctx: RunnerContext, prefix = "asset"): Promise<string> {
   const ext = extFromUrl(remoteUrl);
   const path = buildStoragePath({
@@ -42,8 +42,16 @@ async function persistAsset(remoteUrl: string, ctx: RunnerContext, prefix = "ass
     prefix,
     ext,
   });
-  const { cdnUrl } = await uploadFromUrl(remoteUrl, path);
-  return cdnUrl || remoteUrl;
+  try {
+    const { cdnUrl } = await uploadFromUrl(remoteUrl, path);
+    return cdnUrl || remoteUrl;
+  } catch (err) {
+    // Storage might be misconfigured (bucket not created, missing service role key, etc).
+    // Don't fail the whole run — fal.ai URLs work for ~24h, which is enough for the user
+    // to see and download the result. Log warning but continue.
+    console.warn(`[persistAsset] Storage upload failed, using fal.ai URL directly:`, err);
+    return remoteUrl;
+  }
 }
 
 export async function runNode(
@@ -106,12 +114,28 @@ export async function runNode(
       const aspect = String(config.aspect ?? "1:1");
       const numResults = Math.max(1, Math.min(4, Number(config.num_results ?? 1)));
 
-      const r = await falRun(model, {
-        prompt,
-        image_size: ASPECT_TO_SIZE[aspect] ?? "square_hd",
-        num_images: numResults,
-        enable_safety_checker: false,
-      });
+      // Build per-model input. Different model families take different fields.
+      const input: Record<string, unknown> = { prompt };
+      if (model.includes("nano-banana")) {
+        // Nano Banana 2 / Pro: prompt only (aspect controlled via prompt text)
+        // num_images supported as `num_images`
+        input.num_images = numResults;
+      } else if (model.includes("imagen4")) {
+        // Imagen: aspect_ratio + num_images
+        input.aspect_ratio = aspect;
+        input.num_images = numResults;
+      } else if (model.includes("ideogram") || model.includes("recraft") || model.includes("flux-2")) {
+        // These use aspect_ratio
+        input.aspect_ratio = aspect;
+        input.num_images = numResults;
+      } else {
+        // FLUX, SD 3.5, etc — use image_size
+        input.image_size = ASPECT_TO_SIZE[aspect] ?? "square_hd";
+        input.num_images = numResults;
+        input.enable_safety_checker = false;
+      }
+
+      const r = await falRun(model, input);
 
       const images = (r.images as { url: string }[] | undefined) ?? [];
       if (images.length === 0) throw new Error("Model returned no images");
@@ -163,7 +187,16 @@ export async function runNode(
       const instr = String(config.instructions || inputs.prompt || inputs.instruction || "").trim();
       if (!instr) throw new Error("Provide an edit instruction");
       const model = String(config.model ?? "fal-ai/flux-pro/kontext");
-      const r = await falRun(model, { image_url: image, prompt: instr });
+
+      // nano-banana edit endpoints expect image_urls array, not image_url
+      const input: Record<string, unknown> = { prompt: instr };
+      if (model.includes("nano-banana")) {
+        input.image_urls = [image];
+      } else {
+        input.image_url = image;
+      }
+
+      const r = await falRun(model, input);
       const url = ((r.images as { url: string }[] | undefined) ?? [])[0]?.url;
       if (!url) throw new Error("No image returned");
       const persisted = await persistAsset(url, ctx, "edit");
@@ -261,30 +294,54 @@ export async function runNode(
     // ─────────────────────── VIDEO
     case "videoGen": {
       const prompt = String(config.instructions || inputs.prompt || "cinematic slow zoom");
-      const model = String(config.model ?? "fal-ai/kling-video/v3/standard/image-to-video");
+      const model = String(config.model ?? "fal-ai/kling-video/v3/pro/image-to-video");
       const duration = String(config.duration ?? "5");
       const aspect = String(config.aspect ?? "9:16");
       const generateAudio = Boolean(config.generate_audio);
-      const isImg2Vid = model.includes("image-to-video") || model.includes("/v3-omni");
+      const isImg2Vid =
+        model.includes("image-to-video") ||
+        model.includes("first-last-frame-to-video") ||
+        model.includes("reference-to-video");
       const startFrame = (inputs.start_frame ?? inputs.image) as string | undefined;
       const endFrame = inputs.end_frame as string | undefined;
       const reference = inputs.reference as string | undefined;
 
-      if (isImg2Vid && !startFrame) throw new Error("This model needs a start frame image");
+      if (isImg2Vid && !startFrame && !reference)
+        throw new Error("This model needs a start frame or reference image");
 
-      const payload: Record<string, unknown> = {
-        prompt,
-        duration,
-        aspect_ratio: aspect,
-      };
-      if (startFrame) payload.image_url = startFrame;
-      if (endFrame) {
-        // Different model families name this differently
-        payload.tail_image_url = endFrame; // Kling
-        payload.end_image_url = endFrame; // some models
+      const payload: Record<string, unknown> = { prompt };
+
+      // Model-family-specific field mapping (verified from fal.ai docs)
+      if (model.includes("kling-video")) {
+        // Kling: image_url (start), tail_image_url (end), reference_image_url
+        if (startFrame) payload.image_url = startFrame;
+        if (endFrame) payload.tail_image_url = endFrame;
+        if (reference) payload.reference_image_url = reference;
+        payload.duration = duration;
+        payload.aspect_ratio = aspect;
+      } else if (model.includes("seedance-2.0")) {
+        // Seedance: image_url (start), end_image_url, references via [Image1] in prompt
+        if (startFrame) payload.image_url = startFrame;
+        if (endFrame) payload.end_image_url = endFrame;
+        payload.duration = duration;
+        payload.resolution = "720p";
+        payload.aspect_ratio = aspect;
+        payload.generate_audio = generateAudio;
+      } else if (model.includes("veo3")) {
+        // Veo: image_url (first), last_image_url (last), generate_audio
+        if (startFrame) payload.image_url = startFrame;
+        if (endFrame) payload.last_image_url = endFrame;
+        payload.duration = duration;
+        payload.aspect_ratio = aspect;
+        payload.generate_audio = generateAudio;
+      } else {
+        // Default: try common field names
+        if (startFrame) payload.image_url = startFrame;
+        if (endFrame) payload.end_image_url = endFrame;
+        if (reference) payload.reference_image_url = reference;
+        payload.duration = duration;
+        payload.aspect_ratio = aspect;
       }
-      if (reference) payload.reference_image_url = reference;
-      if (model.includes("veo3")) payload.generate_audio = generateAudio;
 
       const r = await falRun(model, payload);
       const url =

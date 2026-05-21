@@ -55,29 +55,32 @@ export const CATEGORY_ORDER: NodeCategory[] = [
 // (Vision-capable models indicated by `vision: true`)
 // ─────────────────────────────────────────────
 export const LLM_MODELS = [
-  // Anthropic — latest first
-  { id: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", vision: true },
-  { id: "anthropic/claude-opus-4-6", label: "Claude Opus 4.6", vision: true },
-  { id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", vision: true },
-  { id: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5", vision: true },
-  // Legacy Claude (still on fal in some endpoints)
-  { id: "anthropic/claude-3-5-sonnet", label: "Claude 3.5 Sonnet (legacy)", vision: true },
-  { id: "anthropic/claude-3-5-haiku", label: "Claude 3.5 Haiku (legacy)", vision: false },
+  // Anthropic — OpenRouter IDs use DOTS (claude-opus-4.7), not dashes.
+  { id: "anthropic/claude-opus-4.7", label: "Claude Opus 4.7 ⭐", vision: true },
+  { id: "anthropic/claude-opus-4.7:fast", label: "Claude Opus 4.7 Fast", vision: true },
+  { id: "anthropic/claude-opus-4.5", label: "Claude Opus 4.5", vision: true },
+  { id: "anthropic/claude-opus-4.6-fast", label: "Claude Opus 4.6 Fast", vision: true },
+  { id: "anthropic/claude-opus-4.1", label: "Claude Opus 4.1", vision: true },
+  { id: "anthropic/claude-sonnet-latest", label: "Claude Sonnet (latest)", vision: true },
+  { id: "anthropic/claude-haiku-latest", label: "Claude Haiku (latest)", vision: true },
+  { id: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet", vision: true },
+  { id: "anthropic/claude-3.5-haiku", label: "Claude 3.5 Haiku", vision: false },
   // OpenAI
-  { id: "openai/gpt-5.5", label: "GPT-5.5", vision: true },
-  { id: "openai/gpt-5.5-mini", label: "GPT-5.5 mini", vision: true },
-  { id: "openai/gpt-5.4", label: "GPT-5.4", vision: true },
+  { id: "openai/gpt-5.1", label: "GPT-5.1", vision: true },
   { id: "openai/gpt-5", label: "GPT-5", vision: true },
-  { id: "openai/gpt-4o", label: "GPT-4o (legacy)", vision: true },
+  { id: "openai/gpt-5-mini", label: "GPT-5 mini", vision: true },
+  { id: "openai/gpt-4o", label: "GPT-4o", vision: true },
+  { id: "openai/gpt-4o-mini", label: "GPT-4o mini", vision: true },
   // Google
-  { id: "google/gemini-3.1-pro", label: "Gemini 3.1 Pro", vision: true },
-  { id: "google/gemini-3.5-flash", label: "Gemini 3.5 Flash", vision: true },
+  { id: "google/gemini-3-pro-preview", label: "Gemini 3 Pro ⭐", vision: true },
   { id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro", vision: true },
+  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", vision: true },
+  { id: "google/gemini-2.0-flash-001", label: "Gemini 2.0 Flash", vision: true },
   // DeepSeek
-  { id: "deepseek/deepseek-v4-pro", label: "DeepSeek V4 Pro", vision: false },
-  { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash", vision: false },
+  { id: "deepseek/deepseek-v3.2", label: "DeepSeek V3.2", vision: false },
+  { id: "deepseek/deepseek-chat", label: "DeepSeek Chat", vision: false },
   // Meta
-  { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", vision: true },
+  { id: "meta-llama/llama-3.2-3b-instruct", label: "Llama 3.2 3B", vision: false },
 ];
 
 // ─────────────────────────────────────────────
@@ -161,7 +164,7 @@ function llmNode(opts: {
     outputs: opts.outputs ?? [{ name: "text", type: "text" }],
     defaults: {
       instructions: opts.defaultInstructions,
-      model: opts.defaultModel ?? "anthropic/claude-haiku-4-5",
+      model: opts.defaultModel ?? "anthropic/claude-haiku-latest",
       temperature: opts.defaultTemp ?? 0.7,
     },
     fields: llmFields(),
@@ -206,7 +209,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     examples: ["Meal planning app brief"],
     starters: ["Write a brief for…"],
     defaultInstructions: "Generate a creative brief: target audience, key insight, message, tone, visual direction, CTA.",
-    defaultModel: "anthropic/claude-sonnet-4-6",
+    defaultModel: "anthropic/claude-sonnet-latest",
   }),
 
   adAnalysis: {
@@ -221,7 +224,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     outputs: [{ name: "analysis", type: "text" }],
     defaults: {
       instructions: "Analyse the ad. Extract: 1) main hook 2) target emotion 3) visual style 4) what makes it work 5) ideas for variations.",
-      model: "anthropic/claude-sonnet-4-6",
+      model: "anthropic/claude-sonnet-latest",
       temperature: 0.4,
     },
     fields: llmFields(),
@@ -321,15 +324,16 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          { value: "fal-ai/nano-banana-2", label: "Nano Banana 2 ⭐" },
-          { value: "fal-ai/nano-banana", label: "Nano Banana" },
+          { value: "fal-ai/nano-banana-2", label: "Nano Banana 2 ⭐ (Google Gemini 3.1 Flash)" },
+          { value: "fal-ai/nano-banana-pro", label: "Nano Banana Pro (Gemini 3 Pro)" },
+          { value: "fal-ai/flux-2-flex", label: "FLUX 2 Flex" },
           { value: "fal-ai/flux-pro/v1.1-ultra", label: "FLUX 1.1 Pro Ultra" },
           { value: "fal-ai/flux-pro/v1.1", label: "FLUX Pro 1.1" },
           { value: "fal-ai/flux/dev", label: "FLUX Dev" },
           { value: "fal-ai/flux/schnell", label: "FLUX Schnell (fast)" },
-          { value: "fal-ai/imagen4/ultra", label: "Imagen 4 Ultra" },
-          { value: "fal-ai/imagen4", label: "Imagen 4" },
-          { value: "fal-ai/gpt-image-1", label: "GPT Image 1" },
+          { value: "fal-ai/imagen4/preview/ultra", label: "Imagen 4 Ultra" },
+          { value: "fal-ai/imagen4/preview", label: "Imagen 4" },
+          { value: "fal-ai/gpt-image-1/text-to-image/byok", label: "GPT Image 1" },
           { value: "fal-ai/recraft-v3", label: "Recraft V3" },
           { value: "fal-ai/ideogram/v3", label: "Ideogram V3" },
           { value: "fal-ai/ideogram/v2", label: "Ideogram V2" },
@@ -393,7 +397,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         options: [
           { value: "fal-ai/flux-pro/kontext", label: "FLUX Kontext" },
           { value: "fal-ai/flux-pro/kontext/max", label: "FLUX Kontext Max" },
-          { value: "fal-ai/nano-banana/edit", label: "Nano Banana Edit" },
+          { value: "fal-ai/nano-banana-2/edit", label: "Nano Banana Edit" },
         ],
       },
     ],
@@ -429,7 +433,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         options: [
           { value: "fal-ai/flux-pro/kontext", label: "FLUX Kontext" },
           { value: "fal-ai/flux-pro/kontext/max", label: "FLUX Kontext Max" },
-          { value: "fal-ai/nano-banana/edit", label: "Nano Banana Edit" },
+          { value: "fal-ai/nano-banana-2/edit", label: "Nano Banana Edit" },
         ],
       },
     ],
@@ -614,7 +618,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         icon: "settings",
         options: [
           { value: "fal-ai/flux-pro/kontext", label: "FLUX Kontext" },
-          { value: "fal-ai/nano-banana/edit", label: "Nano Banana Edit" },
+          { value: "fal-ai/nano-banana-2/edit", label: "Nano Banana Edit" },
         ],
       },
     ],
@@ -650,7 +654,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     outputs: [{ name: "video", type: "video" }],
     defaults: {
       instructions: "",
-      model: "fal-ai/kling-video/v3/standard/image-to-video",
+      model: "fal-ai/kling-video/v3/pro/image-to-video",
       duration: "5",
       aspect: "9:16",
     },
@@ -661,26 +665,25 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          // Kling 3.0 (latest)
-          { value: "fal-ai/kling-video/v3/standard/image-to-video", label: "Kling 3.0 Standard (I2V) ⭐" },
-          { value: "fal-ai/kling-video/v3/master/image-to-video", label: "Kling 3.0 Master (I2V) ⭐" },
-          { value: "fal-ai/kling-video/v3/standard/text-to-video", label: "Kling 3.0 Standard (T2V)" },
-          { value: "fal-ai/kling-video/v3-omni", label: "Kling Video 3.0 Omni" },
-          // Kling 2.6 / 2.5
-          { value: "fal-ai/kling-video/v2.6/master/image-to-video", label: "Kling 2.6 Master (I2V)" },
-          { value: "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", label: "Kling 2.5 Turbo Pro (I2V)" },
-          { value: "fal-ai/kling-video/v2.1/master/image-to-video", label: "Kling 2.1 Master (I2V) (legacy)" },
-          // Seedance 2.0 (ByteDance)
-          { value: "fal-ai/bytedance/seedance/v2-pro/image-to-video", label: "Seedance 2.0 Pro (I2V) ⭐" },
-          { value: "fal-ai/bytedance/seedance/v2-fast/image-to-video", label: "Seedance 2.0 Fast (I2V)" },
-          { value: "fal-ai/bytedance/seedance/v1-pro/image-to-video", label: "Seedance 1.5 Pro (I2V)" },
+          // Kling 3.0 (latest, confirmed on fal)
+          { value: "fal-ai/kling-video/v3/pro/image-to-video", label: "Kling 3.0 Pro (I2V) ⭐" },
+          { value: "fal-ai/kling-video/v3/standard/image-to-video", label: "Kling 3.0 Standard (I2V)" },
+          { value: "fal-ai/kling-video/v3/pro/text-to-video", label: "Kling 3.0 Pro (T2V)" },
+          { value: "fal-ai/kling-video/v3/4k/image-to-video", label: "Kling 3.0 4K (I2V)" },
+          // Kling 2.1
+          { value: "fal-ai/kling-video/v2.1/master/image-to-video", label: "Kling 2.1 Master (I2V)" },
+          { value: "fal-ai/kling-video/v2.1/pro/image-to-video", label: "Kling 2.1 Pro (I2V)" },
+          // Seedance 2.0 (ByteDance) — confirmed model IDs
+          { value: "bytedance/seedance-2.0/image-to-video", label: "Seedance 2.0 (I2V) ⭐" },
+          { value: "bytedance/seedance-2.0/fast/image-to-video", label: "Seedance 2.0 Fast (I2V)" },
+          { value: "bytedance/seedance-2.0/text-to-video", label: "Seedance 2.0 (T2V)" },
+          { value: "bytedance/seedance-2.0/fast/text-to-video", label: "Seedance 2.0 Fast (T2V)" },
+          { value: "bytedance/seedance-2.0/reference-to-video", label: "Seedance 2.0 Reference (multi-modal)" },
           // Veo 3.1
           { value: "fal-ai/veo3.1", label: "Veo 3.1" },
           { value: "fal-ai/veo3.1/fast", label: "Veo 3.1 Fast" },
-          { value: "fal-ai/veo3.1/lite", label: "Veo 3.1 Lite" },
-          { value: "fal-ai/veo3", label: "Veo 3 (legacy)" },
-          // Runway / Hailuo / Ray / Pixverse
-          { value: "fal-ai/runway-gen4/image-to-video", label: "Runway Gen 4 (I2V)" },
+          { value: "fal-ai/veo3.1/first-last-frame-to-video", label: "Veo 3.1 First-Last Frame (I2V)" },
+          // Other video models
           { value: "fal-ai/minimax/hailuo-02/standard/image-to-video", label: "Hailuo 02 (I2V)" },
           { value: "fal-ai/luma-dream-machine/ray-2/image-to-video", label: "Ray 2 (I2V)" },
           { value: "fal-ai/pixverse/v6/image-to-video", label: "Pixverse V6 (I2V)" },
@@ -778,7 +781,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "video", type: "video", label: "Reference motion" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { model: "fal-ai/kling-video/v3/master/image-to-video", prompt: "" },
+    defaults: { model: "fal-ai/kling-video/v3/pro/image-to-video", prompt: "" },
     fields: [
       {
         name: "model",
@@ -786,8 +789,8 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          { value: "fal-ai/kling-video/v3/master/image-to-video", label: "Kling 3.0 Master ⭐" },
-          { value: "fal-ai/kling-video/v2.6/master/image-to-video", label: "Kling 2.6 Master" },
+          { value: "fal-ai/kling-video/v3/pro/image-to-video", label: "Kling 3.0 Master ⭐" },
+          { value: "fal-ai/kling-video/v2.1/master/image-to-video", label: "Kling 2.6 Master" },
           { value: "fal-ai/runway-gen4/image-to-video", label: "Runway Gen 4" },
         ],
       },
@@ -816,7 +819,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     description: "Text-to-speech with selectable voices.",
     inputs: [{ name: "text", type: "text" }],
     outputs: [{ name: "audio", type: "audio" }],
-    defaults: { voice: "Rachel", stability: 0.5, model: "fal-ai/elevenlabs/tts/multilingual-v2" },
+    defaults: { voice: "Rachel", stability: 0.5, model: "fal-ai/elevenlabs/tts/eleven-v3" },
     fields: [
       {
         name: "model",
@@ -824,7 +827,9 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
+          { value: "fal-ai/elevenlabs/tts/eleven-v3", label: "ElevenLabs v3 ⭐ (most expressive)" },
           { value: "fal-ai/elevenlabs/tts/multilingual-v2", label: "ElevenLabs Multilingual v2" },
+          { value: "fal-ai/elevenlabs/tts/turbo-v2.5", label: "ElevenLabs Turbo v2.5 (fast)" },
         ],
       },
       {
@@ -875,14 +880,14 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     description: "Generate a sound effect from a text prompt.",
     inputs: [{ name: "description", type: "text", optional: true }],
     outputs: [{ name: "audio", type: "audio" }],
-    defaults: { instructions: "", model: "fal-ai/elevenlabs/sound-effects", duration: 3 },
+    defaults: { instructions: "", model: "fal-ai/elevenlabs/sound-effects/v2", duration: 3 },
     fields: [
       {
         name: "model",
         label: "Model",
         type: "select",
         icon: "settings",
-        options: [{ value: "fal-ai/elevenlabs/sound-effects", label: "ElevenLabs SFX" }],
+        options: [{ value: "fal-ai/elevenlabs/sound-effects/v2", label: "ElevenLabs SFX" }],
       },
       { name: "duration", label: "Duration (s)", type: "number", min: 1, max: 22, step: 1 },
     ],
