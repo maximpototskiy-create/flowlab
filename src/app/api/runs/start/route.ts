@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { executeGraph, ancestorsOf } from "@/lib/engine/executor";
 import type { Graph } from "@/lib/canvas/types";
@@ -11,7 +11,8 @@ export const maxDuration = 300;
 
 export async function POST(req: Request) {
   try {
-    const user = await requireUser();
+    const user = await getCurrentUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const body = (await req.json()) as {
       workflowId: string;
       graph: Graph;
