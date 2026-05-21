@@ -19,8 +19,11 @@ function buildDatabaseUrl(): string | undefined {
     // Force-set the parameters Prisma needs for pgBouncer transaction mode.
     // These override whatever is already there.
     u.searchParams.set("pgbouncer", "true");
-    u.searchParams.set("connection_limit", "1");
-    u.searchParams.set("pool_timeout", "20");
+    // For Supabase Transaction Pooler: connection_limit can be higher because
+    // the pooler multiplexes connections across all our queries. With limit=1,
+    // pages that do parallel queries (like the dashboard) deadlock waiting.
+    u.searchParams.set("connection_limit", "10");
+    u.searchParams.set("pool_timeout", "30");
     // Disable Prisma's prepared statement caching — pgBouncer transaction mode
     // doesn't preserve session state between queries, so cached statements collide.
     if (!u.searchParams.has("statement_cache_size")) {
