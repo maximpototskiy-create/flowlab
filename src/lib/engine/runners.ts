@@ -302,23 +302,30 @@ export async function runNode(
         model.includes("image-to-video") ||
         model.includes("first-last-frame-to-video") ||
         model.includes("reference-to-video");
+      const isText2Vid = model.includes("text-to-video");
       const startFrame = (inputs.start_frame ?? inputs.image) as string | undefined;
       const endFrame = inputs.end_frame as string | undefined;
       const reference = inputs.reference as string | undefined;
 
-      if (isImg2Vid && !startFrame && !reference)
+      if (isImg2Vid && !startFrame && !reference && !isText2Vid)
         throw new Error("This model needs a start frame or reference image");
 
       const payload: Record<string, unknown> = { prompt };
 
       // Model-family-specific field mapping (verified from fal.ai docs)
       if (model.includes("kling-video")) {
-        // Kling: image_url (start), tail_image_url (end), reference_image_url
-        if (startFrame) payload.image_url = startFrame;
+        // Kling v3 I2V uses `start_image_url`; older v2.1 + 4K + o3 use `image_url`.
+        // For T2V no image needed at all.
+        const isKlingV3I2V = model.includes("/v3/") && model.includes("image-to-video");
+        if (startFrame) {
+          if (isKlingV3I2V) payload.start_image_url = startFrame;
+          else payload.image_url = startFrame;
+        }
         if (endFrame) payload.tail_image_url = endFrame;
         if (reference) payload.reference_image_url = reference;
         payload.duration = duration;
         payload.aspect_ratio = aspect;
+        if (generateAudio) payload.generate_audio = true;
       } else if (model.includes("seedance-2.0")) {
         // Seedance: image_url (start), end_image_url, references via [Image1] in prompt
         if (startFrame) payload.image_url = startFrame;
