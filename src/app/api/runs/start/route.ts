@@ -5,7 +5,7 @@ import { executeGraph, ancestorsOf } from "@/lib/engine/executor";
 import type { Graph } from "@/lib/canvas/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 800; // up to ~13 minutes for video generation
+export const maxDuration = 300; // up to ~5 minutes for video generation
 
 export async function POST(req: Request) {
   const user = await requireUser();
