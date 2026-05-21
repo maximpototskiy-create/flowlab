@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { cached } from "@/lib/cache";
 import TopNav from "@/components/TopNav";
 import CreateBrandButton from "@/components/CreateBrandButton";
 import ProjectCard, { type ProjectCardData } from "@/components/ProjectCard";
@@ -11,7 +12,33 @@ import { relativeTime } from "@/lib/format";
 export default async function DashboardPage() {
   const user = await requireUser();
 
-  // Fetch stats and recent items in parallel
+  // Fetch stats and recent items in parallel — cache for 10s to make repeated
+  // navigation back to dashboard near-instant on a warm lambda.
+  // Define loaders separately so we can extract the proper inferred row type
+  const loadRecentBrands = () =>
+    prisma.brand.findMany({
+      where: { archivedAt: null },
+      orderBy: { updatedAt: "desc" },
+      take: 4,
+      include: { _count: { select: { projects: true } } },
+    });
+  const loadRecentProjects = () =>
+    prisma.project.findMany({
+      where: { archivedAt: null },
+      orderBy: { updatedAt: "desc" },
+      take: 4,
+      include: { _count: { select: { workflows: true } } },
+    });
+  const loadRecentWorkflows = () =>
+    prisma.workflow.findMany({
+      orderBy: { updatedAt: "desc" },
+      take: 5,
+      include: {
+        project: { select: { id: true, name: true, color: true } },
+        creator: { select: { email: true } },
+      },
+    });
+
   const [
     brandsCount,
     projectsCount,
@@ -21,30 +48,13 @@ export default async function DashboardPage() {
     recentProjects,
     recentWorkflows,
   ] = await Promise.all([
-    prisma.brand.count({ where: { archivedAt: null } }),
-    prisma.project.count({ where: { archivedAt: null } }),
-    prisma.workflow.count(),
-    prisma.user.count(),
-    prisma.brand.findMany({
-      where: { archivedAt: null },
-      orderBy: { updatedAt: "desc" },
-      take: 4,
-      include: { _count: { select: { projects: true } } },
-    }),
-    prisma.project.findMany({
-      where: { archivedAt: null },
-      orderBy: { updatedAt: "desc" },
-      take: 4,
-      include: { _count: { select: { workflows: true } } },
-    }),
-    prisma.workflow.findMany({
-      orderBy: { updatedAt: "desc" },
-      take: 5,
-      include: {
-        project: { select: { id: true, name: true, color: true } },
-        creator: { select: { email: true } },
-      },
-    }),
+    cached<number>("dash:brandsCount", 10000, () => prisma.brand.count({ where: { archivedAt: null } })),
+    cached<number>("dash:projectsCount", 10000, () => prisma.project.count({ where: { archivedAt: null } })),
+    cached<number>("dash:workflowsCount", 10000, () => prisma.workflow.count()),
+    cached<number>("dash:usersCount", 10000, () => prisma.user.count()),
+    cached<Awaited<ReturnType<typeof loadRecentBrands>>>("dash:recentBrands", 10000, loadRecentBrands),
+    cached<Awaited<ReturnType<typeof loadRecentProjects>>>("dash:recentProjects", 10000, loadRecentProjects),
+    cached<Awaited<ReturnType<typeof loadRecentWorkflows>>>("dash:recentWorkflows", 10000, loadRecentWorkflows),
   ]);
 
   return (
