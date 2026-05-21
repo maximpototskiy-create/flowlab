@@ -98,9 +98,10 @@ export async function falRun(
  *  All major models available: claude-opus-4-7, gpt-5.5, gemini-3-pro, deepseek-v4, llama-4, etc. */
 export async function falLLM(
   prompt: string,
-  model = "anthropic/claude-haiku-4-5",
+  model = "anthropic/claude-haiku-latest",
   temperature = 0.7,
   imageUrl?: string,
+  systemPrompt?: string,
 ): Promise<string> {
   const key = nextFalKey();
 
@@ -112,9 +113,15 @@ export async function falLLM(
       ]
     : prompt;
 
+  const messages: Array<{ role: string; content: unknown }> = [];
+  if (systemPrompt && systemPrompt.trim()) {
+    messages.push({ role: "system", content: systemPrompt });
+  }
+  messages.push({ role: "user", content: userContent });
+
   const body = {
     model,
-    messages: [{ role: "user", content: userContent }],
+    messages,
     temperature,
   };
 
