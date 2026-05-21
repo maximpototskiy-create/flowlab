@@ -448,12 +448,7 @@ export default function Canvas({
 
   // ─────────────────────────────── Run execution
   async function startRun(scopeNodeId?: string) {
-    // No global "isRunning" block — allow parallel runs of different scopes.
-    // Just guard against double-clicking the SAME scope while it's already running.
-    if (scopeNodeId && Array.from(activeRunPoll.current.keys()).some((rid) => runs.find((r) => r.id === rid && r.scopeNodeId === scopeNodeId && r.status === "running"))) {
-      toast("This node is already running");
-      return;
-    }
+    console.log("[FlowLab] startRun called", { scopeNodeId, nodeCount: graph.nodes.length });
     setIsRunning(true);
     // Reset node statuses in scope. Note: for single-node runs, only reset that node + downstream chain.
     // Upstream nodes keep their cached outputs (server-side executor will reuse them).
@@ -471,11 +466,13 @@ export default function Canvas({
         nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, config: n.config, outputs: n.outputs, results: n.results })),
         edges: graph.edges,
       };
+      console.log("[FlowLab] sending POST /api/runs/start", { workflowId, scope: scopeNodeId });
       const res = await fetch("/api/runs/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workflowId, graph: cleaned, scope: scopeNodeId }),
       });
+      console.log("[FlowLab] /api/runs/start responded", res.status);
       if (!res.ok) {
         const errTxt = await res.text().catch(() => "");
         throw new Error(`Run failed to start: ${res.status} ${errTxt.slice(0, 200)}`);
