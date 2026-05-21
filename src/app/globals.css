@@ -8,23 +8,23 @@
    ──────────────────────────────────────── */
 :root {
   /* Light theme (default) — improved contrast */
-  --bg: 252 252 252;            /* near-white but warmer */
-  --bg-subtle: 246 246 246;
+  --bg: 248 250 252;            /* slate-50 — slightly cool background */
+  --bg-subtle: 241 245 249;     /* slate-100 */
   --bg-card: 255 255 255;       /* pure white cards */
-  --bg-input: 252 252 252;
-  --bg-hover: 242 242 242;
+  --bg-input: 241 245 249;      /* slate-100 — visibly different from cards */
+  --bg-hover: 226 232 240;      /* slate-200 */
 
-  --fg: 17 24 39;               /* near-black with slight blue (gray-900) */
-  --fg-muted: 71 85 105;        /* slate-600 — much more readable */
+  --fg: 15 23 42;               /* slate-900 — almost black */
+  --fg-muted: 51 65 85;         /* slate-700 — clearly dark, very readable */
   --fg-subtle: 100 116 139;     /* slate-500 */
 
-  --border: 226 232 240;        /* slate-200 */
-  --border-strong: 203 213 225; /* slate-300 */
+  --border: 203 213 225;        /* slate-300 — visible borders */
+  --border-strong: 148 163 184; /* slate-400 */
 
   --brand: 16 185 129;          /* emerald-500 */
   --brand-fg: 255 255 255;
 
-  --grid-dot: 226 232 240;
+  --grid-dot: 203 213 225;
 
   --shadow-color: 0 0 0;
 }
@@ -106,6 +106,24 @@ html.dark .grain::before { opacity: 0.06; }
 /* Pre-applied small transitions */
 button, a, input, select, textarea { transition: background-color 120ms, border-color 120ms, color 120ms, box-shadow 120ms; }
 button:active:not(:disabled) { transform: scale(0.985); }
+
+/* FORM INPUTS — force readable colors in both themes.
+   Without this, browsers default to white-on-white in light mode (especially Yandex/Chrome). */
+input, textarea, select {
+  color: rgb(var(--fg));
+  caret-color: rgb(var(--fg));
+}
+input::placeholder, textarea::placeholder {
+  color: rgb(var(--fg-subtle));
+  opacity: 1;
+}
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: rgb(var(--fg));
+  -webkit-box-shadow: 0 0 0 1000px rgb(var(--bg-input)) inset;
+  caret-color: rgb(var(--fg));
+}
 
 /* Hide native textarea resize handle by default; we restyle */
 textarea { resize: vertical; }
