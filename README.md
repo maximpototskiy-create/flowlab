@@ -105,3 +105,6 @@ npm run dev
 2. Сайт открывается, но при работе с нодами 401/404 от fal.ai → проверь env vars `FAL_API_KEY_1` и `FAL_API_KEY_2` в Vercel
 3. Storage upload fails → проверь `SUPABASE_SERVICE_ROLE_KEY` в Vercel
 4. Не открывается совсем → проверь `DATABASE_URL` в Vercel и `NEXTAUTH_URL` (должен быть `https://<your-vercel-url>`)
+
+
+
