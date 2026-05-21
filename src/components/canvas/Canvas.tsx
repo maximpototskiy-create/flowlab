@@ -57,6 +57,13 @@ export default function Canvas({
 
   // ─────────────────────────────── Drag
   const [drag, setDrag] = useState<Drag | null>(null);
+  // Live drag position — updated every animation frame for INSTANT visual response.
+  // We mutate the DOM transform directly instead of going through React state on each frame.
+  // Only commit to setGraph on pointer up.
+  const liveDragPos = useRef<{ x: number; y: number } | null>(null);
+  // Tick increments on every drag frame to make edges re-render with the new position.
+  // (Nodes themselves use direct DOM transform — no React re-render needed.)
+  const [dragTick, setDragTick] = useState(0);
 
   // ─────────────────────────────── Edge draft
   const [edgeDraft, setEdgeDraft] = useState<EdgeDraft | null>(null);
@@ -188,15 +195,18 @@ export default function Canvas({
     const node = graph.nodes.find((n) => n.id === nodeId);
     const def = NODE_TYPES[node?.type ?? ""];
     if (!node || !def) return;
-    const port = def.outputs.find((p) => p.name === portName);
+    const portIdx = def.outputs.findIndex((p) => p.name === portName);
+    const port = def.outputs[portIdx];
     if (!port) return;
     const canvasPt = screenToCanvas(e.clientX, e.clientY);
+    // Match CanvasEdges port calculation: NODE_HEADER_HEIGHT(38) + 14 + PORT_RADIUS(7) + idx*spacing(26)
+    const portYpx = 38 + 14 + 7 + portIdx * 26;
     setEdgeDraft({
       fromNode: nodeId,
       fromPort: portName,
       fromKind: port.type,
       x1: node.position.x + NODE_WIDTH,
-      y1: node.position.y + 50, // approx port y
+      y1: node.position.y + portYpx,
       x2: canvasPt.x,
       y2: canvasPt.y,
     });
@@ -242,14 +252,17 @@ export default function Canvas({
       if (drag) {
         const dx = (ptr.x - drag.pointerX) / zoom;
         const dy = (ptr.y - drag.pointerY) / zoom;
-        setGraph((g) => ({
-          ...g,
-          nodes: g.nodes.map((n) =>
-            n.id === drag.nodeId
-              ? { ...n, position: { x: drag.startX + dx, y: drag.startY + dy } }
-              : n,
-          ),
-        }));
+        const newX = drag.startX + dx;
+        const newY = drag.startY + dy;
+        liveDragPos.current = { x: newX, y: newY };
+        // Direct DOM update — no React re-render of nodes during drag
+        const el = document.querySelector(`[data-node-id="${drag.nodeId}"]`) as HTMLElement | null;
+        if (el) {
+          el.style.transform = `translate(${newX}px, ${newY}px)`;
+        }
+        // Edges still need re-render but it's cheap — they're SVG paths.
+        // Tick increments — CanvasEdges reads liveDragPos.current via the ref.
+        setDragTick((t) => t + 1);
       }
       if (edgeDraft) {
         const pt = screenToCanvas(ptr.x, ptr.y);
@@ -271,7 +284,22 @@ export default function Canvas({
       }
     }
     function onUp(e: PointerEvent) {
-      if (drag) setDrag(null);
+      if (drag) {
+        // Commit final position to graph state — this triggers React re-render once.
+        const finalPos = liveDragPos.current;
+        if (finalPos) {
+          setGraph((g) => ({
+            ...g,
+            nodes: g.nodes.map((n) =>
+              n.id === drag.nodeId
+                ? { ...n, position: { x: finalPos.x, y: finalPos.y } }
+                : n,
+            ),
+          }));
+        }
+        liveDragPos.current = null;
+        setDrag(null);
+      }
       if (edgeDraft) {
         // Check if released over an input port via document.elementFromPoint
         const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
@@ -659,9 +687,12 @@ export default function Canvas({
             }}
           >
             <CanvasEdges
+              key={`edges-${dragTick}`}
               graph={graph}
               hoveredEdgeId={hoveredEdge}
               draftEdge={edgeDraft ? { x1: edgeDraft.x1, y1: edgeDraft.y1, x2: edgeDraft.x2, y2: edgeDraft.y2, color: PORT_COLORS[edgeDraft.fromKind] } : null}
+              liveDragNodeId={drag?.nodeId ?? null}
+              liveDragPos={liveDragPos.current}
               onHover={setHoveredEdge}
               onDelete={deleteEdge}
             />
@@ -733,17 +764,23 @@ export default function Canvas({
       </div>
 
       {/* Context menu */}
-      {ctxMenu && (
-        <ContextMenu
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          onClose={() => setCtxMenu(null)}
-          onPick={(type) => {
-            addNodeAt(type, ctxMenu.canvasX, ctxMenu.canvasY);
-            setCtxMenu(null);
-          }}
-        />
-      )}
+      {ctxMenu && (() => {
+        // Capture coords in stable locals so even if React tears down ctxMenu state
+        // between mousedown/click the values remain valid in the closure.
+        const cx = ctxMenu.canvasX;
+        const cy = ctxMenu.canvasY;
+        return (
+          <ContextMenu
+            x={ctxMenu.x}
+            y={ctxMenu.y}
+            onClose={() => setCtxMenu(null)}
+            onPick={(type) => {
+              addNodeAt(type, cx, cy);
+              setCtxMenu(null);
+            }}
+          />
+        );
+      })()}
 
       {/* Connection picker */}
       {connPicker && (

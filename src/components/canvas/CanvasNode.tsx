@@ -65,7 +65,8 @@ function CanvasNodeImpl({
 
   return (
     <div
-      className={`absolute group select-none rounded-xl border bg-bg-card shadow-node transition-all ${
+      data-node-id={node.id}
+      className={`absolute group select-none rounded-xl border bg-bg-card shadow-node ${
         status === "running"
           ? "border-amber-400 shadow-[0_0_0_2px_rgb(251_191_36_/_0.35)]"
           : status === "error"
@@ -74,7 +75,13 @@ function CanvasNodeImpl({
           ? "border-brand shadow-[0_0_0_2px_rgb(var(--brand)/0.3)]"
           : "border-border hover:border-border-strong"
       }`}
-      style={{ left: node.position.x, top: node.position.y, width: NODE_WIDTH }}
+      style={{
+        top: 0,
+        left: 0,
+        width: NODE_WIDTH,
+        transform: `translate(${node.position.x}px, ${node.position.y}px)`,
+        willChange: "transform",
+      }}
       onClick={(e) => {
         e.stopPropagation();
         onSelect();

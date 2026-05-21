@@ -71,7 +71,11 @@ export default function ContextMenu({
             {matches.map(([id, def]) => (
               <button
                 key={id}
-                onClick={() => {
+                onMouseDown={(e) => {
+                  // Use mousedown (not click) so the pick fires BEFORE any other
+                  // mousedown listener (like outside-click-close) gets a chance.
+                  e.preventDefault();
+                  e.stopPropagation();
                   onPick(id);
                   onClose();
                 }}
@@ -99,7 +103,9 @@ export default function ContextMenu({
                 {QUICK_ACTIONS.filter((a) => a.group === "generate").map((a) => (
                   <button
                     key={a.id}
-                    onClick={() => {
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
                       onPick(a.type);
                       onClose();
                     }}
@@ -118,7 +124,9 @@ export default function ContextMenu({
                 {QUICK_ACTIONS.filter((a) => a.group === "add").map((a) => (
                   <button
                     key={a.id}
-                    onClick={() => {
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
                       onPick(a.type);
                       onClose();
                     }}
@@ -146,7 +154,9 @@ export default function ContextMenu({
                   {nodes.map(([id, def]) => (
                     <button
                       key={id}
-                      onClick={() => {
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
                         onPick(id);
                         onClose();
                       }}

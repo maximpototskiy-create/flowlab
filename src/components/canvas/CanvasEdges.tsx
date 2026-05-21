@@ -5,7 +5,18 @@ import { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING } from "./CanvasNode"
 
 type EdgePos = { x1: number; y1: number; x2: number; y2: number; color: string; id: string };
 
-const PORT_BASE = NODE_HEADER_HEIGHT + 14;
+// Port is a 14px circle whose root div sits at `top: y`, so the visual centre
+// is y + 7. Edges must land in the visual centre, not the top of the div.
+const PORT_RADIUS = 7;
+const PORT_BASE = NODE_HEADER_HEIGHT + 14 + PORT_RADIUS;
+
+// Ports are positioned with their LEFT edge at -7 (input side) or RIGHT edge at -7 (output side).
+// So the visual centre x-offset is also -7 from the node edge → but since we draw outward,
+// we use the node edge directly (which already lines up with the centre after applying -7 + 7).
+// Actually: input port is at left:-7, so its centre is at x = nodeLeft + 0 (because -7 + 7 = 0).
+// Output port is at right:-7, so its centre is at x = nodeLeft + nodeWidth.
+// → so x for an input port = node.position.x  (no offset needed)
+// → x for an output port = node.position.x + NODE_WIDTH  (no offset needed)
 
 function portY(node: GraphNode, portName: string, side: "in" | "out"): number {
   const def = NODE_TYPES[node.type];
@@ -19,15 +30,25 @@ export default function CanvasEdges({
   graph,
   hoveredEdgeId,
   draftEdge,
+  liveDragNodeId,
+  liveDragPos,
   onHover,
   onDelete,
 }: {
   graph: Graph;
   hoveredEdgeId: string | null;
   draftEdge: { x1: number; y1: number; x2: number; y2: number; color: string } | null;
+  liveDragNodeId?: string | null;
+  liveDragPos?: { x: number; y: number } | null;
   onHover: (id: string | null) => void;
   onDelete: (id: string) => void;
 }) {
+  // Helper: get the (possibly live-drag-overridden) position of a node
+  function posOf(n: GraphNode): { x: number; y: number } {
+    if (liveDragNodeId && liveDragPos && n.id === liveDragNodeId) return liveDragPos;
+    return n.position;
+  }
+
   const positions: EdgePos[] = [];
   for (const e of graph.edges) {
     const src = graph.nodes.find((n) => n.id === e.from.nodeId);
@@ -36,12 +57,14 @@ export default function CanvasEdges({
     const srcDef = NODE_TYPES[src.type];
     const srcPort = srcDef?.outputs.find((p) => p.name === e.from.port);
     const color = srcPort ? PORT_COLORS[srcPort.type] : "#10b981";
+    const srcP = posOf(src);
+    const dstP = posOf(dst);
     positions.push({
       id: e.id,
-      x1: src.position.x + NODE_WIDTH,
-      y1: src.position.y + portY(src, e.from.port, "out"),
-      x2: dst.position.x,
-      y2: dst.position.y + portY(dst, e.to.port, "in"),
+      x1: srcP.x + NODE_WIDTH,
+      y1: srcP.y + portY(src, e.from.port, "out"),
+      x2: dstP.x,
+      y2: dstP.y + portY(dst, e.to.port, "in"),
       color,
     });
   }
