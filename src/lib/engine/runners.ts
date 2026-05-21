@@ -3,6 +3,7 @@
 // Generated assets are uploaded to Supabase Storage and recorded in DB.
 
 import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
+import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 
 export type RunnerContext = {
@@ -78,7 +79,7 @@ export async function runNode(
     case "musicPrompt":
     case "characterPrompt": {
       const instructions = String(config.instructions ?? "");
-      const model = String(config.model ?? "anthropic/claude-3.5-haiku");
+      const model = String(config.model ?? "anthropic/claude-haiku-latest");
       const temperature = Number(config.temperature ?? 0.7);
       const context = inputs.context as string | undefined;
       const image = inputs.image as string | undefined;
@@ -86,7 +87,8 @@ export async function runNode(
       const prompt = context
         ? `Context:\n${context}\n\nTask:\n${instructions}${brandSuffix}`
         : `${instructions}${brandSuffix}`;
-      const text = await falLLM(prompt, model, temperature, image);
+      const systemPrompt = getSystemPrompt(type);
+      const text = await falLLM(prompt, model, temperature, image, systemPrompt);
       return {
         outputs: { text },
         costUsd: estimateCost("any-llm"),
@@ -96,13 +98,14 @@ export async function runNode(
 
     case "adAnalysis": {
       const instructions = String(config.instructions ?? "");
-      const model = String(config.model ?? "anthropic/claude-3.5-sonnet");
+      const model = String(config.model ?? "anthropic/claude-sonnet-latest");
       const temperature = Number(config.temperature ?? 0.4);
       const description = inputs.description as string | undefined;
       const image = inputs.image as string | undefined;
       const parts = [instructions];
       if (description) parts.push(`Description: ${description}`);
-      const text = await falLLM(parts.join("\n\n"), model, temperature, image);
+      const systemPrompt = getSystemPrompt("adAnalysis");
+      const text = await falLLM(parts.join("\n\n"), model, temperature, image, systemPrompt);
       return { outputs: { analysis: text }, costUsd: estimateCost("any-llm"), durationMs: Date.now() - t0 };
     }
 

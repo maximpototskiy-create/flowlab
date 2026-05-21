@@ -218,16 +218,18 @@ export async function executeGraph(
   // When user hits "Run All" (no scopeNodeId), nothing is cached — full re-run.
   const isSubgraphRun = Boolean(opts.scopeNodeId);
   if (isSubgraphRun) {
+    let cachedCount = 0;
     for (const node of graph.nodes) {
-      // For ancestors of the scope node — if they have cached outputs in the graph snapshot, use them.
       // The scope node itself is always re-executed.
       if (node.id === opts.scopeNodeId) continue;
       const cached = (node as GraphNode & { outputs?: Record<string, unknown> }).outputs;
       if (cached && Object.keys(cached).length > 0) {
         state.outputs.set(node.id, cached);
         state.status.set(node.id, "done");
+        cachedCount++;
       }
     }
+    console.log(`[executor] subgraph run scope=${opts.scopeNodeId}, ${cachedCount} nodes have cached outputs`);
   }
 
   const order = topoSort(graph, opts.scope ?? undefined);
@@ -252,9 +254,13 @@ export async function executeGraph(
     // Parallel within layer — but skip already-cached nodes
     await Promise.all(
       layer.map(async (nodeId) => {
-        if (state.status.get(nodeId) === "done") return; // cached
+        if (state.status.get(nodeId) === "done") {
+          console.log(`[executor] skip ${nodeId} (cached)`);
+          return; // cached
+        }
         const node = graph.nodes.find((n) => n.id === nodeId);
         if (!node) return;
+        console.log(`[executor] execute ${nodeId} (${node.type})`);
         try {
           await executeOne(node, state);
         } catch {
