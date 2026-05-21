@@ -93,17 +93,49 @@ export async function falRun(
   throw new Error(`fal.ai timeout after ${timeout}ms`);
 }
 
-/** Convenience: call fal-ai/any-llm for text completion. */
+/** Call OpenRouter via fal.ai for text completion. Replaces deprecated fal-ai/any-llm.
+ *  Uses OpenAI-compatible chat completions API at https://fal.run/openrouter/router/openai/v1
+ *  All major models available: claude-opus-4-7, gpt-5.5, gemini-3-pro, deepseek-v4, llama-4, etc. */
 export async function falLLM(
   prompt: string,
-  model = "anthropic/claude-3.5-haiku",
+  model = "anthropic/claude-haiku-4-5",
   temperature = 0.7,
   imageUrl?: string,
 ): Promise<string> {
-  const input: Record<string, unknown> = { prompt, model, temperature };
-  if (imageUrl) input.image_url = imageUrl;
-  const r = await falRun("fal-ai/any-llm", input);
-  return (r.output as string) ?? (r.response as string) ?? (r.text as string) ?? "";
+  const key = nextFalKey();
+
+  // Build messages — OpenAI chat format. Vision models support image content blocks.
+  const userContent: unknown = imageUrl
+    ? [
+        { type: "text", text: prompt },
+        { type: "image_url", image_url: { url: imageUrl } },
+      ]
+    : prompt;
+
+  const body = {
+    model,
+    messages: [{ role: "user", content: userContent }],
+    temperature,
+  };
+
+  const res = await fetch("https://fal.run/openrouter/router/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`fal/openrouter ${res.status}: ${text.slice(0, 400)}`);
+  }
+
+  const data = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 // ─────────────────────────────────────────────
