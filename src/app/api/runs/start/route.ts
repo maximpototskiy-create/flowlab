@@ -1,18 +1,24 @@
 import { NextResponse } from "next/server";
+import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { executeGraph, ancestorsOf } from "@/lib/engine/executor";
 import type { Graph } from "@/lib/canvas/types";
 
 export const runtime = "nodejs";
-// Vercel Hobby plan max is 300s. Pro is 800s. Long video gen on Hobby may hit limits —
-// run nodes individually rather than Run All.
+// Vercel Hobby plan max is 300s. With after(), the executor runs in background
+// up to this limit — perfect for typical AI node runs (5-60s each).
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
   try {
+    console.log("[runs/start] handler invoked");
     const user = await getCurrentUser();
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!user) {
+      console.warn("[runs/start] no user");
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = (await req.json()) as {
       workflowId: string;
       graph: Graph;
@@ -40,15 +46,24 @@ export async function POST(req: Request) {
         graphSnapshot: body.graph as never,
       },
     });
+    console.log(`[runs/start] created run ${run.id}, scope=${body.scope ?? 'all'}, nodes=${body.graph.nodes.length}`);
 
     await prisma.workflow.update({
       where: { id: workflow.id },
       data: { graph: body.graph as never },
     });
 
-    // Fire-and-forget execution. Client will poll /api/runs/[id] for status.
-    void executeRun(run.id, body.graph, workflow, body.scope).catch((err) => {
-      console.error(`[runs/start] executeRun ${run.id} crashed:`, err);
+    // CRITICAL: use after() so Vercel keeps the function alive past the response.
+    // Without this, Vercel kills the lambda the moment we return NextResponse.json(),
+    // and the executor never gets to call fal.ai.
+    after(async () => {
+      console.log(`[runs/start] after() started for run ${run.id}`);
+      try {
+        await executeRun(run.id, body.graph, workflow, body.scope);
+        console.log(`[runs/start] after() finished for run ${run.id}`);
+      } catch (err) {
+        console.error(`[runs/start] after() crashed for run ${run.id}:`, err);
+      }
     });
 
     return NextResponse.json({ runId: run.id });
@@ -68,6 +83,7 @@ async function executeRun(
   scopeNodeId?: string,
 ) {
   try {
+    console.log(`[executeRun] ${runId} starting; scope=${scopeNodeId ?? 'all'}`);
     const scope = scopeNodeId ? ancestorsOf(graph, scopeNodeId) : undefined;
     const result = await executeGraph(
       graph,
@@ -78,9 +94,13 @@ async function executeRun(
       },
       { runId, scope, scopeNodeId },
     );
+    console.log(`[executeRun] ${runId} executeGraph returned; errors=${result.errors.size}, cost=${result.totalCost}`);
 
     const current = await prisma.run.findUnique({ where: { id: runId }, select: { status: true } });
-    if (current?.status === "cancelled") return;
+    if (current?.status === "cancelled") {
+      console.log(`[executeRun] ${runId} was cancelled, not updating`);
+      return;
+    }
 
     await prisma.run.update({
       where: { id: runId },
@@ -91,8 +111,9 @@ async function executeRun(
         errorMessage: result.errors.size > 0 ? [...result.errors.values()][0] : null,
       },
     });
+    console.log(`[executeRun] ${runId} marked ${result.errors.size > 0 ? "error" : "done"}`);
   } catch (err) {
-    console.error(`[executeRun] ${runId} failed:`, err);
+    console.error(`[executeRun] ${runId} crashed:`, err);
     await prisma.run
       .update({
         where: { id: runId },
@@ -102,6 +123,6 @@ async function executeRun(
           errorMessage: err instanceof Error ? err.message : "Unknown error",
         },
       })
-      .catch(() => {});
+      .catch((updateErr: unknown) => console.error(`[executeRun] ${runId} failed to mark error:`, updateErr));
   }
 }
