@@ -19,13 +19,15 @@ function buildDatabaseUrl(): string | undefined {
     // Force-set the parameters Prisma needs for pgBouncer transaction mode.
     // These override whatever is already there.
     u.searchParams.set("pgbouncer", "true");
-    // For Supabase Transaction Pooler: keep the per-lambda connection count low
-    // (pgBouncer multiplexes for us on the server side). 5 is enough for parallel
-    // dashboard queries while not exhausting the pool when many lambdas are warm.
-    u.searchParams.set("connection_limit", "5");
-    // Short pool_timeout — when the pool is full we'd rather fail-fast and
-    // retry on the next request than hang for a minute holding up other queries.
-    u.searchParams.set("pool_timeout", "10");
+    // Per Supabase official docs for serverless:
+    // "set connection_limit=1 and gradually increase if necessary"
+    // Supavisor (pgBouncer) multiplexes connections server-side, so each lambda
+    // only needs 1. Higher values cause cascade failures under load.
+    // https://supabase.com/docs/guides/troubleshooting/prisma-error-management
+    u.searchParams.set("connection_limit", "1");
+    // Short pool_timeout — fail fast and let the request retry rather than
+    // hang holding up other queries.
+    u.searchParams.set("pool_timeout", "20");
     // Disable Prisma's prepared statement caching — pgBouncer transaction mode
     // doesn't preserve session state between queries, so cached statements collide.
     if (!u.searchParams.has("statement_cache_size")) {
