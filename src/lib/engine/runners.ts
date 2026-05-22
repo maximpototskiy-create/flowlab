@@ -45,12 +45,18 @@ async function persistAsset(remoteUrl: string, ctx: RunnerContext, prefix = "ass
   });
   try {
     const { cdnUrl } = await uploadFromUrl(remoteUrl, path);
-    return cdnUrl || remoteUrl;
+    if (cdnUrl) {
+      console.log(`[persistAsset] saved ${path} → ${cdnUrl.slice(0, 80)}…`);
+      return cdnUrl;
+    }
+    console.warn(`[persistAsset] uploadFromUrl returned empty cdnUrl for ${path}, falling back to remote URL`);
+    return remoteUrl;
   } catch (err) {
     // Storage might be misconfigured (bucket not created, missing service role key, etc).
     // Don't fail the whole run — fal.ai URLs work for ~24h, which is enough for the user
     // to see and download the result. Log warning but continue.
-    console.warn(`[persistAsset] Storage upload failed, using fal.ai URL directly:`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[persistAsset] STORAGE FAILED for ${path}: ${msg}`);
     return remoteUrl;
   }
 }
