@@ -513,8 +513,8 @@ function QuickField({
   value: unknown;
   onChange: (v: unknown) => void;
   /** When set, render this field as greyed-out with a hover tooltip
-   *  explaining why the value is ignored (e.g. model-specific quirks
-   *  like Kling V3's aspect being inherited from the start image). */
+   *  explaining why the value is ignored (e.g. Kling V3 ignores aspect
+   *  and inherits it from the start image). */
   disabledReason?: string;
 }) {
   if (field.type !== "select") return null;
