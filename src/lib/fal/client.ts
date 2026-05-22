@@ -100,18 +100,28 @@ export async function falLLM(
   prompt: string,
   model = "anthropic/claude-haiku-latest",
   temperature = 0.7,
-  imageUrl?: string,
+  // Pass either a single image URL (legacy callers) or an array (multi-image
+  // vision — Claude/GPT/Gemini all support multiple image_url content blocks
+  // in a single user turn). Empty array or undefined = text-only.
+  imageUrls?: string | string[],
   systemPrompt?: string,
 ): Promise<string> {
   const key = nextFalKey();
 
-  // Build messages — OpenAI chat format. Vision models support image content blocks.
-  const userContent: unknown = imageUrl
-    ? [
-        { type: "text", text: prompt },
-        { type: "image_url", image_url: { url: imageUrl } },
-      ]
-    : prompt;
+  // Normalise to array, filter out empty strings (which would otherwise become
+  // broken image_url content blocks and fail the request).
+  const images = (Array.isArray(imageUrls) ? imageUrls : imageUrls ? [imageUrls] : [])
+    .filter((u): u is string => typeof u === "string" && u.length > 0);
+
+  // Build messages — OpenAI chat format. Vision models support image content
+  // blocks; non-vision models receive text-only and ignore images silently.
+  const userContent: unknown =
+    images.length > 0
+      ? [
+          { type: "text", text: prompt },
+          ...images.map((url) => ({ type: "image_url", image_url: { url } })),
+        ]
+      : prompt;
 
   const messages: Array<{ role: string; content: unknown }> = [];
   if (systemPrompt && systemPrompt.trim()) {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible,
+  NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti,
   type Graph, type GraphNode, type PortKind, EMPTY_GRAPH,
 } from "@/lib/canvas/types";
 import CanvasNode, { NODE_WIDTH } from "./CanvasNode";
@@ -13,7 +13,6 @@ import ConnectionPicker from "./ConnectionPicker";
 import NodeExpandedModal from "./NodeExpandedModal";
 import CanvasToolbar from "./CanvasToolbar";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
-import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { Minus, Plus, Maximize, Grid3X3 } from "lucide-react";
 
@@ -32,52 +31,16 @@ export default function Canvas({
   workflowName,
   workflowMeta,
   initialGraph,
-  initialActiveRun,
 }: {
   workflowId: string;
   workflowName: string;
   workflowMeta: { brandId: string | null; brandSlug: string | null; projectId: string };
   initialGraph: Graph;
-  initialActiveRun?: {
-    runId: string;
-    startedAt: string;
-    steps: {
-      nodeId: string;
-      status: "pending" | "running" | "done" | "error";
-      outputData: Record<string, unknown> | null;
-      errorMessage: string | null;
-    }[];
-  } | null;
 }) {
   // ─────────────────────────────── Graph state
-  const [graph, setGraph] = useState<Graph>(() => {
-    // If we landed on this workflow with a run already in flight, pre-apply
-    // those step statuses onto the corresponding nodes immediately — so the
-    // user sees live spinners instead of idle nodes for the half-second
-    // before polling kicks in.
-    const base = initialGraph?.nodes ? initialGraph : EMPTY_GRAPH;
-    if (!initialActiveRun?.steps?.length) return base;
-    const stepByNode = new Map(initialActiveRun.steps.map((s) => [s.nodeId, s]));
-    return {
-      ...base,
-      nodes: base.nodes.map((n) => {
-        const step = stepByNode.get(n.id);
-        if (!step) return n;
-        return {
-          ...n,
-          status: step.status,
-          // Don't overwrite outputs/results if the saved graph already has
-          // them (the executor's server-side persist might have run); but if
-          // the step has fresh outputData and the node has none, populate.
-          outputs:
-            n.outputs && Object.keys(n.outputs).length > 0
-              ? n.outputs
-              : (step.outputData as typeof n.outputs) ?? n.outputs,
-          error: step.errorMessage ?? n.error,
-        };
-      }),
-    };
-  });
+  const [graph, setGraph] = useState<Graph>(() =>
+    initialGraph?.nodes ? initialGraph : EMPTY_GRAPH,
+  );
   const [selected, setSelected] = useState<string | null>(null);
 
   // ─────────────────────────────── Save state
@@ -134,44 +97,6 @@ export default function Canvas({
       }
       polls.clear();
     };
-  }, []);
-
-  // If the user returns to a workflow that already has a generation in flight,
-  // resume polling immediately so the live status keeps updating. The status
-  // overlay on the affected nodes is already painted in via initialActiveRun
-  // (see graph useState above), but without polling those spinners would
-  // never advance to "done".
-  useEffect(() => {
-    if (!initialActiveRun?.runId) return;
-    // Seed the RunsPanel with a placeholder summary so the user sees the run
-    // in the side panel too.
-    setRuns((rs) => {
-      if (rs.some((r) => r.id === initialActiveRun.runId)) return rs;
-      return [
-        {
-          id: initialActiveRun.runId,
-          name: "Resumed run",
-          status: "running" as const,
-          startedAt: new Date(initialActiveRun.startedAt).getTime(),
-          totalCostUsd: 0,
-          steps: initialActiveRun.steps.map((s) => ({
-            nodeId: s.nodeId,
-            nodeName: s.nodeId,
-            status: s.status,
-            costUsd: 0,
-          })),
-        },
-        ...rs,
-      ];
-    });
-    setIsRunning(true);
-    // Kick off polling immediately. pollRun is defined below in this component;
-    // calling it from inside this effect is safe because function declarations
-    // are hoisted.
-    pollRun(initialActiveRun.runId, "resumed");
-    // We intentionally run this only once on mount — if the run finishes,
-    // pollRun's own clearInterval will stop it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─────────────────────────────── Convert screen->canvas coords
@@ -324,13 +249,15 @@ export default function Canvas({
       setEdgeDraft(null);
       return;
     }
-    // Remove existing edge to this input (single connection per input)
+    // Append edge — for single ports this replaces any existing connection
+    // to the same input; for multi-ports it just adds (deduping by source).
     setGraph((g) => ({
       ...g,
-      edges: [
-        ...g.edges.filter((e2) => !(e2.to.nodeId === nodeId && e2.to.port === portName)),
+      edges: addEdgeRespectingMulti(
+        g.edges,
         makeEdge(edgeDraft.fromNode, edgeDraft.fromPort, nodeId, portName),
-      ],
+        g,
+      ),
     }));
     setEdgeDraft(null);
   }
@@ -467,12 +394,11 @@ export default function Canvas({
           const snappedPortId = bestPortId;
           setGraph((g) => ({
             ...g,
-            edges: [
-              ...g.edges.filter(
-                (e2) => !(e2.to.nodeId === snappedNodeId && e2.to.port === snappedPortId),
-              ),
+            edges: addEdgeRespectingMulti(
+              g.edges,
               makeEdge(edgeDraft.fromNode, edgeDraft.fromPort, snappedNodeId, snappedPortId),
-            ],
+              g,
+            ),
           }));
           setEdgeDraft(null);
           return;
@@ -706,10 +632,6 @@ export default function Canvas({
 
       // Begin polling
       pollRun(runId, scopeKey);
-
-      // Tell the global active-runs store to refetch right now, so the
-      // TopNav indicator pops in within ~100ms instead of waiting up to 5s.
-      pokeActiveRuns();
     } catch (err) {
       console.error(err);
       // Reset the scoped nodes back to idle so user can retry
@@ -882,6 +804,7 @@ export default function Canvas({
               <CanvasNode
                 key={node.id}
                 node={node}
+                edges={graph.edges}
                 isSelected={selected === node.id}
                 isRunning={isRunning}
                 onPointerDown={(e) => startNodeDrag(node.id, e)}

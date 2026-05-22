@@ -2,7 +2,7 @@
 
 import { useState, memo } from "react";
 import { ChevronDown, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle } from "lucide-react";
-import { NODE_TYPES, type GraphNode, type FieldDef } from "@/lib/canvas/types";
+import { NODE_TYPES, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import UploadZone from "./UploadZone";
 
@@ -28,6 +28,7 @@ export function portYOffset(node: GraphNode, portId: string, side: "in" | "out")
 
 function CanvasNodeImpl({
   node,
+  edges,
   isSelected,
   isRunning,
   onPointerDown,
@@ -43,6 +44,7 @@ function CanvasNodeImpl({
   workflowMeta,
 }: {
   node: GraphNode;
+  edges: GraphEdge[];
   isSelected: boolean;
   isRunning: boolean;
   onPointerDown: (e: React.PointerEvent) => void;
@@ -63,6 +65,8 @@ function CanvasNodeImpl({
   const status = node.status ?? "idle";
   const color = node.type ? CAT_COLORS[def.category] : "#71717a";
   const [selectedResultIdx, setSelectedResultIdx] = useState(0);
+  // Pre-filter edges incoming to this node — used to count refs on multi-ports.
+  const edgesTo = edges.filter((e) => e.to.nodeId === node.id);
 
   return (
     <div
@@ -143,6 +147,14 @@ function CanvasNodeImpl({
           name={p.name}
           kind={p.type}
           label={p.label}
+          multi={p.multi}
+          // Show a small count badge on multi-ports so the user sees at a
+          // glance how many references are connected without zooming in.
+          edgeCount={
+            p.multi
+              ? edgesTo.filter((e) => e.to.port === p.name).length
+              : 0
+          }
           y={NODE_HEADER_HEIGHT + 14 + i * NODE_PORT_SPACING}
           onUp={(e) => onInputPortUp(p.name, e)}
         />
@@ -308,7 +320,25 @@ function CanvasNodeImpl({
             {(def.quickFields ?? []).map((fname) => {
               const f = def.fields.find((x) => x.name === fname);
               if (!f) return null;
-              return <QuickField key={fname} field={f} value={node.config[fname]} onChange={(v) => onConfigChange(fname, v)} />;
+              // Kling V3 i2v: aspect_ratio is ignored by the model (aspect
+              // is inherited from start_image_url). We grey out the field
+              // and explain why on hover instead of silently misleading.
+              const modelStr = String(node.config.model ?? "");
+              const isKlingV3I2V =
+                modelStr.includes("kling-video/v3/") && modelStr.includes("image-to-video");
+              const disabledReason =
+                fname === "aspect" && isKlingV3I2V
+                  ? "Kling V3 inherits aspect from the start image — this field is ignored."
+                  : undefined;
+              return (
+                <QuickField
+                  key={fname}
+                  field={f}
+                  value={node.config[fname]}
+                  onChange={(v) => onConfigChange(fname, v)}
+                  disabledReason={disabledReason}
+                />
+              );
             })}
             <div className="flex-1" />
             {def.outputs.length > 0 && status === "running" && (
@@ -395,13 +425,15 @@ function hasContent(node: GraphNode): boolean {
 }
 
 function Port({
-  side, name, kind, label, y, onDown, onUp,
+  side, name, kind, label, y, multi, edgeCount, onDown, onUp,
 }: {
   side: "in" | "out";
   name: string;
   kind: string;
   label?: string;
   y: number;
+  multi?: boolean;
+  edgeCount?: number;
   onDown?: (e: React.PointerEvent) => void;
   onUp?: (e: React.PointerEvent) => void;
 }) {
@@ -415,11 +447,20 @@ function Port({
       }}
     >
       <button
-        className="w-3.5 h-3.5 rounded-full bg-bg-card border-2 cursor-crosshair hover:scale-125 transition-transform"
-        style={{ borderColor: color }}
+        // Multi-port circles get a thicker border + outer ring so they read
+        // as "drop multiple here" without needing a label. Single ports stay
+        // the standard 2px circle.
+        className={`${
+          multi ? "w-4 h-4 border-[3px] ring-2 ring-offset-1 ring-offset-bg-card" : "w-3.5 h-3.5 border-2"
+        } rounded-full bg-bg-card cursor-crosshair hover:scale-125 transition-transform`}
+        style={{
+          borderColor: color,
+          ...(multi ? { boxShadow: `0 0 0 1px ${color}33` } : {}),
+        }}
         data-port-side={side}
         data-port-kind={kind}
         data-port-id={name}
+        data-port-multi={multi ? "true" : undefined}
         onPointerDown={(e) => {
           if (side === "out") {
             e.stopPropagation();
@@ -432,8 +473,17 @@ function Port({
             onUp?.(e);
           }
         }}
-        title={`${label ?? name} · ${kind}`}
+        title={`${label ?? name} · ${kind}${multi ? " · accepts many" : ""}`}
       />
+      {/* Edge count badge for multi-ports with at least one connection. */}
+      {multi && (edgeCount ?? 0) > 0 && (
+        <div
+          className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-1 rounded-full bg-fg text-bg text-[8px] font-bold leading-[14px] text-center pointer-events-none"
+          title={`${edgeCount} reference${edgeCount === 1 ? "" : "s"} connected`}
+        >
+          {edgeCount}
+        </div>
+      )}
       <div
         className={`absolute top-1/2 -translate-y-1/2 opacity-0 group-hover/port:opacity-100 pointer-events-none whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded bg-fg text-bg ${
           side === "in" ? "left-5" : "right-5"
@@ -457,20 +507,34 @@ function QuickField({
   field,
   value,
   onChange,
+  disabledReason,
 }: {
   field: FieldDef;
   value: unknown;
   onChange: (v: unknown) => void;
+  /** When set, render this field as greyed-out with a hover tooltip
+   *  explaining why the value is ignored (e.g. model-specific quirks
+   *  like Kling V3's aspect being inherited from the start image). */
+  disabledReason?: string;
 }) {
   if (field.type !== "select") return null;
+  const disabled = Boolean(disabledReason);
   return (
     <div
-      className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border bg-bg-subtle hover:border-border-strong text-fg-muted text-[10px]"
+      className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] ${
+        disabled
+          ? "border-border bg-bg-subtle/40 text-fg-subtle opacity-50 cursor-not-allowed"
+          : "border-border bg-bg-subtle hover:border-border-strong text-fg-muted"
+      }`}
       onMouseDown={(e) => e.stopPropagation()}
+      title={disabledReason ?? field.label}
     >
       <select
-        title={field.label}
-        className="appearance-none bg-transparent border-none outline-none text-fg text-[10px] cursor-pointer pr-1 max-w-[100px] truncate"
+        title={disabledReason ?? field.label}
+        disabled={disabled}
+        className={`appearance-none bg-transparent border-none outline-none text-[10px] pr-1 max-w-[100px] truncate ${
+          disabled ? "text-fg-subtle cursor-not-allowed" : "text-fg cursor-pointer"
+        }`}
         value={String(value ?? "")}
         onChange={(e) => onChange(e.target.value)}
       >

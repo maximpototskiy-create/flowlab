@@ -6,7 +6,18 @@ export type Vec2 = { x: number; y: number };
 
 export type PortKind = "image" | "video" | "audio" | "text" | "any";
 
-export type Port = { name: string; type: PortKind; optional?: boolean; label?: string };
+export type Port = {
+  name: string;
+  type: PortKind;
+  optional?: boolean;
+  label?: string;
+  // When true, this port accepts MANY incoming edges. The resolved input
+  // value for this port becomes an array (`string[]`) instead of a single
+  // value. Used for "reference images" inputs on imageGen/textGen so that
+  // multimodal models (Nano Banana, GPT Image, vision LLMs) can receive
+  // multiple images at once via a single visual port.
+  multi?: boolean;
+};
 
 export type NodeCategory = "text" | "image" | "video" | "audio" | "structural" | "integration" | "tools";
 
@@ -159,7 +170,10 @@ function llmNode(opts: {
     description: opts.description,
     inputs: opts.inputs ?? [
       { name: "context", type: "text", optional: true },
-      { name: "image", type: "image", optional: true, label: "Image (for vision)" },
+      // Multi-image input for vision-capable LLMs (Claude, GPT, Gemini).
+      // Connect as many as you need via a single port; the runner passes
+      // them as separate image_url message parts to the model.
+      { name: "images", type: "image", optional: true, multi: true, label: "Images (multi, for vision)" },
     ],
     outputs: opts.outputs ?? [{ name: "text", type: "text" }],
     defaults: {
@@ -308,8 +322,15 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     name: "Image Generation",
     category: "image",
     icon: "image-plus",
-    description: "Generate a new ad image from a prompt.",
-    inputs: [{ name: "prompt", type: "text", optional: true }],
+    description: "Generate a new ad image from a prompt. Connect reference images for multimodal models (Nano Banana, GPT Image).",
+    inputs: [
+      { name: "prompt", type: "text", optional: true },
+      // Multimodal: drop multiple reference images onto a single port. The
+      // runner detects this and switches Nano Banana to the /edit endpoint
+      // (which accepts up to 14 image_urls) automatically. For non-multimodal
+      // models the references are ignored.
+      { name: "images", type: "image", optional: true, multi: true, label: "Reference images (multi)" },
+    ],
     outputs: [{ name: "image", type: "image" }],
     defaults: {
       instructions: "",
@@ -1232,6 +1253,48 @@ export function portsCompatible(out: PortKind, inp: PortKind): boolean {
   if (out === inp) return true;
   if (out === "any" || inp === "any") return true;
   return false;
+}
+
+/** Look up whether a given (nodeType, portName) pair is declared as a
+ *  multi-port. Multi-ports accept many incoming edges and don't dedup. */
+export function isMultiInputPort(nodeType: string, portName: string): boolean {
+  const def = NODE_TYPES[nodeType];
+  if (!def) return false;
+  const port = def.inputs.find((p) => p.name === portName);
+  return Boolean(port?.multi);
+}
+
+/** Return a new edges array with `newEdge` appended.
+ *
+ * For single (non-multi) target ports, any existing edge to that same
+ * (toNode, toPort) is replaced. For multi target ports, we just append —
+ * but de-duplicate by (fromNode, fromPort) so the user can't accidentally
+ * connect the same source twice. */
+export function addEdgeRespectingMulti(
+  edges: GraphEdge[],
+  newEdge: GraphEdge,
+  graph: { nodes: GraphNode[] },
+): GraphEdge[] {
+  const toNode = graph.nodes.find((n) => n.id === newEdge.to.nodeId);
+  if (!toNode) return [...edges, newEdge];
+  const multi = isMultiInputPort(toNode.type, newEdge.to.port);
+  if (multi) {
+    // Prevent duplicate source on the same target multi-port.
+    const dup = edges.some(
+      (e) =>
+        e.to.nodeId === newEdge.to.nodeId &&
+        e.to.port === newEdge.to.port &&
+        e.from.nodeId === newEdge.from.nodeId &&
+        e.from.port === newEdge.from.port,
+    );
+    if (dup) return edges;
+    return [...edges, newEdge];
+  }
+  // Single port: classic replace-on-collision behaviour.
+  return [
+    ...edges.filter((e) => !(e.to.nodeId === newEdge.to.nodeId && e.to.port === newEdge.to.port)),
+    newEdge,
+  ];
 }
 
 // ─────────────────────────────────────────────

@@ -61,6 +61,23 @@ async function persistAsset(remoteUrl: string, ctx: RunnerContext, prefix = "ass
   }
 }
 
+/** Helper: normalise an `images` multi-port input into a clean string[] of
+ * URLs. Accepts the new array form (post-multi-port runtime), the legacy
+ * `inputs.image` single-string form (workflows saved before multi-ports
+ * existed), and ignores anything that isn't a usable HTTP(S) URL. */
+function collectImages(inputs: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const arr = inputs.images;
+  if (Array.isArray(arr)) {
+    for (const v of arr) if (typeof v === "string" && v) out.push(v);
+  }
+  // Legacy single-image port name — backwards compat with older saved graphs.
+  const single = inputs.image;
+  if (typeof single === "string" && single) out.push(single);
+  // De-duplicate (in case the same upstream node is referenced twice somehow).
+  return [...new Set(out)];
+}
+
 export async function runNode(
   type: string,
   config: Record<string, unknown>,
@@ -88,13 +105,16 @@ export async function runNode(
       const model = String(config.model ?? "anthropic/claude-haiku-latest");
       const temperature = Number(config.temperature ?? 0.7);
       const context = inputs.context as string | undefined;
-      const image = inputs.image as string | undefined;
+      // Multi-image input — array (possibly empty) from the multi-port.
+      // Also accepts legacy `inputs.image` (single string) for backwards
+      // compatibility with workflows saved before the multi-port was added.
+      const images = collectImages(inputs);
       const brandSuffix = ctx.brandVoice ? `\n\nBrand voice:\n${ctx.brandVoice}` : "";
       const prompt = context
         ? `Context:\n${context}\n\nTask:\n${instructions}${brandSuffix}`
         : `${instructions}${brandSuffix}`;
       const systemPrompt = getSystemPrompt(type);
-      const text = await falLLM(prompt, model, temperature, image, systemPrompt);
+      const text = await falLLM(prompt, model, temperature, images, systemPrompt);
       return {
         outputs: { text },
         costUsd: estimateCost("any-llm"),
@@ -107,11 +127,11 @@ export async function runNode(
       const model = String(config.model ?? "anthropic/claude-sonnet-latest");
       const temperature = Number(config.temperature ?? 0.4);
       const description = inputs.description as string | undefined;
-      const image = inputs.image as string | undefined;
+      const images = collectImages(inputs);
       const parts = [instructions];
       if (description) parts.push(`Description: ${description}`);
       const systemPrompt = getSystemPrompt("adAnalysis");
-      const text = await falLLM(parts.join("\n\n"), model, temperature, image, systemPrompt);
+      const text = await falLLM(parts.join("\n\n"), model, temperature, images, systemPrompt);
       return { outputs: { analysis: text }, costUsd: estimateCost("any-llm"), durationMs: Date.now() - t0 };
     }
 
@@ -119,16 +139,48 @@ export async function runNode(
     case "imageGen": {
       const prompt = String(config.instructions || inputs.prompt || "").trim();
       if (!prompt) throw new Error("Provide a prompt (input or instructions)");
-      const model = String(config.model ?? "fal-ai/flux/dev");
+      let model = String(config.model ?? "fal-ai/flux/dev");
       const aspect = String(config.aspect ?? "1:1");
       const numResults = Math.max(1, Math.min(4, Number(config.num_results ?? 1)));
+
+      // Multimodal: collect any reference images connected to the multi-port.
+      // Also accept the legacy single `inputs.image` for older workflows. We
+      // cap at 14 — Nano Banana 2 edit's documented max — and silently drop
+      // extras to avoid 4xx from fal.ai.
+      const refImages = collectImages(inputs).slice(0, 14);
+      const hasRefs = refImages.length > 0;
+
+      // Auto-switch model family to its image-editing variant when reference
+      // images are connected. Both Nano Banana 2 and Nano Banana Pro have
+      // dedicated /edit endpoints that accept image_urls[] (multi reference).
+      if (hasRefs) {
+        if (model === "fal-ai/nano-banana-2") model = "fal-ai/nano-banana-2/edit";
+        else if (model === "fal-ai/nano-banana-pro") model = "fal-ai/nano-banana-pro/edit";
+        else if (model === "fal-ai/nano-banana") model = "fal-ai/nano-banana/edit";
+        // Other model families (Flux/Imagen/Ideogram/Recraft) don't accept
+        // multi-image inputs at this endpoint — we log a warning and ignore
+        // the references rather than error out, since the user might be
+        // experimenting and we don't want to burn fal.ai cost on a 4xx.
+        else if (!model.includes("/edit") && !model.includes("kontext")) {
+          console.warn(
+            `[imageGen] model ${model} doesn't support reference images; ignoring ${refImages.length} ref(s)`,
+          );
+        }
+      }
 
       // Build per-model input. Different model families take different fields.
       const input: Record<string, unknown> = { prompt };
       if (model.includes("nano-banana")) {
-        // Nano Banana 2 / Pro: prompt only (aspect controlled via prompt text)
-        // num_images supported as `num_images`
+        // Nano Banana 2 / Pro (and their /edit variants): aspect_ratio is a
+        // dedicated parameter — fixing the bug where aspect was silently
+        // dropped on the client side. Docs:
+        //   https://fal.ai/models/fal-ai/nano-banana-2/api
+        // 15 supported ratios incl. 9:16, 16:9, 4:5, 3:4, 2:3, etc.
+        input.aspect_ratio = aspect;
         input.num_images = numResults;
+        if (model.includes("/edit") && hasRefs) {
+          input.image_urls = refImages;
+        }
       } else if (model.includes("imagen4")) {
         // Imagen: aspect_ratio + num_images
         input.aspect_ratio = aspect;

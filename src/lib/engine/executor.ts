@@ -9,6 +9,7 @@ import type { Prisma } from "@prisma/client";
 import { runNode, type RunnerContext, type RunnerResult } from "./runners";
 import { kindFromMime } from "@/lib/storage";
 import type { Graph, GraphNode } from "@/lib/canvas/types";
+import { NODE_TYPES } from "@/lib/canvas/types";
 
 type NodeStatus = "pending" | "running" | "done" | "error" | "skipped";
 
@@ -78,15 +79,44 @@ export function layerByDepth(graph: Graph, order: string[]): string[][] {
   return layers;
 }
 
-/** Resolve a node's input map from upstream outputs + edge connections */
+/** Resolve a node's input map from upstream outputs + edge connections.
+ *
+ * For regular ports: inputs[port] = upstream value (single).
+ * For multi-ports (Port.multi === true): inputs[port] = array of values,
+ * collected from all incoming edges in edge-order. Undefined upstream
+ * outputs (parent failed or skipped) are filtered out, so the runner can
+ * trust that the array contains only real, usable values.
+ */
 function resolveInputs(graph: Graph, node: GraphNode, outputs: Map<string, Record<string, unknown>>) {
   const inputs: Record<string, unknown> = {};
+  const def = NODE_TYPES[node.type];
+  // Build a set of port names that are declared multi on this node type.
+  const multiPortNames = new Set<string>(
+    (def?.inputs ?? []).filter((p) => p.multi).map((p) => p.name),
+  );
+
   for (const edge of graph.edges) {
     if (edge.to.nodeId !== node.id) continue;
     const upstream = outputs.get(edge.from.nodeId);
     if (!upstream) continue;
-    inputs[edge.to.port] = upstream[edge.from.port];
+    const value = upstream[edge.from.port];
+    if (value === undefined || value === null) continue;
+
+    if (multiPortNames.has(edge.to.port)) {
+      const arr = (inputs[edge.to.port] as unknown[] | undefined) ?? [];
+      arr.push(value);
+      inputs[edge.to.port] = arr;
+    } else {
+      inputs[edge.to.port] = value;
+    }
   }
+
+  // Initialise empty arrays for declared multi-ports that received no edges,
+  // so runners can do `(inputs.images as string[]).length` without null checks.
+  for (const name of multiPortNames) {
+    if (inputs[name] === undefined) inputs[name] = [];
+  }
+
   return inputs;
 }
 
