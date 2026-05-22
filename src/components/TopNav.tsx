@@ -2,6 +2,7 @@
 import Link from "next/link";
 import LogoutButton from "./LogoutButton";
 import ThemeToggle from "./ThemeToggle";
+import ActiveRunsIndicator from "./ActiveRunsIndicator";
 import { requireUser } from "@/lib/auth";
 
 export type Crumb = { label: string; href?: string };
@@ -38,6 +39,7 @@ export default async function TopNav({
           </nav>
         </div>
         <div className="flex items-center gap-3">
+          <ActiveRunsIndicator />
           <span className="hidden md:flex items-center gap-2 text-[11px] text-fg-muted max-w-[200px] truncate">
             <span className="w-1.5 h-1.5 rounded-full bg-brand animate-pulse" />
             <span className="truncate">{user.email}</span>

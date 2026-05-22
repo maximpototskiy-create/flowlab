@@ -3,6 +3,7 @@
 import { Play, Square, Loader2, Check, History, BookOpen } from "lucide-react";
 import ThemeToggle from "../ThemeToggle";
 import Link from "next/link";
+import OtherActiveRunsBadge from "./OtherActiveRunsBadge";
 
 export default function CanvasToolbar({
   workflowName,
@@ -42,6 +43,7 @@ export default function CanvasToolbar({
       </div>
 
       <div className="flex items-center gap-1.5">
+        <OtherActiveRunsBadge currentWorkflowId={workflowId} />
         {brandSlug && (
           <Link
             href={`/brands/${brandSlug}/brand-kit`}

@@ -23,6 +23,41 @@ export default async function WorkflowPage({
 
   if (!workflow || workflow.projectId !== id) notFound();
 
+  // If there's already a Run in flight for this workflow (because the user
+  // started a generation, navigated away, and just came back), grab it.
+  // Canvas will use it to immediately paint spinners on the right nodes
+  // and resume polling — instead of showing them as idle.
+  const activeRun = await prisma.run.findFirst({
+    where: {
+      workflowId: workflow.id,
+      status: { in: ["pending", "running"] },
+    },
+    orderBy: { startedAt: "desc" },
+    include: {
+      steps: {
+        select: {
+          nodeId: true,
+          status: true,
+          outputData: true,
+          errorMessage: true,
+        },
+      },
+    },
+  });
+
+  const initialActiveRun = activeRun
+    ? {
+        runId: activeRun.id,
+        startedAt: activeRun.startedAt.toISOString(),
+        steps: activeRun.steps.map((s: (typeof activeRun.steps)[number]) => ({
+          nodeId: s.nodeId,
+          status: s.status as "pending" | "running" | "done" | "error",
+          outputData: s.outputData as Record<string, unknown> | null,
+          errorMessage: s.errorMessage,
+        })),
+      }
+    : null;
+
   // Parse stored graph safely
   let graph: Graph = EMPTY_GRAPH;
   try {
@@ -50,6 +85,7 @@ export default async function WorkflowPage({
           projectId: workflow.project.id,
         }}
         initialGraph={graph}
+        initialActiveRun={initialActiveRun}
       />
     </div>
   );
