@@ -7,7 +7,8 @@ import { NodeIcon } from "@/lib/canvas/icons";
 import UploadZone from "./UploadZone";
 
 export const NODE_WIDTH = 280;
-export const NODE_HEADER_HEIGHT = 38;
+// h-9 (36px) + border-b-1 = 37, but visually centre matches 36 better
+export const NODE_HEADER_HEIGHT = 36;
 export const NODE_PORT_SPACING = 26;
 
 export function getNodeHeight(node: GraphNode): number {

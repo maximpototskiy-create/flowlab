@@ -86,6 +86,19 @@ export default function Canvas({
   const [isRunning, setIsRunning] = useState(false);
   const activeRunPoll = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
 
+  // CRITICAL: Stop ALL polling intervals when the component unmounts (workflow
+  // switch, browser tab close, navigation). Without this, intervals leak and
+  // keep hammering /api/runs/[id] forever, exhausting the DB connection pool.
+  useEffect(() => {
+    const polls = activeRunPoll.current;
+    return () => {
+      for (const interval of polls.values()) {
+        clearInterval(interval);
+      }
+      polls.clear();
+    };
+  }, []);
+
   // ─────────────────────────────── Convert screen->canvas coords
   const screenToCanvas = useCallback(
     (clientX: number, clientY: number) => {
@@ -199,8 +212,8 @@ export default function Canvas({
     const port = def.outputs[portIdx];
     if (!port) return;
     const canvasPt = screenToCanvas(e.clientX, e.clientY);
-    // Match CanvasEdges port calculation: NODE_HEADER_HEIGHT(38) + 14 + PORT_RADIUS(7) + idx*spacing(26)
-    const portYpx = 38 + 14 + 7 + portIdx * 26;
+    // Match CanvasEdges port calculation: NODE_HEADER_HEIGHT(36) + 14 + PORT_RADIUS(7) + idx*spacing(26)
+    const portYpx = 36 + 14 + 7 + portIdx * 26;
     setEdgeDraft({
       fromNode: nodeId,
       fromPort: portName,
@@ -241,14 +254,34 @@ export default function Canvas({
   }
 
   // ─────────────────────────────── Global pointermove/up
+  // We use refs that mirror state so the window listeners never need to be
+  // re-registered. Re-registering on every render would race with mid-drag
+  // pointer events and cause edges/drags to drop.
   const rafPending = useRef(false);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<Drag | null>(null);
+  const edgeDraftRef = useRef<EdgeDraft | null>(null);
+  const isPanningRef = useRef(false);
+  const zoomRef = useRef(zoom);
+  const screenToCanvasRef = useRef(screenToCanvas);
+
+  // Keep refs in sync with state
+  useEffect(() => { dragRef.current = drag; }, [drag]);
+  useEffect(() => { edgeDraftRef.current = edgeDraft; }, [edgeDraft]);
+  useEffect(() => { isPanningRef.current = isPanning; }, [isPanning]);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+  useEffect(() => { screenToCanvasRef.current = screenToCanvas; }, [screenToCanvas]);
 
   useEffect(() => {
     function applyDrag() {
       rafPending.current = false;
       const ptr = lastPointer.current;
       if (!ptr) return;
+      const drag = dragRef.current;
+      const edgeDraft = edgeDraftRef.current;
+      const isPanning = isPanningRef.current;
+      const zoom = zoomRef.current;
+      const screenToCanvas = screenToCanvasRef.current;
       if (drag) {
         const dx = (ptr.x - drag.pointerX) / zoom;
         const dy = (ptr.y - drag.pointerY) / zoom;
@@ -278,12 +311,17 @@ export default function Canvas({
 
     function onMove(e: PointerEvent) {
       lastPointer.current = { x: e.clientX, y: e.clientY };
-      if (!rafPending.current && (drag || edgeDraft || isPanning)) {
+      const hasAction = dragRef.current || edgeDraftRef.current || isPanningRef.current;
+      if (!rafPending.current && hasAction) {
         rafPending.current = true;
         requestAnimationFrame(applyDrag);
       }
     }
     function onUp(e: PointerEvent) {
+      const drag = dragRef.current;
+      const edgeDraft = edgeDraftRef.current;
+      const isPanning = isPanningRef.current;
+      const screenToCanvas = screenToCanvasRef.current;
       if (drag) {
         // Commit final position to graph state — this triggers React re-render once.
         const finalPos = liveDragPos.current;
@@ -334,7 +372,9 @@ export default function Canvas({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [drag, edgeDraft, isPanning, zoom, screenToCanvas]);
+    // Listeners are registered ONCE on mount — state is read via refs above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─────────────────────────────── Keyboard shortcuts
   const clipboard = useRef<GraphNode | null>(null);
@@ -475,7 +515,17 @@ export default function Canvas({
   }
 
   // ─────────────────────────────── Run execution
+  // Track which scope nodes have an in-flight run so we don't start a duplicate
+  // when the user accidentally double-clicks or clicks again while a run is going.
+  const inflightScopes = useRef<Set<string>>(new Set());
+
   async function startRun(scopeNodeId?: string) {
+    const scopeKey = scopeNodeId ?? "__all__";
+    if (inflightScopes.current.has(scopeKey)) {
+      console.log("[FlowLab] startRun: ignoring duplicate for scope", scopeKey);
+      return;
+    }
+    inflightScopes.current.add(scopeKey);
     console.log("[FlowLab] startRun called", { scopeNodeId, nodeCount: graph.nodes.length });
     setIsRunning(true);
     // Reset node statuses in scope. Note: for single-node runs, only reset that node + downstream chain.
@@ -525,7 +575,7 @@ export default function Canvas({
       ]);
 
       // Begin polling
-      pollRun(runId);
+      pollRun(runId, scopeKey);
     } catch (err) {
       console.error(err);
       // Reset the scoped nodes back to idle so user can retry
@@ -535,6 +585,7 @@ export default function Canvas({
           scopeNodeId && n.id !== scopeNodeId ? n : { ...n, status: "error", error: err instanceof Error ? err.message : "Run failed" },
         ),
       }));
+      inflightScopes.current.delete(scopeKey);
       if (activeRunPoll.current.size === 0) setIsRunning(false);
       toast("Run failed: " + (err instanceof Error ? err.message : "Unknown error"));
     }
@@ -562,7 +613,7 @@ export default function Canvas({
     }
   }
 
-  function pollRun(runId: string) {
+  function pollRun(runId: string, scopeKey: string) {
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
@@ -620,6 +671,7 @@ export default function Canvas({
         if (data.status === "done" || data.status === "error" || data.status === "cancelled") {
           clearInterval(interval);
           activeRunPoll.current.delete(runId);
+          inflightScopes.current.delete(scopeKey);
           if (activeRunPoll.current.size === 0) setIsRunning(false);
         }
       } catch (err) {
@@ -628,13 +680,6 @@ export default function Canvas({
     }, 4000);
     activeRunPoll.current.set(runId, interval);
   }
-
-  useEffect(() => {
-    const map = activeRunPoll.current;
-    return () => {
-      for (const i of map.values()) clearInterval(i);
-    };
-  }, []);
 
   // ─────────────────────────────── Render
   const expandedNode = expandedNodeId ? graph.nodes.find((n) => n.id === expandedNodeId) : null;
@@ -783,21 +828,28 @@ export default function Canvas({
       })()}
 
       {/* Connection picker */}
-      {connPicker && (
-        <ConnectionPicker
-          x={connPicker.screenX}
-          y={connPicker.screenY}
-          sourceKind={connPicker.fromKind}
-          onClose={() => setConnPicker(null)}
-          onPick={(type, inputPort) => {
-            addNodeAt(type, connPicker.canvasX, connPicker.canvasY, {
-              connectFrom: { node: connPicker.fromNode, port: connPicker.fromPort },
-              toInput: inputPort,
-            });
-            setConnPicker(null);
-          }}
-        />
-      )}
+      {connPicker && (() => {
+        // Capture in stable locals before any state changes invalidate connPicker.
+        const cx = connPicker.canvasX;
+        const cy = connPicker.canvasY;
+        const fromNode = connPicker.fromNode;
+        const fromPort = connPicker.fromPort;
+        return (
+          <ConnectionPicker
+            x={connPicker.screenX}
+            y={connPicker.screenY}
+            sourceKind={connPicker.fromKind}
+            onClose={() => setConnPicker(null)}
+            onPick={(type, inputPort) => {
+              addNodeAt(type, cx, cy, {
+                connectFrom: { node: fromNode, port: fromPort },
+                toInput: inputPort,
+              });
+              setConnPicker(null);
+            }}
+          />
+        );
+      })()}
 
       {/* Expanded modal */}
       {expandedNode && (

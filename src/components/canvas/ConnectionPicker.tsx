@@ -73,7 +73,11 @@ export default function ConnectionPicker({
         {candidates.map(({ id, def, inputPort }) => (
           <button
             key={id}
-            onClick={() => {
+            onMouseDown={(e) => {
+              // Use mousedown (not click) + stopPropagation so this fires
+              // BEFORE the global outside-click-close listener.
+              e.preventDefault();
+              e.stopPropagation();
               onPick(id, inputPort);
               onClose();
             }}
