@@ -122,13 +122,20 @@ export default function Canvas({
     setSaveState("saving");
     saveTimer.current = setTimeout(async () => {
       try {
-        // Strip runtime state before saving
+        // Keep generated outputs/results in the saved snapshot so they survive
+        // a page refresh. Without this, every reload wipes all generated
+        // images, videos and text from the canvas (the files themselves still
+        // live in Supabase Storage, but the node→URL mapping is lost).
+        // Status/error are intentionally NOT persisted — they're volatile
+        // runtime state.
         const cleaned: Graph = {
           nodes: graph.nodes.map((n) => ({
             id: n.id,
             type: n.type,
             position: n.position,
             config: n.config,
+            outputs: n.outputs,
+            results: n.results,
           })),
           edges: graph.edges,
         };
@@ -339,26 +346,74 @@ export default function Canvas({
         setDrag(null);
       }
       if (edgeDraft) {
-        // Check if released over an input port via document.elementFromPoint
+        // 1. Direct hit on an input port — let the port's own pointerup handler take it.
         const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
         const portEl = target?.closest?.("[data-port-side]");
         if (portEl?.getAttribute("data-port-side") === "in") {
-          // input port handler will catch it via pointerup
-        } else {
-          // Open ConnectionPicker
-          const pt = screenToCanvas(e.clientX, e.clientY);
-          setConnPicker({
-            screenX: e.clientX,
-            screenY: e.clientY,
-            canvasX: pt.x,
-            canvasY: pt.y,
-            fromNode: edgeDraft.fromNode,
-            fromPort: edgeDraft.fromPort,
-            fromKind: edgeDraft.fromKind,
-          });
           setEdgeDraft(null);
           return;
         }
+
+        // 2. SNAP: find the nearest input port within radius and connect to it.
+        // 14px circles are tiny — being lenient here makes connection feel much
+        // better. We search across the whole document; the snap radius is in
+        // viewport pixels.
+        const SNAP_RADIUS_PX = 40;
+        let bestNodeId: string | null = null;
+        let bestPortId: string | null = null;
+        let bestPortKind: string | null = null;
+        let bestDist = SNAP_RADIUS_PX;
+        document.querySelectorAll<HTMLElement>('[data-port-side="in"]').forEach((el) => {
+          const nodeEl = el.closest<HTMLElement>("[data-node-id]");
+          const nodeId = nodeEl?.getAttribute("data-node-id");
+          const portId = el.getAttribute("data-port-id");
+          const kind = el.getAttribute("data-port-kind");
+          if (!nodeId || !portId || !kind) return;
+          if (nodeId === edgeDraft.fromNode) return; // can't connect to self
+          const r = el.getBoundingClientRect();
+          const dx = r.left + r.width / 2 - e.clientX;
+          const dy = r.top + r.height / 2 - e.clientY;
+          const dist = Math.hypot(dx, dy);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestNodeId = nodeId;
+            bestPortId = portId;
+            bestPortKind = kind;
+          }
+        });
+
+        if (
+          bestNodeId &&
+          bestPortId &&
+          bestPortKind &&
+          portsCompatible(edgeDraft.fromKind, bestPortKind as never)
+        ) {
+          const snappedNodeId = bestNodeId;
+          const snappedPortId = bestPortId;
+          setGraph((g) => ({
+            ...g,
+            edges: [
+              ...g.edges.filter(
+                (e2) => !(e2.to.nodeId === snappedNodeId && e2.to.port === snappedPortId),
+              ),
+              makeEdge(edgeDraft.fromNode, edgeDraft.fromPort, snappedNodeId, snappedPortId),
+            ],
+          }));
+          setEdgeDraft(null);
+          return;
+        }
+
+        // 3. No port nearby — fall back to ConnectionPicker (pick a new node from menu).
+        const pt = screenToCanvas(e.clientX, e.clientY);
+        setConnPicker({
+          screenX: e.clientX,
+          screenY: e.clientY,
+          canvasX: pt.x,
+          canvasY: pt.y,
+          fromNode: edgeDraft.fromNode,
+          fromPort: edgeDraft.fromPort,
+          fromKind: edgeDraft.fromKind,
+        });
         setEdgeDraft(null);
       }
       if (isPanning) {
@@ -732,12 +787,14 @@ export default function Canvas({
             }}
           >
             <CanvasEdges
-              key={`edges-${dragTick}`}
               graph={graph}
               hoveredEdgeId={hoveredEdge}
               draftEdge={edgeDraft ? { x1: edgeDraft.x1, y1: edgeDraft.y1, x2: edgeDraft.x2, y2: edgeDraft.y2, color: PORT_COLORS[edgeDraft.fromKind] } : null}
               liveDragNodeId={drag?.nodeId ?? null}
               liveDragPos={liveDragPos.current}
+              dragTick={dragTick}
+              pan={pan}
+              zoom={zoom}
               onHover={setHoveredEdge}
               onDelete={deleteEdge}
             />

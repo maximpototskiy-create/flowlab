@@ -7,19 +7,18 @@ import { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING } from "./CanvasNode"
 type EdgePos = { x1: number; y1: number; x2: number; y2: number; color: string; id: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fallback formula — used while DOM is still mounting, or when a port element
-// can't be found (e.g. during initial render of a fresh edge).
+// Fallback formula — used while DOM is still mounting, or for the node
+// currently being dragged (its DOM position is updated via direct style.transform
+// every frame; measuring during drag would be expensive AND stale).
 //
 // Port container is at `top: y`, where y = NODE_HEADER_HEIGHT + 14 + idx * SPACING.
 // The 14px circle sits inside the container at top=0, so its visual centre is
 // y + 7 (PORT_RADIUS).
 //
-// X for an INPUT port: the container is positioned at `left: -7`, the 14px
-// circle therefore spans x ∈ [-7, +7] relative to the node's left edge, so
-// centre = node.left + 0 (i.e. node.position.x).
-//
-// X for an OUTPUT port: container at `right: -7`, circle spans [node.right - 7,
-// node.right + 7], centre = node.right (i.e. node.position.x + NODE_WIDTH).
+// X for an INPUT port: container at `left: -7`, the 14px circle therefore
+// spans x ∈ [-7, +7] relative to the node's left edge, so centre =
+// node.position.x.
+// X for an OUTPUT port: container at `right: -7`, centre = node.position.x + NODE_WIDTH.
 // ─────────────────────────────────────────────────────────────────────────────
 const PORT_RADIUS = 7;
 const PORT_BASE_Y = NODE_HEADER_HEIGHT + 14 + PORT_RADIUS;
@@ -38,6 +37,9 @@ export default function CanvasEdges({
   draftEdge,
   liveDragNodeId,
   liveDragPos,
+  // dragTick / pan / zoom are passed only to trigger re-render on relevant
+  // changes from the parent — we don't read them directly except where noted.
+  dragTick,
   pan,
   zoom,
   onHover,
@@ -48,16 +50,24 @@ export default function CanvasEdges({
   draftEdge: { x1: number; y1: number; x2: number; y2: number; color: string } | null;
   liveDragNodeId?: string | null;
   liveDragPos?: { x: number; y: number } | null;
+  dragTick?: number;
   pan?: { x: number; y: number };
   zoom?: number;
   onHover: (id: string | null) => void;
   onDelete: (id: string) => void;
 }) {
-  // Cache of measured port centres in canvas-space coords, keyed by
+  // Suppress unused-warnings (these props exist to trigger re-renders).
+  void dragTick;
+
+  // Cache of measured port centres in canvas-local coords, keyed by
   // `${nodeId}::${portName}::${side}`. Filled by useLayoutEffect — guarantees
   // pixel-perfect alignment regardless of CSS quirks (borders, antialiasing,
   // box-sizing differences across browsers).
-  const [measured, setMeasured] = useState<Map<string, { x: number; y: number }>>(new Map());
+  const measuredRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  // Bump on every successful re-measure so React rerenders the SVG with new
+  // positions. We store the cache in a ref (not useState) so writing to it
+  // doesn't itself cause a re-render loop.
+  const [measureVersion, setMeasureVersion] = useState(0);
   const svgRef = useRef<SVGSVGElement>(null);
 
   useLayoutEffect(() => {
@@ -67,9 +77,9 @@ export default function CanvasEdges({
     const next = new Map<string, { x: number; y: number }>();
 
     // Find every port element in the document and record its centre in
-    // canvas-local coords. We deliberately ignore pan/zoom by subtracting
-    // the SVG's own rect — the SVG lives inside the same transform parent
-    // as the nodes, so its rect reflects all transforms applied.
+    // canvas-local coords. The SVG lives inside the same transform parent
+    // as the nodes — both rects reflect the same applied pan/zoom — so
+    // (port_rect - svg_rect) / zoom gives canvas-local (pre-transform) coords.
     const portEls = document.querySelectorAll<HTMLElement>("[data-port-side]");
     portEls.forEach((el) => {
       const nodeEl = el.closest<HTMLElement>("[data-node-id]");
@@ -79,19 +89,31 @@ export default function CanvasEdges({
       const side = el.getAttribute("data-port-side") as "in" | "out" | null;
       if (!nodeId || !portId || !side) return;
       const rect = el.getBoundingClientRect();
-      // Centre of the port in canvas-local (pre-transform) coords:
       const cx = (rect.left + rect.width / 2 - svgRect.left) / z;
       const cy = (rect.top + rect.height / 2 - svgRect.top) / z;
       next.set(`${nodeId}::${portId}::${side}`, { x: cx, y: cy });
     });
 
-    setMeasured(next);
+    // Compare to previous; only bump the version if positions actually changed.
+    // Without this we'd re-render on every layout effect even when nothing moved.
+    const prev = measuredRef.current;
+    let changed = prev.size !== next.size;
+    if (!changed) {
+      for (const [k, v] of next) {
+        const p = prev.get(k);
+        if (!p || p.x !== v.x || p.y !== v.y) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (changed) {
+      measuredRef.current = next;
+      setMeasureVersion((v) => v + 1);
+    }
     // Re-measure whenever any node mutates (add, delete, drag-end commits a
-    // new position, etc) or transforms change. We deliberately exclude
-    // liveDragPos / draftEdge from deps — they change every frame and would
-    // re-measure too often. During drag the formula fallback is used for the
-    // dragged node, then a single remeasure happens once the position is
-    // committed to graph.nodes on pointer up.
+    // new position) or transforms change. liveDragPos is intentionally NOT in
+    // deps — the dragged node's position is handled via the fallback formula.
   }, [graph.nodes, graph.edges, pan?.x, pan?.y, zoom]);
 
   // Helper: position of a node (possibly overridden by live drag).
@@ -103,8 +125,8 @@ export default function CanvasEdges({
   // Helper: port centre — measured first, formula fallback.
   function portCentre(node: GraphNode, portName: string, side: "in" | "out"): { x: number; y: number } {
     const key = `${node.id}::${portName}::${side}`;
-    const m = measured.get(key);
-    if (m && !(liveDragNodeId === node.id)) {
+    const m = measuredRef.current.get(key);
+    if (m && liveDragNodeId !== node.id) {
       // Use measured value for stationary nodes — pixel-perfect.
       return m;
     }
@@ -114,6 +136,9 @@ export default function CanvasEdges({
     const x = side === "out" ? p.x + NODE_WIDTH : p.x;
     return { x, y };
   }
+
+  // Reference measureVersion so React knows this render depends on it.
+  void measureVersion;
 
   const positions: EdgePos[] = [];
   for (const e of graph.edges) {
@@ -136,8 +161,8 @@ export default function CanvasEdges({
       ref={svgRef}
       className="absolute inset-0 pointer-events-none"
       // CRITICAL: overflow=visible — without this, lines that approach the
-      // edges of the SVG's 5000×4000 viewport get clipped. Especially
-      // visible when zoomed in or when nodes are placed far apart.
+      // edges of the SVG's 5000×4000 viewport get clipped. Without it parts
+      // of lines just disappear (the symptom you saw on the screenshot).
       style={{ width: 5000, height: 4000, overflow: "visible" }}
     >
       <defs>
@@ -146,7 +171,11 @@ export default function CanvasEdges({
         </filter>
       </defs>
       {positions.map((p) => {
-        const dx = Math.max(40, Math.abs(p.x2 - p.x1) * 0.4);
+        // Less aggressive control offset so lines don't make giant S-curves
+        // when nodes are placed far apart. Clamped to keep readable shapes
+        // at all zoom levels.
+        const dist = Math.abs(p.x2 - p.x1);
+        const dx = Math.max(40, Math.min(140, dist * 0.35));
         const d = `M ${p.x1} ${p.y1} C ${p.x1 + dx} ${p.y1}, ${p.x2 - dx} ${p.y2}, ${p.x2} ${p.y2}`;
         const isHovered = hoveredEdgeId === p.id;
         const midX = (p.x1 + p.x2) / 2;
@@ -173,7 +202,13 @@ export default function CanvasEdges({
               opacity={isHovered ? 1 : 0.85}
             />
             {isHovered && (
-              <foreignObject x={midX - 11} y={midY - 11} width={22} height={22} style={{ pointerEvents: "all" }}>
+              <foreignObject
+                x={midX - 11}
+                y={midY - 11}
+                width={22}
+                height={22}
+                style={{ pointerEvents: "all" }}
+              >
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
