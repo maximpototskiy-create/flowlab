@@ -145,7 +145,7 @@ export default function Canvas({
       } catch {
         setSaveState("error");
       }
-    }, 800);
+    }, 200);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };

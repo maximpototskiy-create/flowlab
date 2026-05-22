@@ -252,10 +252,16 @@ function CanvasNodeImpl({
           />
         )}
 
-        {/* Output preview */}
-        {status === "done" && node.outputs && Object.keys(node.outputs).length > 0 && (
+        {/* Output preview — shown whenever the node has results, regardless
+            of `status`. Status is volatile runtime state (lost on refresh),
+            but outputs/results are persisted, so the condition keys off the
+            actual data. When a node is re-running, outputs are cleared to
+            `undefined` (see Canvas.tsx startRun), so this won't show stale
+            content during a re-run. */}
+        {((node.outputs && Object.keys(node.outputs).length > 0) ||
+          (node.results && node.results.length > 0)) && (
           <OutputPreview
-            outputs={node.outputs}
+            outputs={node.outputs ?? {}}
             results={node.results}
             selectedIdx={selectedResultIdx}
             onSelectIdx={setSelectedResultIdx}

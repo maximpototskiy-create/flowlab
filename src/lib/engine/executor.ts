@@ -5,6 +5,7 @@
 // - Updates DB run/run_steps as it goes
 
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import { runNode, type RunnerContext, type RunnerResult } from "./runners";
 import { kindFromMime } from "@/lib/storage";
 import type { Graph, GraphNode } from "@/lib/canvas/types";
@@ -133,11 +134,11 @@ async function executeOne(
     state.status.set(node.id, "done");
 
     // Persist asset rows for any URLs in outputs
-    const assetIds: string[] = [];
+    const assetEntries: { cdnUrl: string; kind: "image" | "video" | "audio" | "text" }[] = [];
     for (const [port, value] of Object.entries(result.outputs)) {
       if (typeof value === "string" && value.startsWith("http")) {
         const kind = inferKindFromUrl(value, port);
-        const asset = await prisma.asset.create({
+        await prisma.asset.create({
           data: {
             brandId: state.ctx.brandId ?? null,
             projectId: state.ctx.projectId ?? null,
@@ -150,7 +151,7 @@ async function executeOne(
             runStepId: runStep.id,
           },
         });
-        assetIds.push(asset.id);
+        assetEntries.push({ cdnUrl: value, kind });
       }
     }
 
@@ -163,6 +164,56 @@ async function executeOne(
         outputData: result.outputs as never,
       },
     });
+
+    // ─────────────────────────────────────────────────────────────────────
+    // CRITICAL: persist outputs/results into workflow.graph itself.
+    //
+    // Without this, generated content only lives in client React state via
+    // polling. If the user navigates to another workflow / closes the tab /
+    // refreshes mid-run, the polling stops and outputs never make it into
+    // the saved graph. The user comes back and sees empty nodes even though
+    // the assets exist in Supabase.
+    //
+    // We do a read-modify-write inside a transaction, patching ONLY this
+    // node's outputs/results. Position, config, edges and other nodes are
+    // preserved exactly as they were. This means a background run can
+    // safely complete while the user is editing other nodes — no overwrites.
+    // ─────────────────────────────────────────────────────────────────────
+    if (state.ctx.workflowId) {
+      try {
+        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+          const wf = await tx.workflow.findUnique({
+            where: { id: state.ctx.workflowId! },
+            select: { graph: true },
+          });
+          if (!wf?.graph) return;
+          const g = wf.graph as { nodes?: unknown; edges?: unknown };
+          if (!Array.isArray(g.nodes)) return;
+          const idx = (g.nodes as Array<{ id?: string }>).findIndex(
+            (n) => n && typeof n === "object" && n.id === node.id,
+          );
+          if (idx < 0) return;
+          const nodesArr = [...(g.nodes as Array<Record<string, unknown>>)];
+          nodesArr[idx] = {
+            ...nodesArr[idx],
+            outputs: result.outputs,
+            // Mirrors what client polling builds: only set results when there
+            // are 2+ assets (single-asset results go via outputs.<port>).
+            ...(assetEntries.length > 1
+              ? { results: assetEntries.map((a) => ({ value: a.cdnUrl, mime: a.kind })) }
+              : { results: undefined }),
+          };
+          await tx.workflow.update({
+            where: { id: state.ctx.workflowId! },
+            data: { graph: { ...g, nodes: nodesArr } as never },
+          });
+        });
+      } catch (e) {
+        // Non-fatal — the RunStep is already saved with outputData, so the
+        // client polling will still pick it up. Log so we can investigate.
+        console.error("[executor] failed to persist node outputs into workflow.graph:", e);
+      }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     state.status.set(node.id, "error");
