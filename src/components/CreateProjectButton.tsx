@@ -61,7 +61,7 @@ export default function CreateProjectButton({
               required
               maxLength={80}
               placeholder="e.g. Q2 launch ads"
-              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-white outline-none focus:border-brand rounded-sm transition"
+              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-fg outline-none focus:border-brand rounded-sm transition"
             />
           </div>
 
@@ -74,7 +74,7 @@ export default function CreateProjectButton({
               rows={3}
               maxLength={500}
               placeholder="What is this project for?"
-              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-white outline-none focus:border-brand rounded-sm transition resize-none"
+              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-fg outline-none focus:border-brand rounded-sm transition resize-none"
             />
           </div>
 

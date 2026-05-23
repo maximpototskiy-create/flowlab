@@ -57,7 +57,7 @@ export default function CreateBrandButton({
               required
               maxLength={80}
               placeholder="e.g. Cleaner Pro"
-              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-white outline-none focus:border-brand rounded-sm transition"
+              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-fg outline-none focus:border-brand rounded-sm transition"
             />
           </div>
           <div>
@@ -69,7 +69,7 @@ export default function CreateBrandButton({
               rows={3}
               maxLength={500}
               placeholder="What kind of app is this?"
-              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-white outline-none focus:border-brand rounded-sm transition resize-none"
+              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-fg outline-none focus:border-brand rounded-sm transition resize-none"
             />
           </div>
           {error && (

@@ -61,7 +61,7 @@ export default function CreateWorkflowButton({
               maxLength={120}
               defaultValue="Untitled workflow"
               placeholder="e.g. Hook variations — fitness app"
-              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-white outline-none focus:border-brand rounded-sm transition"
+              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-fg outline-none focus:border-brand rounded-sm transition"
             />
           </div>
 

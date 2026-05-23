@@ -227,10 +227,19 @@ async function executeOne(
           nodesArr[idx] = {
             ...nodesArr[idx],
             outputs: result.outputs,
-            // Mirrors what client polling builds: only set results when there
-            // are 2+ assets (single-asset results go via outputs.<port>).
-            ...(assetEntries.length > 1
-              ? { results: assetEntries.map((a) => ({ value: a.cdnUrl, mime: a.kind })) }
+            // BUG FIX: previously this rebuilt `results` from `assetEntries`
+            // which was derived ONLY from `result.outputs` — and outputs has
+            // a single representative URL ({ image: persisted[0] }). So when
+            // a node generated 4 images, all 4 were saved to Asset table and
+            // returned in result.results, but only the FIRST landed in
+            // workflow.graph. After a refresh the carousel showed 1 image.
+            //
+            // Fix: persist `result.results` directly when the runner provides
+            // it (multi-result nodes — imageGen with num_results>1, batched
+            // video, etc). When there are 0/1 results, leave undefined so
+            // the single-output path renders correctly.
+            ...(result.results && result.results.length > 1
+              ? { results: result.results }
               : { results: undefined }),
           };
           await tx.workflow.update({

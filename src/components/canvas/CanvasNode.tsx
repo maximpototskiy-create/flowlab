@@ -93,14 +93,6 @@ function CanvasNodeImpl({
         top: 0,
         left: 0,
         width: NODE_WIDTH,
-        // Optional vertical resize — when the user has dragged the corner
-        // handle, `node.config._height` stores a pixel value. Without it,
-        // the node auto-sizes to its content (default flex behaviour).
-        // We intentionally don't allow horizontal resize because edge
-        // geometry assumes fixed NODE_WIDTH.
-        ...(typeof node.config._height === "number" && node.config._height > 0
-          ? { height: `${node.config._height}px` }
-          : {}),
         transform: `translate(${node.position.x}px, ${node.position.y}px)`,
         willChange: "transform",
       }}
@@ -352,7 +344,7 @@ function CanvasNodeImpl({
                   Copy
                 </button>
               </div>
-              <div className="text-fg text-[11px] leading-snug whitespace-pre-wrap break-words max-h-[150px] overflow-y-auto nodrag">
+              <div className="text-fg text-[11px] leading-snug whitespace-pre-wrap break-words max-h-[80px] overflow-y-auto nodrag">
                 {value}
               </div>
             </div>
@@ -366,20 +358,20 @@ function CanvasNodeImpl({
               {def.primaryLabel ?? "Instructions"}
             </label>
             <textarea
-              className="w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none min-h-[40px] max-h-[200px] leading-snug nodrag"
+              className="w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none min-h-[40px] max-h-[120px] leading-snug nodrag"
               placeholder={def.primaryPlaceholder ?? "Write text…"}
               value={(node.config[def.primaryField] as string) ?? ""}
               onChange={(e) => onConfigChange(def.primaryField!, e.target.value)}
               onMouseDown={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
-              // Auto-grow to fit content up to max-h. Without this, the
-              // textarea stays at its CSS min-h even for long prompts and
-              // the user can't read the full text without scrolling.
+              // Auto-grow up to max-h. Past that point the textarea becomes
+              // scrollable in-place. For viewing the FULL text users can hit
+              // the Maximize2 icon in the header to open the expanded modal.
               ref={(el) => {
                 if (!el) return;
                 el.style.height = "auto";
-                el.style.height = `${Math.min(200, el.scrollHeight)}px`;
+                el.style.height = `${Math.min(120, el.scrollHeight)}px`;
               }}
             />
           </div>
@@ -441,46 +433,6 @@ function CanvasNodeImpl({
           </div>
         )}
       </div>
-
-      {/* Vertical resize handle (lower-right). Drag down/up to change node
-          height. We persist the new height into node.config._height so it
-          survives refresh via the existing autosave path. Width is fixed
-          to NODE_WIDTH because edge geometry assumes it. */}
-      <div
-        className="absolute bottom-1 right-1 w-3 h-3 cursor-ns-resize opacity-30 hover:opacity-100 transition-opacity"
-        style={{
-          background: `linear-gradient(135deg, transparent 50%, currentColor 50%)`,
-          color: color,
-        }}
-        title="Drag to resize"
-        onMouseDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          const startY = e.clientY;
-          const nodeEl = (e.currentTarget as HTMLElement).closest<HTMLElement>(
-            "[data-node-id]",
-          );
-          const startH = nodeEl?.offsetHeight ?? 100;
-          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-          function onMove(ev: PointerEvent) {
-            // Live-resize the DOM (cheap); we commit to state on pointerup
-            // to avoid 60 setStates/sec hammering autosave.
-            if (!nodeEl) return;
-            const newH = Math.max(80, startH + (ev.clientY - startY));
-            nodeEl.style.height = `${newH}px`;
-          }
-          function onUp() {
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", onUp);
-            // Commit final height to node config so it persists.
-            const finalH = nodeEl ? nodeEl.offsetHeight : startH;
-            onConfigChange("_height", finalH);
-          }
-          window.addEventListener("pointermove", onMove);
-          window.addEventListener("pointerup", onUp);
-        }}
-      />
 
       {/* Fullscreen viewer for image/video results. Renders into a fixed-
           positioned div via Lightbox so it escapes the canvas transform. */}
@@ -752,10 +704,12 @@ function PreviewMedia({ url }: { url: string }) {
       <img src={url} alt="" className="w-full max-h-40 rounded-md object-cover bg-bg-subtle" />
     );
   }
-  // text — show in full with scroll. Truncating to 500 chars was hiding
-  // most prompts; now we let users see/copy the complete output. The Copy
-  // button lives in a small chip in the top-right so it doesn't compete
-  // for visual space with the text.
+  // text — compact view with scroll. The full text is always available via
+  // the Maximize2 (Expand) button in the node header, which opens the
+  // NodeExpandedModal. Inside the node we cap at 160px to keep nodes
+  // visually compact (the screenshot reference user provided shows nodes
+  // shouldn't be very tall by default — focus is on the result, not the
+  // text wall).
   return (
     <div className="relative rounded-md bg-bg-subtle border border-border text-fg group/text">
       <button
@@ -770,7 +724,7 @@ function PreviewMedia({ url }: { url: string }) {
       >
         Copy
       </button>
-      <div className="p-2 pr-12 max-h-[280px] overflow-auto text-[11px] font-mono whitespace-pre-wrap break-words leading-snug nodrag">
+      <div className="p-2 pr-12 max-h-[160px] overflow-auto text-[11px] font-mono whitespace-pre-wrap break-words leading-snug nodrag">
         {url}
       </div>
     </div>

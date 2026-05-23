@@ -73,7 +73,7 @@ export default function ProjectActions({
               defaultValue={project.name}
               required
               maxLength={80}
-              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-white outline-none focus:border-brand rounded-sm transition"
+              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-fg outline-none focus:border-brand rounded-sm transition"
             />
           </div>
           <div>
@@ -85,7 +85,7 @@ export default function ProjectActions({
               rows={3}
               maxLength={500}
               defaultValue={project.description ?? ""}
-              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-white outline-none focus:border-brand rounded-sm transition resize-none"
+              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-fg outline-none focus:border-brand rounded-sm transition resize-none"
             />
           </div>
           {error && (

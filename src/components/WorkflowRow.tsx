@@ -139,7 +139,7 @@ export default function WorkflowRow({ workflow }: { workflow: WorkflowRowData })
               defaultValue={workflow.name}
               required
               maxLength={120}
-              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-white outline-none focus:border-brand rounded-sm transition"
+              className="w-full bg-bg-subtle border border-border-strong px-3 py-2.5 text-fg outline-none focus:border-brand rounded-sm transition"
             />
           </div>
           {error && (
