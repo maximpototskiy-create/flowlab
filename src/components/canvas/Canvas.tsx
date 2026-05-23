@@ -794,12 +794,22 @@ export default function Canvas({
             const step = data.steps.find((s) => s.nodeId === n.id);
             if (!step) return n;
             const assets = step.assets ?? [];
+            // If the API returned multiple assets — that's the canonical
+            // multi-result list, use it. If only 0/1 — DON'T clobber any
+            // existing `results` the node already has (server-persist may
+            // have already saved a multi-URL results array into graph
+            // before polling fired). Previously this set `results: undefined`
+            // which wiped legit 4-image arrays after one polling tick.
+            const newResults =
+              assets.length > 1
+                ? assets.map((a) => ({ value: a.cdnUrl, mime: a.kind }))
+                : n.results;
             return {
               ...n,
               status: step.status,
               outputs: step.outputData ?? n.outputs,
               error: step.errorMessage ?? undefined,
-              results: assets.length > 1 ? assets.map((a) => ({ value: a.cdnUrl, mime: a.kind })) : undefined,
+              results: newResults,
             };
           }),
         }));

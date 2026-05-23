@@ -163,25 +163,62 @@ async function executeOne(
     state.durationByNode.set(node.id, result.durationMs);
     state.status.set(node.id, "done");
 
-    // Persist asset rows for any URLs in outputs
+    // Persist Asset rows. We use `result.results` (the full list of generated
+    // URLs — e.g. all 4 images when num_results=4) and fall back to
+    // `result.outputs` for nodes that only emit a single URL.
+    //
+    // BUG FIX: previously this only iterated `result.outputs`, where multi-
+    // result imageGen stuffs ONLY the first URL ({ image: persisted[0] }).
+    // So a 4-image generation created 1 Asset row, and on the next polling
+    // tick the client saw `assets.length === 1` and wrote
+    // `results: undefined` into node state — wiping the 4-URL `results` array
+    // that the server-persist already saved into workflow.graph. The user
+    // observed "only 1 image in the canvas". The storage files were there
+    // (persistAsset copied them all), the graph had results=[4], but the
+    // Asset table had 1 row, and the client polling clobbered the graph
+    // results based on that 1-row truth.
     const assetEntries: { cdnUrl: string; kind: "image" | "video" | "audio" | "text" }[] = [];
-    for (const [port, value] of Object.entries(result.outputs)) {
-      if (typeof value === "string" && value.startsWith("http")) {
-        const kind = inferKindFromUrl(value, port);
-        await prisma.asset.create({
-          data: {
-            brandId: state.ctx.brandId ?? null,
-            projectId: state.ctx.projectId ?? null,
-            storagePath: "", // we store the cdnUrl which is already signed
-            cdnUrl: value,
-            kind,
-            source: "generated",
-            model: (node.config?.model as string) ?? null,
-            prompt: (node.config?.instructions as string) ?? null,
-            runStepId: runStep.id,
-          },
-        });
-        assetEntries.push({ cdnUrl: value, kind });
+    if (result.results && result.results.length > 0) {
+      // Multi-result node — create one Asset row per URL.
+      for (const r of result.results) {
+        if (typeof r.value === "string" && r.value.startsWith("http")) {
+          const kind = inferKindFromUrl(r.value, "result");
+          await prisma.asset.create({
+            data: {
+              brandId: state.ctx.brandId ?? null,
+              projectId: state.ctx.projectId ?? null,
+              storagePath: "",
+              cdnUrl: r.value,
+              kind,
+              source: "generated",
+              model: (node.config?.model as string) ?? null,
+              prompt: (node.config?.instructions as string) ?? null,
+              runStepId: runStep.id,
+            },
+          });
+          assetEntries.push({ cdnUrl: r.value, kind });
+        }
+      }
+    } else {
+      // Single-output node — fall back to result.outputs.
+      for (const [port, value] of Object.entries(result.outputs)) {
+        if (typeof value === "string" && value.startsWith("http")) {
+          const kind = inferKindFromUrl(value, port);
+          await prisma.asset.create({
+            data: {
+              brandId: state.ctx.brandId ?? null,
+              projectId: state.ctx.projectId ?? null,
+              storagePath: "",
+              cdnUrl: value,
+              kind,
+              source: "generated",
+              model: (node.config?.model as string) ?? null,
+              prompt: (node.config?.instructions as string) ?? null,
+              runStepId: runStep.id,
+            },
+          });
+          assetEntries.push({ cdnUrl: value, kind });
+        }
       }
     }
 
@@ -210,47 +247,74 @@ async function executeOne(
     // safely complete while the user is editing other nodes — no overwrites.
     // ─────────────────────────────────────────────────────────────────────
     if (state.ctx.workflowId) {
-      try {
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-          const wf = await tx.workflow.findUnique({
-            where: { id: state.ctx.workflowId! },
-            select: { graph: true },
+      // Retry loop for the graph persist — the transactional read-modify-write
+      // can lose to a pool-timeout if the DB is briefly busy (the symptom we
+      // hit in 4.10.1: 4 images generated, Asset rows saved, but the merge
+      // into workflow.graph failed with P2024 and node showed 1 image after
+      // refresh). Up to 3 attempts with exponential backoff. Pure UPDATE so
+      // retrying is safe — idempotent by node id.
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            const wf = await tx.workflow.findUnique({
+              where: { id: state.ctx.workflowId! },
+              select: { graph: true },
+            });
+            if (!wf?.graph) return;
+            const g = wf.graph as { nodes?: unknown; edges?: unknown };
+            if (!Array.isArray(g.nodes)) return;
+            const idx = (g.nodes as Array<{ id?: string }>).findIndex(
+              (n) => n && typeof n === "object" && n.id === node.id,
+            );
+            if (idx < 0) return;
+            const nodesArr = [...(g.nodes as Array<Record<string, unknown>>)];
+            nodesArr[idx] = {
+              ...nodesArr[idx],
+              outputs: result.outputs,
+              // Persist `result.results` directly when the runner provides it
+              // (multi-result nodes — imageGen with num_results>1, batched
+              // video, etc). When there are 0/1 results, leave undefined so
+              // the single-output path renders correctly.
+              ...(result.results && result.results.length > 1
+                ? { results: result.results }
+                : { results: undefined }),
+            };
+            await tx.workflow.update({
+              where: { id: state.ctx.workflowId! },
+              data: { graph: { ...g, nodes: nodesArr } as never },
+            });
           });
-          if (!wf?.graph) return;
-          const g = wf.graph as { nodes?: unknown; edges?: unknown };
-          if (!Array.isArray(g.nodes)) return;
-          const idx = (g.nodes as Array<{ id?: string }>).findIndex(
-            (n) => n && typeof n === "object" && n.id === node.id,
+          // Success — bail out of retry loop.
+          break;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const isTransient =
+            msg.includes("connection pool") ||
+            msg.includes("statement timeout") ||
+            msg.includes("P2024") ||
+            msg.includes("57014");
+          if (isTransient && attempt < MAX_ATTEMPTS) {
+            // Backoff: 250ms, 750ms before next attempt.
+            const delayMs = 250 * Math.pow(3, attempt - 1);
+            console.warn(
+              `[executor] graph persist attempt ${attempt}/${MAX_ATTEMPTS} hit transient DB issue, retrying in ${delayMs}ms:`,
+              msg.slice(0, 150),
+            );
+            await new Promise((res) => setTimeout(res, delayMs));
+            continue;
+          }
+          // Non-transient OR final attempt failed — log and move on. The
+          // RunStep is already saved with outputData; client polling will
+          // still pick up the result. The carousel-after-refresh symptom
+          // returns if persist fails AND user reloads before polling
+          // syncs — rare but possible. We log loudly so we know.
+          console.error(
+            `[executor] graph persist FAILED after ${attempt} attempt(s):`,
+            e,
           );
-          if (idx < 0) return;
-          const nodesArr = [...(g.nodes as Array<Record<string, unknown>>)];
-          nodesArr[idx] = {
-            ...nodesArr[idx],
-            outputs: result.outputs,
-            // BUG FIX: previously this rebuilt `results` from `assetEntries`
-            // which was derived ONLY from `result.outputs` — and outputs has
-            // a single representative URL ({ image: persisted[0] }). So when
-            // a node generated 4 images, all 4 were saved to Asset table and
-            // returned in result.results, but only the FIRST landed in
-            // workflow.graph. After a refresh the carousel showed 1 image.
-            //
-            // Fix: persist `result.results` directly when the runner provides
-            // it (multi-result nodes — imageGen with num_results>1, batched
-            // video, etc). When there are 0/1 results, leave undefined so
-            // the single-output path renders correctly.
-            ...(result.results && result.results.length > 1
-              ? { results: result.results }
-              : { results: undefined }),
-          };
-          await tx.workflow.update({
-            where: { id: state.ctx.workflowId! },
-            data: { graph: { ...g, nodes: nodesArr } as never },
-          });
-        });
-      } catch (e) {
-        // Non-fatal — the RunStep is already saved with outputData, so the
-        // client polling will still pick it up. Log so we can investigate.
-        console.error("[executor] failed to persist node outputs into workflow.graph:", e);
+          break;
+        }
       }
     }
   } catch (err) {
