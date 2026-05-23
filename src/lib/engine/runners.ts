@@ -110,9 +110,15 @@ export async function runNode(
       // compatibility with workflows saved before the multi-port was added.
       const images = collectImages(inputs);
       const brandSuffix = ctx.brandVoice ? `\n\nBrand voice:\n${ctx.brandVoice}` : "";
+      // Defense-in-depth: even with system prompt, some models still drift into
+      // preambles when the user input is conversational ("напиши промпт..."). 
+      // Adding an explicit final reminder at the END of the user message
+      // dramatically improves adherence — models attend to recent tokens more.
+      const formatReminder =
+        "\n\n---\nOUTPUT FORMAT: Begin your response with the FIRST WORD of the deliverable. No preamble. No headers like '**КОНЦЕПТ**' or '---'. No closing remarks. If multiple items, separate with one blank line only.";
       const prompt = context
-        ? `Context:\n${context}\n\nTask:\n${instructions}${brandSuffix}`
-        : `${instructions}${brandSuffix}`;
+        ? `Context:\n${context}\n\nTask:\n${instructions}${brandSuffix}${formatReminder}`
+        : `${instructions}${brandSuffix}${formatReminder}`;
       const systemPrompt = getSystemPrompt(type);
       const text = await falLLM(prompt, model, temperature, images, systemPrompt);
       return {
@@ -178,6 +184,14 @@ export async function runNode(
         // 15 supported ratios incl. 9:16, 16:9, 4:5, 3:4, 2:3, etc.
         input.aspect_ratio = aspect;
         input.num_images = numResults;
+        // CRITICAL: by default Nano Banana sets `limit_generations: true`,
+        // which DISCARDS our num_images request and forces output to 1 image.
+        // Without this line, asking for 4 still returns 1 — silent failure.
+        // See: https://fal.ai/models/fal-ai/nano-banana-2/api
+        //   "Experimental parameter to limit the number of generations from
+        //    each round of prompting to 1. Set to True to disregard any
+        //    instructions in the prompt regarding the number of images."
+        input.limit_generations = false;
         if (model.includes("/edit") && hasRefs) {
           input.image_urls = refImages;
         }

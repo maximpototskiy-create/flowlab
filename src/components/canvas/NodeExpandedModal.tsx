@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Play } from "lucide-react";
+import { X, Play, Expand } from "lucide-react";
 import { NODE_TYPES, type FieldDef, type GraphNode } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
+import Lightbox from "./Lightbox";
 
 export default function NodeExpandedModal({
   node,
@@ -289,6 +290,7 @@ function BigPreview({
   outputs: Record<string, unknown>;
   results?: { value: string; mime?: string }[];
 }) {
+  const [lightbox, setLightbox] = useState<{ src: string; kind: "image" | "video" } | null>(null);
   const list =
     results && results.length > 0
       ? results
@@ -299,21 +301,55 @@ function BigPreview({
   return (
     <div className="grid grid-cols-2 gap-2">
       {list.map((r, i) => (
-        <div key={i} className="rounded-md bg-bg-card border border-border overflow-hidden">
+        <div key={i} className="rounded-md bg-bg-card border border-border overflow-hidden relative group/cell">
           {isVideo(r.value) ? (
-            <video src={r.value} controls className="w-full" />
+            <>
+              <video src={r.value} controls className="w-full" />
+              <button
+                type="button"
+                onClick={() => setLightbox({ src: r.value, kind: "video" })}
+                className="absolute top-2 right-2 w-7 h-7 rounded-md bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover/cell:opacity-100 transition-opacity backdrop-blur-sm"
+                title="View fullscreen"
+              >
+                <Expand size={13} />
+              </button>
+            </>
           ) : isAudio(r.value) ? (
             <audio src={r.value} controls className="w-full" />
           ) : isImage(r.value) ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={r.value} alt="" className="w-full" />
+            <button
+              type="button"
+              onClick={() => setLightbox({ src: r.value, kind: "image" })}
+              className="block w-full cursor-zoom-in"
+              title="Click to view fullscreen"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={r.value} alt="" className="w-full" />
+            </button>
           ) : (
-            <div className="p-2 text-[11px] font-mono whitespace-pre-wrap break-words text-fg">
-              {String(r.value).slice(0, 400)}
+            <div className="relative group/expandedtext">
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard.writeText(String(r.value))}
+                className="absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] text-fg-muted bg-bg-card border border-border opacity-0 group-hover/expandedtext:opacity-100 transition-opacity hover:text-fg z-10"
+                title="Copy full text"
+              >
+                Copy
+              </button>
+              <div className="p-3 pr-14 text-[12px] font-mono whitespace-pre-wrap break-words text-fg max-h-[60vh] overflow-auto leading-relaxed">
+                {String(r.value)}
+              </div>
             </div>
           )}
         </div>
       ))}
+      {lightbox && (
+        <Lightbox
+          src={lightbox.src}
+          kind={lightbox.kind}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, memo } from "react";
-import { ChevronDown, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle } from "lucide-react";
+import { ChevronDown, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand } from "lucide-react";
+import Lightbox from "./Lightbox";
 import { NODE_TYPES, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import UploadZone from "./UploadZone";
@@ -29,6 +30,7 @@ export function portYOffset(node: GraphNode, portId: string, side: "in" | "out")
 function CanvasNodeImpl({
   node,
   edges,
+  resolvedInputs,
   isSelected,
   isRunning,
   onPointerDown,
@@ -45,6 +47,11 @@ function CanvasNodeImpl({
 }: {
   node: GraphNode;
   edges: GraphEdge[];
+  /** Map of input-port-name → text value resolved from upstream nodes' outputs.
+   * Used to show what context/prompt will be passed into this node at run-time,
+   * so users can see live previews of upstream-generated prompts in the input
+   * field before clicking Run. Image/video URLs are NOT included here. */
+  resolvedInputs: Record<string, string>;
   isSelected: boolean;
   isRunning: boolean;
   onPointerDown: (e: React.PointerEvent) => void;
@@ -65,6 +72,8 @@ function CanvasNodeImpl({
   const status = node.status ?? "idle";
   const color = node.type ? CAT_COLORS[def.category] : "#71717a";
   const [selectedResultIdx, setSelectedResultIdx] = useState(0);
+  // Lightbox state — when set, renders fullscreen viewer for image/video.
+  const [lightbox, setLightbox] = useState<{ src: string; kind: "image" | "video" } | null>(null);
   // Pre-filter edges incoming to this node — used to count refs on multi-ports.
   const edgesTo = edges.filter((e) => e.to.nodeId === node.id);
 
@@ -84,6 +93,14 @@ function CanvasNodeImpl({
         top: 0,
         left: 0,
         width: NODE_WIDTH,
+        // Optional vertical resize — when the user has dragged the corner
+        // handle, `node.config._height` stores a pixel value. Without it,
+        // the node auto-sizes to its content (default flex behaviour).
+        // We intentionally don't allow horizontal resize because edge
+        // geometry assumes fixed NODE_WIDTH.
+        ...(typeof node.config._height === "number" && node.config._height > 0
+          ? { height: `${node.config._height}px` }
+          : {}),
         transform: `translate(${node.position.x}px, ${node.position.y}px)`,
         willChange: "transform",
       }}
@@ -277,6 +294,12 @@ function CanvasNodeImpl({
             results={node.results}
             selectedIdx={selectedResultIdx}
             onSelectIdx={setSelectedResultIdx}
+            onExpand={(url) =>
+              setLightbox({
+                src: url,
+                kind: isVideo(url) ? "video" : "image",
+              })
+            }
           />
         )}
 
@@ -296,6 +319,46 @@ function CanvasNodeImpl({
           </div>
         )}
 
+        {/* Upstream input preview — shows the resolved text values that will
+            be passed into this node when Run is clicked. Renders compactly
+            above the instructions box so the user can SEE that their TextGen
+            output is wired through, even before running. Image/video URLs
+            don't appear here — those flow visually via thumbnails. */}
+        {Object.entries(resolvedInputs).map(([port, value]) => {
+          if (!value || typeof value !== "string") return null;
+          // Match the port to its definition to display a friendly label.
+          const portDef = def.inputs.find((p) => p.name === port);
+          if (!portDef || portDef.type !== "text") return null;
+          return (
+            <div
+              key={`upstream-${port}`}
+              className="rounded-md bg-brand/5 border border-brand/30 px-2 py-1.5 mt-1"
+              title={value}
+            >
+              <div className="flex items-center justify-between mb-0.5">
+                <span className="text-[8px] uppercase tracking-wider text-brand/80 font-medium">
+                  ← {portDef.label ?? port}
+                </span>
+                <button
+                  type="button"
+                  className="text-[9px] text-fg-muted hover:text-fg"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void navigator.clipboard.writeText(value);
+                  }}
+                  title="Copy to clipboard"
+                >
+                  Copy
+                </button>
+              </div>
+              <div className="text-fg text-[11px] leading-snug whitespace-pre-wrap break-words max-h-[150px] overflow-y-auto nodrag">
+                {value}
+              </div>
+            </div>
+          );
+        })}
+
         {/* Primary instructions textarea */}
         {def.primaryField && !def.custom && (
           <div className="rounded-md bg-bg-subtle border border-border p-2 mt-1">
@@ -303,13 +366,21 @@ function CanvasNodeImpl({
               {def.primaryLabel ?? "Instructions"}
             </label>
             <textarea
-              className="w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none min-h-[40px] max-h-[100px] leading-snug"
+              className="w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none min-h-[40px] max-h-[200px] leading-snug nodrag"
               placeholder={def.primaryPlaceholder ?? "Write text…"}
               value={(node.config[def.primaryField] as string) ?? ""}
               onChange={(e) => onConfigChange(def.primaryField!, e.target.value)}
               onMouseDown={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
+              // Auto-grow to fit content up to max-h. Without this, the
+              // textarea stays at its CSS min-h even for long prompts and
+              // the user can't read the full text without scrolling.
+              ref={(el) => {
+                if (!el) return;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(200, el.scrollHeight)}px`;
+              }}
             />
           </div>
         )}
@@ -370,6 +441,56 @@ function CanvasNodeImpl({
           </div>
         )}
       </div>
+
+      {/* Vertical resize handle (lower-right). Drag down/up to change node
+          height. We persist the new height into node.config._height so it
+          survives refresh via the existing autosave path. Width is fixed
+          to NODE_WIDTH because edge geometry assumes it. */}
+      <div
+        className="absolute bottom-1 right-1 w-3 h-3 cursor-ns-resize opacity-30 hover:opacity-100 transition-opacity"
+        style={{
+          background: `linear-gradient(135deg, transparent 50%, currentColor 50%)`,
+          color: color,
+        }}
+        title="Drag to resize"
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          const startY = e.clientY;
+          const nodeEl = (e.currentTarget as HTMLElement).closest<HTMLElement>(
+            "[data-node-id]",
+          );
+          const startH = nodeEl?.offsetHeight ?? 100;
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          function onMove(ev: PointerEvent) {
+            // Live-resize the DOM (cheap); we commit to state on pointerup
+            // to avoid 60 setStates/sec hammering autosave.
+            if (!nodeEl) return;
+            const newH = Math.max(80, startH + (ev.clientY - startY));
+            nodeEl.style.height = `${newH}px`;
+          }
+          function onUp() {
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            // Commit final height to node config so it persists.
+            const finalH = nodeEl ? nodeEl.offsetHeight : startH;
+            onConfigChange("_height", finalH);
+          }
+          window.addEventListener("pointermove", onMove);
+          window.addEventListener("pointerup", onUp);
+        }}
+      />
+
+      {/* Fullscreen viewer for image/video results. Renders into a fixed-
+          positioned div via Lightbox so it escapes the canvas transform. */}
+      {lightbox && (
+        <Lightbox
+          src={lightbox.src}
+          kind={lightbox.kind}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </div>
   );
 }
@@ -554,20 +675,41 @@ function OutputPreview({
   results,
   selectedIdx,
   onSelectIdx,
+  onExpand,
 }: {
   outputs: Record<string, unknown>;
   results?: { value: string; mime?: string }[];
   selectedIdx: number;
   onSelectIdx: (i: number) => void;
+  /** Open the URL in a fullscreen lightbox. */
+  onExpand?: (url: string) => void;
 }) {
   const list = results && results.length > 0 ? results : Object.values(outputs).filter((v) => typeof v === "string").map((v) => ({ value: v as string }));
   if (list.length === 0) return null;
   const current = list[Math.min(selectedIdx, list.length - 1)];
   const url = current.value;
+  const canExpand = url && (isImage(url) || isVideo(url));
 
   return (
     <div className="mb-2">
-      <PreviewMedia url={url} />
+      <div className="relative group/preview">
+        <PreviewMedia url={url} />
+        {/* Overlay expand button — appears on hover, opens fullscreen view */}
+        {canExpand && onExpand && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onExpand(url);
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="absolute top-1.5 right-1.5 w-7 h-7 rounded-md bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover/preview:opacity-100 transition-opacity backdrop-blur-sm"
+            title="View fullscreen"
+          >
+            <Expand size={13} />
+          </button>
+        )}
+      </div>
       {list.length > 1 && (
         <div className="mt-1 flex gap-1 overflow-x-auto">
           {list.map((r, i) => (
@@ -610,10 +752,27 @@ function PreviewMedia({ url }: { url: string }) {
       <img src={url} alt="" className="w-full max-h-40 rounded-md object-cover bg-bg-subtle" />
     );
   }
-  // text
+  // text — show in full with scroll. Truncating to 500 chars was hiding
+  // most prompts; now we let users see/copy the complete output. The Copy
+  // button lives in a small chip in the top-right so it doesn't compete
+  // for visual space with the text.
   return (
-    <div className="rounded-md bg-bg-subtle border border-border p-2 max-h-28 overflow-auto text-[11px] font-mono whitespace-pre-wrap break-words text-fg">
-      {url.length > 500 ? url.slice(0, 500) + "…" : url}
+    <div className="relative rounded-md bg-bg-subtle border border-border text-fg group/text">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          void navigator.clipboard.writeText(url);
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[9px] text-fg-muted bg-bg-card border border-border opacity-0 group-hover/text:opacity-100 transition-opacity hover:text-fg z-10"
+        title="Copy full text"
+      >
+        Copy
+      </button>
+      <div className="p-2 pr-12 max-h-[280px] overflow-auto text-[11px] font-mono whitespace-pre-wrap break-words leading-snug nodrag">
+        {url}
+      </div>
     </div>
   );
 }

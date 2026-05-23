@@ -15,7 +15,7 @@ import CanvasToolbar from "./CanvasToolbar";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
-import { Minus, Plus, Maximize, Grid3X3 } from "lucide-react";
+import { Minus, Plus, Maximize, Grid3X3, MousePointer2, Hand } from "lucide-react";
 
 type Drag = { nodeId: string; startX: number; startY: number; pointerX: number; pointerY: number };
 type EdgeDraft = {
@@ -88,6 +88,19 @@ export default function Canvas({
   // ─────────────────────────────── Pan/Zoom
   const [pan, setPan] = useState({ x: 200, y: 100 });
   const [zoom, setZoom] = useState(1);
+  // User preference: how does the plain scroll wheel / trackpad-scroll behave?
+  // "pan"  → scroll moves the canvas (default — feels like Figma/Krea).
+  // "zoom" → scroll zooms, hold Space/Shift to pan.
+  // Persisted to localStorage so it survives refresh.
+  const [scrollMode, setScrollMode] = useState<"pan" | "zoom">(() => {
+    if (typeof window === "undefined") return "pan";
+    return (localStorage.getItem("flowlab.scrollMode") as "pan" | "zoom") ?? "pan";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("flowlab.scrollMode", scrollMode);
+    }
+  }, [scrollMode]);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -605,8 +618,14 @@ export default function Canvas({
 
     function onWheel(e: WheelEvent) {
       if (!el) return;
-      // Ctrl/Cmd + wheel → zoom (pinch-zoom on mac sends ctrlKey=true)
-      if (e.ctrlKey || e.metaKey) {
+      // Decide intent based on scrollMode + modifier keys.
+      //   pan mode  (default, Figma-like): bare scroll → pan, Cmd/Ctrl → zoom
+      //   zoom mode (Krea-like):           bare scroll → zoom, Shift → pan
+      const wantsZoom =
+        scrollMode === "pan"
+          ? e.ctrlKey || e.metaKey
+          : !e.shiftKey;
+      if (wantsZoom) {
         e.preventDefault();
         const rect = el.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
@@ -623,14 +642,16 @@ export default function Canvas({
         });
         return;
       }
-      // Otherwise: trackpad two-finger scroll → pan
+      // Otherwise: pan.
       e.preventDefault();
       setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
     }
 
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+    // scrollMode in deps so the handler re-binds when user toggles it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollMode]);
 
 
   // ─────────────────────────────── File upload helper (used by upload nodes)
@@ -879,11 +900,32 @@ export default function Canvas({
               onDelete={deleteEdge}
             />
 
-            {graph.nodes.map((node) => (
+            {graph.nodes.map((node) => {
+              // Compute upstream string-typed inputs for this node so the
+              // CanvasNode can render a "← context preview" above the
+              // textarea. We collect from EVERY incoming edge whose source
+              // produced a string-typed output (text/prompt fields).
+              const resolvedInputs: Record<string, string> = {};
+              for (const edge of graph.edges) {
+                if (edge.to.nodeId !== node.id) continue;
+                const src = graph.nodes.find((n) => n.id === edge.from.nodeId);
+                if (!src?.outputs) continue;
+                const val = (src.outputs as Record<string, unknown>)[edge.from.port];
+                if (typeof val === "string" && val.length > 0 && !val.startsWith("http")) {
+                  // Concatenate if multi-port has multiple text contributors;
+                  // separate with a blank line so the LLM treats them as
+                  // distinct sources of context.
+                  resolvedInputs[edge.to.port] = resolvedInputs[edge.to.port]
+                    ? `${resolvedInputs[edge.to.port]}\n\n${val}`
+                    : val;
+                }
+              }
+              return (
               <CanvasNode
                 key={node.id}
                 node={node}
                 edges={graph.edges}
+                resolvedInputs={resolvedInputs}
                 isSelected={selected === node.id}
                 isRunning={isRunning}
                 onPointerDown={(e) => startNodeDrag(node.id, e)}
@@ -904,7 +946,8 @@ export default function Canvas({
                 onUploadFile={uploadFile}
                 workflowMeta={{ ...workflowMeta, workflowId }}
               />
-            ))}
+              );
+            })}
           </div>
 
           {/* Empty hint */}
@@ -939,6 +982,22 @@ export default function Canvas({
               title="Reset view"
             >
               <Maximize size={11} />
+            </button>
+            <div className="w-px h-4 bg-border mx-1" />
+            {/* Scroll-mode toggle — Pan vs Zoom. Affects what bare wheel does.
+                Stored in localStorage so users only set it once. */}
+            <button
+              onClick={() => setScrollMode((m) => (m === "pan" ? "zoom" : "pan"))}
+              className={`w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover ${
+                scrollMode === "pan" ? "text-fg-muted" : "text-brand"
+              }`}
+              title={
+                scrollMode === "pan"
+                  ? "Scroll = pan · Cmd+scroll = zoom (click to switch)"
+                  : "Scroll = zoom · Shift+scroll = pan (click to switch)"
+              }
+            >
+              {scrollMode === "pan" ? <Hand size={11} /> : <MousePointer2 size={11} />}
             </button>
           </div>
 
