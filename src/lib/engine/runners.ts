@@ -410,7 +410,7 @@ export async function runNode(
         payload.aspect_ratio = aspect;
         payload.generate_audio = generateAudio;
       } else if (model.includes("veo3")) {
-        // Veo 3.1 fixes (3 bugs that caused 422):
+        // Veo 3.1 fixes (5 bugs that caused 422):
         //   1. duration must be "4s" / "6s" / "8s" — STRING with "s" suffix.
         //      We were sending a bare number → 422.
         //   2. first-last-frame requires a SEPARATE endpoint
@@ -421,30 +421,48 @@ export async function runNode(
         //      `generate_audio`. The `model` string lets us tell them apart.
         //   4. aspect_ratio allowed values are auto / 16:9 / 9:16 only.
         //      Other ratios (1:1 etc) cause 422. Coerce silently to auto.
+        //   5. first-last-frame endpoint REQUIRES both frames. If user
+        //      picked first-last but only provided start, we'd 422. Now we
+        //      auto-route to the i2v endpoint of the same tier instead.
         const isVeo31 = model.includes("/veo3.1");
         const isFirstLast = model.includes("first-last-frame-to-video");
+        const isFast = model.includes("/fast");
 
-        // Auto-switch endpoint when both startFrame and endFrame are given.
-        // Caller may have picked the plain i2v model; we re-route them to the
-        // dedicated first-last endpoint so the params actually take effect.
+        // Routing decisions: pick the right endpoint based on which frames
+        // the user actually provided.
         let actualModel = model;
         if (isVeo31 && startFrame && endFrame && !isFirstLast) {
-          actualModel = "fal-ai/veo3.1/fast/first-last-frame-to-video";
+          // User has both frames but picked plain i2v — upgrade to first-last.
+          actualModel = isFast
+            ? "fal-ai/veo3.1/fast/first-last-frame-to-video"
+            : "fal-ai/veo3.1/first-last-frame-to-video";
+        } else if (isVeo31 && isFirstLast && !endFrame) {
+          // User picked first-last but only has start — fall back to plain
+          // i2v so it still generates instead of 422.
+          actualModel = isFast
+            ? "fal-ai/veo3.1/fast/image-to-video"
+            : "fal-ai/veo3.1/image-to-video";
         }
 
         if (actualModel.includes("first-last-frame-to-video")) {
-          // First-last-frame endpoint — special field names.
           if (startFrame) payload.first_frame_url = startFrame;
           if (endFrame) payload.last_frame_url = endFrame;
         } else {
-          // Regular i2v / t2v endpoint.
           if (startFrame) payload.image_url = startFrame;
         }
 
-        // Duration: coerce to "Ns" form. fal accepts "4s", "6s", "8s".
+        // Duration: coerce to "Ns" form. Veo accepts ONLY "4s", "6s", "8s".
+        // Anything else (5, 10) → pick nearest legal value. Symptom this
+        // fixes: user selects "5s" in UI, Veo always generates 8s because
+        // the previous code defaulted unknowns to 8.
         const durNum = parseInt(String(duration).replace(/\D/g, ""), 10) || 8;
-        const allowed = [4, 6, 8];
-        const pickedDur = allowed.includes(durNum) ? durNum : 8;
+        const allowedVeo = [4, 6, 8] as const;
+        const pickedDur =
+          allowedVeo.find((d) => d === durNum) ??
+          allowedVeo.reduce(
+            (best, d) => (Math.abs(d - durNum) < Math.abs(best - durNum) ? d : best),
+            8,
+          );
         payload.duration = `${pickedDur}s`;
 
         // Aspect: only auto / 16:9 / 9:16 supported.
@@ -457,9 +475,6 @@ export async function runNode(
           payload.generate_audio = true;
         }
 
-        // Re-bind `model` for the falRun call below by reassigning the
-        // local through a wrapper — we can't change const, so we just call
-        // falRun with the override.
         const r = await falRun(actualModel, payload);
         const url =
           (r.video as { url: string } | undefined)?.url ??

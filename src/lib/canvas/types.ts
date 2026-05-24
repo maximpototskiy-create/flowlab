@@ -705,10 +705,17 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "bytedance/seedance-2.0/text-to-video", label: "Seedance 2.0 (T2V)" },
           { value: "bytedance/seedance-2.0/fast/text-to-video", label: "Seedance 2.0 Fast (T2V)" },
           { value: "bytedance/seedance-2.0/reference-to-video", label: "Seedance 2.0 Reference (multi-modal)" },
-          // Veo 3.1
-          { value: "fal-ai/veo3.1", label: "Veo 3.1 (T2V)" },
-          { value: "fal-ai/veo3.1/fast", label: "Veo 3.1 Fast (T2V)" },
-          { value: "fal-ai/veo3.1/first-last-frame-to-video", label: "Veo 3.1 First-Last Frame (I2V)" },
+          // Veo 3.1 — Fast variants are CHEAPER per generation than Standard.
+          // Image-to-video and first-last-frame have their own endpoints,
+          // and EACH endpoint has a /fast variant. Doc:
+          //   https://fal.ai/models/fal-ai/veo3.1/fast/image-to-video/api
+          //   https://fal.ai/models/fal-ai/veo3.1/fast/first-last-frame-to-video/api
+          { value: "fal-ai/veo3.1/fast", label: "Veo 3.1 Fast (T2V) ⭐" },
+          { value: "fal-ai/veo3.1", label: "Veo 3.1 Standard (T2V)" },
+          { value: "fal-ai/veo3.1/fast/image-to-video", label: "Veo 3.1 Fast (I2V) ⭐" },
+          { value: "fal-ai/veo3.1/image-to-video", label: "Veo 3.1 Standard (I2V)" },
+          { value: "fal-ai/veo3.1/fast/first-last-frame-to-video", label: "Veo 3.1 Fast (First-Last Frame)" },
+          { value: "fal-ai/veo3.1/first-last-frame-to-video", label: "Veo 3.1 Standard (First-Last Frame)" },
           // Other video models
           { value: "fal-ai/minimax/hailuo-02/standard/image-to-video", label: "Hailuo 02 (I2V)" },
           { value: "fal-ai/luma-dream-machine/ray-2/image-to-video", label: "Ray 2 (I2V)" },
@@ -720,8 +727,14 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         label: "Duration (s)",
         type: "select",
         options: [
-          { value: "5", label: "5s" },
-          { value: "10", label: "10s" },
+          // Veo 3.1 accepts ONLY 4/6/8. Kling accepts 5/10. Seedance 5-10.
+          // Hailuo 5-10. Pixverse 5/8/15. The runner coerces per-model to
+          // the nearest supported value (see runners.ts videoGen case).
+          { value: "4", label: "4s (Veo)" },
+          { value: "5", label: "5s (Kling/Seedance)" },
+          { value: "6", label: "6s (Veo)" },
+          { value: "8", label: "8s (Veo)" },
+          { value: "10", label: "10s (Kling/Seedance)" },
           { value: "15", label: "15s (Pixverse)" },
         ],
       },

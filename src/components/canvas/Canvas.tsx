@@ -591,15 +591,27 @@ export default function Canvas({
 
   // ─────────────────────────────── Pan & background interaction
   function onCanvasPointerDown(e: React.PointerEvent) {
-    if (e.button === 1 || (e.button === 0 && e.altKey) || e.button === 2) {
-      // Middle-click or alt+left or right (right = ctx menu, handled below)
-      if (e.button !== 2) {
-        setIsPanning(true);
-        panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
-      }
+    // Middle-click or alt+left: ALWAYS pans (escape hatch in either mode).
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      setIsPanning(true);
+      panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
       return;
     }
-    if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("canvas-bg-hit")) {
+    // Right-click: context menu (handled by onCanvasContextMenu below).
+    if (e.button === 2) return;
+    // In Hand (pan) mode, a plain left-click on the background ALSO pans —
+    // matches Figma/Krea expectations and was the missing piece behind
+    // "scroll mode hand doesn't work". This only triggers when clicking
+    // empty canvas, not a node.
+    const isOnBackground =
+      e.target === e.currentTarget ||
+      (e.target as HTMLElement).classList.contains("canvas-bg-hit");
+    if (scrollMode === "pan" && e.button === 0 && isOnBackground) {
+      setIsPanning(true);
+      panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+      return;
+    }
+    if (isOnBackground) {
       setSelected(null);
     }
   }
@@ -881,7 +893,15 @@ export default function Canvas({
           className="flex-1 relative overflow-hidden canvas-grid canvas-viewport"
           onPointerDown={onCanvasPointerDown}
           onContextMenu={onCanvasContextMenu}
-          style={{ cursor: isPanning ? "grabbing" : drag ? "grabbing" : "default" }}
+          style={{
+            cursor: isPanning
+              ? "grabbing"
+              : drag
+                ? "grabbing"
+                : scrollMode === "pan"
+                  ? "grab"
+                  : "default",
+          }}
         >
           {/* Background hit area for selection-clear */}
           <div className="canvas-bg-hit absolute inset-0" />
