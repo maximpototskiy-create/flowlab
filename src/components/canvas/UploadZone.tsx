@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Upload, X } from "lucide-react";
+import { Upload, X, Expand } from "lucide-react";
 
 export default function UploadZone({
   kind,
@@ -9,12 +9,17 @@ export default function UploadZone({
   onUpload,
   onClear,
   onUrl,
+  onExpand,
 }: {
   kind: "image" | "video" | "audio";
   currentUrl: string;
   onUpload: (file: File) => Promise<void>;
   onClear: () => void;
   onUrl?: (url: string) => void;
+  /** Open this asset in a fullscreen Lightbox. If omitted, no Expand button
+   *  is rendered. Useful for uploads where the user wants to inspect the
+   *  uploaded image/video at full resolution before running downstream. */
+  onExpand?: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -33,7 +38,7 @@ export default function UploadZone({
 
   if (currentUrl) {
     return (
-      <div className="relative rounded-md overflow-hidden">
+      <div className="relative rounded-md overflow-hidden group/upload">
         {kind === "image" ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={currentUrl} alt="" className="w-full max-h-40 object-cover" />
@@ -41,6 +46,21 @@ export default function UploadZone({
           <video src={currentUrl} className="w-full max-h-40" muted loop autoPlay playsInline />
         ) : (
           <audio src={currentUrl} controls className="w-full" />
+        )}
+        {/* Expand button — only for image/video, and only when caller provides
+            an onExpand handler. Sits to the left of the delete X. */}
+        {onExpand && kind !== "audio" && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onExpand();
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="absolute top-1 right-9 w-6 h-6 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 opacity-0 group-hover/upload:opacity-100 transition-opacity"
+            title="View fullscreen"
+          >
+            <Expand size={11} />
+          </button>
         )}
         <button
           onClick={(e) => {

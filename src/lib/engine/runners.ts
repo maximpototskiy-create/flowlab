@@ -410,12 +410,68 @@ export async function runNode(
         payload.aspect_ratio = aspect;
         payload.generate_audio = generateAudio;
       } else if (model.includes("veo3")) {
-        // Veo: image_url (first), last_image_url (last), generate_audio
-        if (startFrame) payload.image_url = startFrame;
-        if (endFrame) payload.last_image_url = endFrame;
-        payload.duration = duration;
-        payload.aspect_ratio = aspect;
-        payload.generate_audio = generateAudio;
+        // Veo 3.1 fixes (3 bugs that caused 422):
+        //   1. duration must be "4s" / "6s" / "8s" — STRING with "s" suffix.
+        //      We were sending a bare number → 422.
+        //   2. first-last-frame requires a SEPARATE endpoint
+        //      (fal-ai/veo3.1/fast/first-last-frame-to-video) with
+        //      `first_frame_url` + `last_frame_url`. The old `last_image_url`
+        //      param on the normal i2v endpoint was rejected.
+        //   3. Veo 3.1 uses `audio: true|false`. Veo 3 (older) still uses
+        //      `generate_audio`. The `model` string lets us tell them apart.
+        //   4. aspect_ratio allowed values are auto / 16:9 / 9:16 only.
+        //      Other ratios (1:1 etc) cause 422. Coerce silently to auto.
+        const isVeo31 = model.includes("/veo3.1");
+        const isFirstLast = model.includes("first-last-frame-to-video");
+
+        // Auto-switch endpoint when both startFrame and endFrame are given.
+        // Caller may have picked the plain i2v model; we re-route them to the
+        // dedicated first-last endpoint so the params actually take effect.
+        let actualModel = model;
+        if (isVeo31 && startFrame && endFrame && !isFirstLast) {
+          actualModel = "fal-ai/veo3.1/fast/first-last-frame-to-video";
+        }
+
+        if (actualModel.includes("first-last-frame-to-video")) {
+          // First-last-frame endpoint — special field names.
+          if (startFrame) payload.first_frame_url = startFrame;
+          if (endFrame) payload.last_frame_url = endFrame;
+        } else {
+          // Regular i2v / t2v endpoint.
+          if (startFrame) payload.image_url = startFrame;
+        }
+
+        // Duration: coerce to "Ns" form. fal accepts "4s", "6s", "8s".
+        const durNum = parseInt(String(duration).replace(/\D/g, ""), 10) || 8;
+        const allowed = [4, 6, 8];
+        const pickedDur = allowed.includes(durNum) ? durNum : 8;
+        payload.duration = `${pickedDur}s`;
+
+        // Aspect: only auto / 16:9 / 9:16 supported.
+        payload.aspect_ratio = ["auto", "16:9", "9:16"].includes(aspect) ? aspect : "auto";
+
+        // Audio param: Veo 3.1 uses `audio`; older Veo 3 uses `generate_audio`.
+        if (isVeo31) {
+          payload.audio = generateAudio;
+        } else if (generateAudio) {
+          payload.generate_audio = true;
+        }
+
+        // Re-bind `model` for the falRun call below by reassigning the
+        // local through a wrapper — we can't change const, so we just call
+        // falRun with the override.
+        const r = await falRun(actualModel, payload);
+        const url =
+          (r.video as { url: string } | undefined)?.url ??
+          (r.video_url as string | undefined) ??
+          ((r.videos as { url: string }[] | undefined)?.[0]?.url);
+        if (!url) throw new Error("No video returned");
+        const persisted = await persistAsset(url, ctx, "vid");
+        return {
+          outputs: { video: persisted },
+          costUsd: estimateCost(actualModel, { duration: pickedDur }),
+          durationMs: Date.now() - t0,
+        };
       } else {
         // Default: try common field names
         if (startFrame) payload.image_url = startFrame;

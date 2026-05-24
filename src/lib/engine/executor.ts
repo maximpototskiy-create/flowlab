@@ -99,7 +99,32 @@ function resolveInputs(graph: Graph, node: GraphNode, outputs: Map<string, Recor
     if (edge.to.nodeId !== node.id) continue;
     const upstream = outputs.get(edge.from.nodeId);
     if (!upstream) continue;
-    const value = upstream[edge.from.port];
+
+    // Determine the value flowing through this edge. By default it's
+    // upstream.outputs[port] (the first/representative URL for multi-result
+    // nodes). BUT if the upstream node has a `_selectedResultIdx` in its
+    // config AND it has a `results` array, prefer the user-selected URL.
+    // This lets users click a thumbnail to choose which of N generated
+    // images flows into the next node.
+    let value = upstream[edge.from.port];
+    const upstreamNode = graph.nodes.find((n) => n.id === edge.from.nodeId);
+    if (
+      upstreamNode?.results &&
+      upstreamNode.results.length > 1 &&
+      typeof upstreamNode.config?._selectedResultIdx === "number"
+    ) {
+      const idx = upstreamNode.config._selectedResultIdx as number;
+      const picked = upstreamNode.results[idx];
+      if (picked && typeof picked.value === "string") {
+        // Only override if the output is a URL-like value matching the same
+        // kind (image port → image URL). Text outputs are scalar and don't
+        // have multi-result semantics in the same way.
+        if (typeof value === "string" && value.startsWith("http")) {
+          value = picked.value;
+        }
+      }
+    }
+
     if (value === undefined || value === null) continue;
 
     if (multiPortNames.has(edge.to.port)) {

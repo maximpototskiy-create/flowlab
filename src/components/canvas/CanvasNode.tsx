@@ -73,7 +73,13 @@ function CanvasNodeImpl({
   const color = node.type ? CAT_COLORS[def.category] : "#71717a";
   const [selectedResultIdx, setSelectedResultIdx] = useState(0);
   // Lightbox state — when set, renders fullscreen viewer for image/video.
-  const [lightbox, setLightbox] = useState<{ src: string; kind: "image" | "video" } | null>(null);
+  // `list` and `idx` enable ←/→ navigation through a multi-result carousel.
+  const [lightbox, setLightbox] = useState<{
+    src: string;
+    kind: "image" | "video";
+    list?: string[];
+    idx?: number;
+  } | null>(null);
   // Pre-filter edges incoming to this node — used to count refs on multi-ports.
   const edgesTo = edges.filter((e) => e.to.nodeId === node.id);
 
@@ -224,6 +230,13 @@ function CanvasNodeImpl({
               onConfigChange("cdnUrl", "");
               onConfigChange("dataUrl", "");
             }}
+            onExpand={() => {
+              const url =
+                (node.config.cdnUrl as string) ||
+                (node.config.dataUrl as string) ||
+                "";
+              if (url) setLightbox({ src: url, kind: "image" });
+            }}
           />
         )}
         {def.custom === "upload-video" && (
@@ -240,6 +253,13 @@ function CanvasNodeImpl({
               onConfigChange("url", "");
             }}
             onUrl={(url) => onConfigChange("url", url)}
+            onExpand={() => {
+              const url =
+                (node.config.cdnUrl as string) ||
+                (node.config.url as string) ||
+                "";
+              if (url) setLightbox({ src: url, kind: "video" });
+            }}
           />
         )}
         {def.custom === "upload-audio" && (
@@ -279,19 +299,41 @@ function CanvasNodeImpl({
             actual data. When a node is re-running, outputs are cleared to
             `undefined` (see Canvas.tsx startRun), so this won't show stale
             content during a re-run. */}
+        {/* For upload nodes (uploadImage/Video/Audio) the UploadZone above
+            already renders the file with its own delete button. Rendering
+            OutputPreview on top duplicates the same image with an Expand
+            button — the cause of the "image doubled" UX bug. Skip it for
+            those node types; the upload preview IS the output preview. */}
         {((node.outputs && Object.keys(node.outputs).length > 0) ||
-          (node.results && node.results.length > 0)) && (
+          (node.results && node.results.length > 0)) &&
+          !def.custom?.startsWith("upload-") && (
           <OutputPreview
             outputs={node.outputs ?? {}}
             results={node.results}
             selectedIdx={selectedResultIdx}
-            onSelectIdx={setSelectedResultIdx}
-            onExpand={(url) =>
+            onSelectIdx={(i) => {
+              setSelectedResultIdx(i);
+              // Persist the selection so downstream nodes pick up the chosen
+              // result (not always index 0). The executor's resolveInputs
+              // reads node.config._selectedResultIdx and serves the matching
+              // URL from node.results[idx] instead of node.outputs.<port>.
+              onConfigChange("_selectedResultIdx", i);
+            }}
+            onExpand={(url) => {
+              // Build the navigable list — prefer results[] when present,
+              // otherwise just the single URL.
+              const list =
+                node.results && node.results.length > 0
+                  ? node.results.map((r) => r.value)
+                  : [url];
+              const idx = Math.max(0, list.indexOf(url));
               setLightbox({
                 src: url,
                 kind: isVideo(url) ? "video" : "image",
-              })
-            }
+                list,
+                idx,
+              });
+            }}
           />
         )}
 
@@ -441,6 +483,31 @@ function CanvasNodeImpl({
           src={lightbox.src}
           kind={lightbox.kind}
           onClose={() => setLightbox(null)}
+          {...(lightbox.list && lightbox.list.length > 1 && lightbox.idx !== undefined
+            ? {
+                position: { current: lightbox.idx, total: lightbox.list.length },
+                onPrev: () => {
+                  const newIdx = (lightbox.idx! - 1 + lightbox.list!.length) % lightbox.list!.length;
+                  const newSrc = lightbox.list![newIdx];
+                  setLightbox({
+                    ...lightbox,
+                    src: newSrc,
+                    idx: newIdx,
+                    kind: isVideo(newSrc) ? "video" : "image",
+                  });
+                },
+                onNext: () => {
+                  const newIdx = (lightbox.idx! + 1) % lightbox.list!.length;
+                  const newSrc = lightbox.list![newIdx];
+                  setLightbox({
+                    ...lightbox,
+                    src: newSrc,
+                    idx: newIdx,
+                    kind: isVideo(newSrc) ? "video" : "image",
+                  });
+                },
+              }
+            : {})}
         />
       )}
     </div>
