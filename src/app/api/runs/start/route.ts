@@ -3,6 +3,7 @@ import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { executeGraph, ancestorsOf } from "@/lib/engine/executor";
+import { buildBrandContext } from "@/lib/engine/brandContext";
 import type { Graph } from "@/lib/canvas/types";
 
 export const runtime = "nodejs";
@@ -85,12 +86,17 @@ async function executeRun(
   try {
     console.log(`[executeRun] ${runId} starting; scope=${scopeNodeId ?? 'all'}`);
     const scope = scopeNodeId ? ancestorsOf(graph, scopeNodeId) : undefined;
+    // Load brand context once per run — applied to every LLM-driven node via
+    // ctx.brandVoice. Cheap query (one DB read), and the result is a static
+    // string used many times across the graph, so this is essentially free.
+    const brandVoice = await buildBrandContext(workflow.project.brandId);
     const result = await executeGraph(
       graph,
       {
         brandId: workflow.project.brandId,
         projectId: workflow.projectId,
         workflowId: workflow.id,
+        brandVoice,
       },
       { runId, scope, scopeNodeId },
     );

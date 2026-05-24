@@ -299,6 +299,12 @@ export async function saveBrandKit(formData: FormData): Promise<void> {
     lexiconAllow: (formData.get("lexiconAllow") as string) || null,
     lexiconAvoid: (formData.get("lexiconAvoid") as string) || null,
     bannedThemes: (formData.get("bannedThemes") as string) || null,
+    // Product context (step 4.11) — these are auto-injected as ctx.brandVoice
+    // for every LLM node in any workflow under this brand.
+    appStoreUrl: (formData.get("appStoreUrl") as string) || null,
+    googlePlayUrl: (formData.get("googlePlayUrl") as string) || null,
+    productPitch: (formData.get("productPitch") as string) || null,
+    uiScreenshots: (formData.get("uiScreenshots") as string) || null,
   };
 
   await prisma.brandKit.upsert({
