@@ -475,6 +475,10 @@ export async function runNode(
           payload.generate_audio = true;
         }
 
+        // Log the exact payload — when something fails (e.g. specific
+        // duration+aspect combos), we want to see in Vercel logs what we
+        // actually sent so we can trace which field fal rejected.
+        console.log("[veo] submitting", actualModel, JSON.stringify(payload));
         const r = await falRun(actualModel, payload);
         const url =
           (r.video as { url: string } | undefined)?.url ??

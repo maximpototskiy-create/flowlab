@@ -15,7 +15,7 @@ import CanvasToolbar from "./CanvasToolbar";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
-import { Minus, Plus, Maximize, Grid3X3, MousePointer2, Hand } from "lucide-react";
+import { Minus, Plus, Maximize, Grid3X3 } from "lucide-react";
 
 type Drag = { nodeId: string; startX: number; startY: number; pointerX: number; pointerY: number };
 type EdgeDraft = {
@@ -88,19 +88,30 @@ export default function Canvas({
   // ─────────────────────────────── Pan/Zoom
   const [pan, setPan] = useState({ x: 200, y: 100 });
   const [zoom, setZoom] = useState(1);
-  // User preference: how does the plain scroll wheel / trackpad-scroll behave?
-  // "pan"  → scroll moves the canvas (default — feels like Figma/Krea).
-  // "zoom" → scroll zooms, hold Space/Shift to pan.
-  // Persisted to localStorage so it survives refresh.
-  const [scrollMode, setScrollMode] = useState<"pan" | "zoom">(() => {
-    if (typeof window === "undefined") return "pan";
-    return (localStorage.getItem("flowlab.scrollMode") as "pan" | "zoom") ?? "pan";
-  });
+  // Spacebar-hold pan: standard Figma/Miro pattern. Hold Space and drag
+  // with left button to pan the canvas, even on top of nodes. Released —
+  // back to normal interaction.
+  const [spaceHeld, setSpaceHeld] = useState(false);
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("flowlab.scrollMode", scrollMode);
+    function onKeyDown(e: KeyboardEvent) {
+      // Ignore when typing in inputs/textareas — Space there inserts a space.
+      const t = e.target as HTMLElement;
+      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
+      if (e.code === "Space" && !spaceHeld) {
+        e.preventDefault();
+        setSpaceHeld(true);
+      }
     }
-  }, [scrollMode]);
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.code === "Space") setSpaceHeld(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [spaceHeld]);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -591,26 +602,19 @@ export default function Canvas({
 
   // ─────────────────────────────── Pan & background interaction
   function onCanvasPointerDown(e: React.PointerEvent) {
-    // Middle-click or alt+left: ALWAYS pans (escape hatch in either mode).
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    // Middle-click, alt+left, or Space+left always pans (Figma-style escape
+    // hatch — works anywhere, even on top of nodes).
+    if (e.button === 1 || (e.button === 0 && (e.altKey || spaceHeld))) {
       setIsPanning(true);
       panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
       return;
     }
     // Right-click: context menu (handled by onCanvasContextMenu below).
     if (e.button === 2) return;
-    // In Hand (pan) mode, a plain left-click on the background ALSO pans —
-    // matches Figma/Krea expectations and was the missing piece behind
-    // "scroll mode hand doesn't work". This only triggers when clicking
-    // empty canvas, not a node.
+    // Plain left-click on empty canvas background = deselect (standard).
     const isOnBackground =
       e.target === e.currentTarget ||
       (e.target as HTMLElement).classList.contains("canvas-bg-hit");
-    if (scrollMode === "pan" && e.button === 0 && isOnBackground) {
-      setIsPanning(true);
-      panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
-      return;
-    }
     if (isOnBackground) {
       setSelected(null);
     }
@@ -630,13 +634,13 @@ export default function Canvas({
 
     function onWheel(e: WheelEvent) {
       if (!el) return;
-      // Decide intent based on scrollMode + modifier keys.
-      //   pan mode  (default, Figma-like): bare scroll → pan, Cmd/Ctrl → zoom
-      //   zoom mode (Krea-like):           bare scroll → zoom, Shift → pan
-      const wantsZoom =
-        scrollMode === "pan"
-          ? e.ctrlKey || e.metaKey
-          : !e.shiftKey;
+      // Figma/Miro behaviour, no toggles needed:
+      //   • Cmd/Ctrl + scroll → zoom (also triggered by trackpad pinch — the
+      //     browser sets ctrlKey=true synthetically on pinch gestures).
+      //   • Plain two-finger scroll → pan (both axes via deltaX/deltaY).
+      //   • Mouse wheel (no modifier) → pan vertically. If you want to zoom
+      //     with a mouse wheel, hold Cmd/Ctrl. This matches Figma exactly.
+      const wantsZoom = e.ctrlKey || e.metaKey;
       if (wantsZoom) {
         e.preventDefault();
         const rect = el.getBoundingClientRect();
@@ -654,16 +658,15 @@ export default function Canvas({
         });
         return;
       }
-      // Otherwise: pan.
+      // Bare scroll → pan in both directions. preventDefault stops the page
+      // from scrolling under us.
       e.preventDefault();
       setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
     }
 
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-    // scrollMode in deps so the handler re-binds when user toggles it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrollMode]);
+  }, []);
 
 
   // ─────────────────────────────── File upload helper (used by upload nodes)
@@ -898,7 +901,7 @@ export default function Canvas({
               ? "grabbing"
               : drag
                 ? "grabbing"
-                : scrollMode === "pan"
+                : spaceHeld
                   ? "grab"
                   : "default",
           }}
@@ -1012,22 +1015,6 @@ export default function Canvas({
               title="Reset view"
             >
               <Maximize size={11} />
-            </button>
-            <div className="w-px h-4 bg-border mx-1" />
-            {/* Scroll-mode toggle — Pan vs Zoom. Affects what bare wheel does.
-                Stored in localStorage so users only set it once. */}
-            <button
-              onClick={() => setScrollMode((m) => (m === "pan" ? "zoom" : "pan"))}
-              className={`w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover ${
-                scrollMode === "pan" ? "text-fg-muted" : "text-brand"
-              }`}
-              title={
-                scrollMode === "pan"
-                  ? "Scroll = pan · Cmd+scroll = zoom (click to switch)"
-                  : "Scroll = zoom · Shift+scroll = pan (click to switch)"
-              }
-            >
-              {scrollMode === "pan" ? <Hand size={11} /> : <MousePointer2 size={11} />}
             </button>
           </div>
 

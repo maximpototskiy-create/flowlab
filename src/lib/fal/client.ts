@@ -87,7 +87,18 @@ export async function falRun(
       return await falResult(modelId, request_id, apiKey);
     }
     if (s.status === "FAILED") {
-      throw new Error(`fal.ai job failed: ${JSON.stringify(s).slice(0, 300)}`);
+      // Try to pull a human-readable error out of fal's response. The
+      // useful info is usually nested in `logs[].message` or a top-level
+      // `error` field; otherwise we fall back to the whole blob.
+      let msg = "";
+      const blob = s as unknown as { logs?: Array<{ message?: string }>; error?: string };
+      if (Array.isArray(blob.logs)) {
+        const lastErr = [...blob.logs].reverse().find((l) => l.message);
+        if (lastErr?.message) msg = lastErr.message;
+      }
+      if (!msg && blob.error) msg = blob.error;
+      if (!msg) msg = JSON.stringify(s).slice(0, 300);
+      throw new Error(`fal.ai job failed: ${msg.slice(0, 400)}`);
     }
   }
   throw new Error(`fal.ai timeout after ${timeout}ms`);
