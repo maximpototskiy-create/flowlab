@@ -6,6 +6,7 @@ import Lightbox from "./Lightbox";
 import { NODE_TYPES, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import UploadZone from "./UploadZone";
+import BrandAssetsPicker from "./BrandAssetsPicker";
 
 export const NODE_WIDTH = 280;
 // h-9 (36px) + border-b-1 = 37, but visually centre matches 36 better
@@ -64,7 +65,7 @@ function CanvasNodeImpl({
   onStop?: () => void;
   onExpand: () => void;
   onUploadFile: (file: File) => Promise<{ cdnUrl: string }>;
-  workflowMeta: { brandId: string | null; projectId: string; workflowId: string };
+  workflowMeta: { brandId: string | null; brandSlug?: string | null; projectId: string; workflowId: string };
 }) {
   const def = NODE_TYPES[node.type];
   if (!def) return null;
@@ -276,6 +277,20 @@ function CanvasNodeImpl({
               onConfigChange("url", "");
             }}
             onUrl={(url) => onConfigChange("url", url)}
+          />
+        )}
+
+        {/* Brand Assets — grid of brand's UI screenshots with checkboxes. */}
+        {def.custom === "brand-assets" && (
+          <BrandAssetsPicker
+            brandId={workflowMeta.brandId}
+            brandSlug={workflowMeta.brandSlug ?? null}
+            selected={
+              Array.isArray(node.config.selected)
+                ? (node.config.selected as string[])
+                : []
+            }
+            onChange={(next) => onConfigChange("selected", next)}
           />
         )}
 

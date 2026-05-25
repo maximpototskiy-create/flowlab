@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { executeGraph, ancestorsOf } from "@/lib/engine/executor";
-import { buildBrandContext } from "@/lib/engine/brandContext";
+import { buildBrandContext, getBrandUiScreenshots } from "@/lib/engine/brandContext";
 import type { Graph } from "@/lib/canvas/types";
 
 export const runtime = "nodejs";
@@ -90,6 +90,11 @@ async function executeRun(
     // ctx.brandVoice. Cheap query (one DB read), and the result is a static
     // string used many times across the graph, so this is essentially free.
     const brandVoice = await buildBrandContext(workflow.project.brandId);
+    // Also load UI screenshots — these get auto-attached as reference images
+    // to imageGen nodes (Nano Banana sees the actual app UI) AND as vision
+    // inputs to LLM nodes. Without this, the brand had screenshots in DB
+    // but no node ever consumed them.
+    const brandUiScreenshots = await getBrandUiScreenshots(workflow.project.brandId);
     const result = await executeGraph(
       graph,
       {
@@ -97,6 +102,7 @@ async function executeRun(
         projectId: workflow.projectId,
         workflowId: workflow.id,
         brandVoice,
+        brandUiScreenshots,
       },
       { runId, scope, scopeNodeId },
     );

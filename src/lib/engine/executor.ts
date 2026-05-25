@@ -129,7 +129,21 @@ function resolveInputs(graph: Graph, node: GraphNode, outputs: Map<string, Recor
 
     if (multiPortNames.has(edge.to.port)) {
       const arr = (inputs[edge.to.port] as unknown[] | undefined) ?? [];
-      arr.push(value);
+      // Special case: Brand Assets node carries its full selection in
+      // `results[]` because it can produce multiple URLs from one port.
+      // Expand all results into the multi-port instead of just the first.
+      // For other multi-result nodes we keep one-edge-one-value semantics
+      // because the user pick via _selectedResultIdx already chose one.
+      if (
+        upstreamNode?.type === "brandAssets" &&
+        Array.isArray(upstreamNode.results)
+      ) {
+        for (const r of upstreamNode.results) {
+          if (r && typeof r.value === "string") arr.push(r.value);
+        }
+      } else {
+        arr.push(value);
+      }
       inputs[edge.to.port] = arr;
     } else {
       inputs[edge.to.port] = value;

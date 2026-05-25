@@ -13,6 +13,13 @@ export type RunnerContext = {
   runStepId?: string;
   /** Brand kit context for LLM nodes — appended to prompts when "Apply Brand Voice" was used */
   brandVoice?: string;
+  /** Brand UI screenshots (CDN URLs) auto-attached to LLM vision calls and
+   *  imageGen reference inputs. Lets the model SEE the actual app UI when
+   *  generating prompts/copy/visuals for it, without the user having to
+   *  manually add Upload Image nodes for the same screenshots in every
+   *  workflow. The Brand Assets canvas node provides explicit per-node
+   *  control when needed. */
+  brandUiScreenshots?: string[];
 };
 
 export type RunnerResult = {
@@ -108,7 +115,14 @@ export async function runNode(
       // Multi-image input — array (possibly empty) from the multi-port.
       // Also accepts legacy `inputs.image` (single string) for backwards
       // compatibility with workflows saved before the multi-port was added.
-      const images = collectImages(inputs);
+      const userImages = collectImages(inputs);
+      // Auto-attach brand UI screenshots ONLY when the user hasn't already
+      // wired their own references — same logic as imageGen. Lets vision
+      // models (Claude, GPT, Gemini) see the actual app UI when generating
+      // ad copy or prompts FOR that app, without any manual node wiring.
+      const brandImages =
+        userImages.length === 0 ? (ctx.brandUiScreenshots ?? []) : [];
+      const images = [...userImages, ...brandImages];
       const brandSuffix = ctx.brandVoice ? `\n\nBrand voice:\n${ctx.brandVoice}` : "";
       // Defense-in-depth: even with system prompt, some models still drift into
       // preambles when the user input is conversational ("напиши промпт..."). 
@@ -153,7 +167,17 @@ export async function runNode(
       // Also accept the legacy single `inputs.image` for older workflows. We
       // cap at 14 — Nano Banana 2 edit's documented max — and silently drop
       // extras to avoid 4xx from fal.ai.
-      const refImages = collectImages(inputs).slice(0, 14);
+      const userRefs = collectImages(inputs);
+      // Auto-attach brand UI screenshots as references — UNLESS the user has
+      // already connected explicit references upstream. The "user already
+      // provided refs" check prevents brand screenshots from polluting a
+      // workflow where the user purposefully wants different visuals.
+      // The Brand Assets canvas node is a different beast: it COUNTS as a
+      // user-provided edge, so when wired up the user gets exactly the
+      // screenshots they selected, not all of them.
+      const brandRefs =
+        userRefs.length === 0 ? (ctx.brandUiScreenshots ?? []) : [];
+      const refImages = [...userRefs, ...brandRefs].slice(0, 14);
       const hasRefs = refImages.length > 0;
 
       // Auto-switch model family to its image-editing variant when reference
@@ -364,6 +388,54 @@ export async function runNode(
       const cdnUrl = (config.cdnUrl as string) || (config.dataUrl as string);
       if (!cdnUrl) throw new Error("Upload an image first");
       return { outputs: { image: cdnUrl }, costUsd: 0, durationMs: Date.now() - t0 };
+    }
+
+    case "brandAssets": {
+      // Pulls UI screenshots from the brand kit. The user selects which ones
+      // to forward via the UI (BrandAssetsPicker). When nothing is selected,
+      // we default to forwarding ALL of them — matches user intent of
+      // "everything from the brand kit, please".
+      //
+      // Note: when this node is present in the graph and wired to a
+      // downstream node, that downstream's `userImages.length > 0` check
+      // becomes true, which DISABLES the automatic ctx.brandUiScreenshots
+      // injection. So Brand Assets node acts as an explicit override —
+      // exactly what the user asked for: "pick from brand kit, but still
+      // use the rest of the brand context (voice, pitch, etc)".
+      const allBrandScreenshots = ctx.brandUiScreenshots ?? [];
+      if (allBrandScreenshots.length === 0) {
+        throw new Error(
+          "This brand has no UI screenshots in its Brand Kit. Add some on the brand-kit page first.",
+        );
+      }
+      const selectedRaw = config.selected;
+      const selected = Array.isArray(selectedRaw)
+        ? (selectedRaw as unknown[]).filter(
+            (v): v is string => typeof v === "string" && v.length > 0,
+          )
+        : [];
+      // Intersect with currently-available screenshots so stale URLs
+      // (deleted from brand kit but still in node config) don't break the run.
+      const finalUrls =
+        selected.length > 0
+          ? selected.filter((u) => allBrandScreenshots.includes(u))
+          : allBrandScreenshots;
+
+      if (finalUrls.length === 0) {
+        throw new Error(
+          "Selected screenshots are no longer in the Brand Kit. Pick again.",
+        );
+      }
+
+      return {
+        // outputs.images = first URL as the "primary" downstream value
+        // (single-port destinations get this); the full list lives in results
+        // for multi-port consumers (Nano Banana refs, LLM vision inputs).
+        outputs: { images: finalUrls[0] },
+        results: finalUrls.map((u) => ({ value: u, mime: "image" })),
+        costUsd: 0,
+        durationMs: Date.now() - t0,
+      };
     }
 
     // ─────────────────────── VIDEO

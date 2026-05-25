@@ -129,7 +129,7 @@ export type NodeTypeDef = {
   examples?: string[];
   starters?: string[];
   /** Custom node body (file uploads etc.) */
-  custom?: "upload-image" | "upload-video" | "upload-audio" | "note";
+  custom?: "upload-image" | "upload-video" | "upload-audio" | "note" | "brand-assets";
   /** Special: force expanded modal (no primary textarea) */
   forceExpanded?: boolean;
 };
@@ -658,6 +658,30 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     defaults: { dataUrl: "", filename: "", cdnUrl: "" },
     fields: [],
     custom: "upload-image",
+  },
+
+  // ─────────────────────── Brand Assets
+  // Pulls UI screenshots from the current brand's Brand Kit and forwards
+  // the user-selected subset to downstream nodes (LLM vision, Nano Banana
+  // references, etc). When this node is present, IT takes precedence over
+  // the automatic ctx.brandUiScreenshots injection — gives users explicit
+  // control over which screenshots flow into a specific generation.
+  brandAssets: {
+    name: "Brand Assets",
+    category: "image",
+    icon: "package",
+    description:
+      "Pull UI screenshots from this brand's Brand Kit. Select which ones to forward as references for the next node.",
+    inputs: [],
+    outputs: [{ name: "images", type: "image" }],
+    defaults: {
+      // selected: array of CDN URLs the user picked. Empty by default —
+      // when nothing is selected, the runner forwards ALL brand screenshots
+      // (same as automatic injection).
+      selected: [] as string[],
+    },
+    fields: [],
+    custom: "brand-assets",
   },
 
   // ═════════════════════════════════════════════ VIDEO
