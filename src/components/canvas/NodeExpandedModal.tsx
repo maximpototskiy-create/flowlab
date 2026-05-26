@@ -6,6 +6,7 @@ import { X, Play, Expand } from "lucide-react";
 import { NODE_TYPES, type FieldDef, type GraphNode } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import Lightbox from "./Lightbox";
+import SceneBuilder, { type Scene } from "./SceneBuilder";
 
 export default function NodeExpandedModal({
   node,
@@ -73,19 +74,30 @@ export default function NodeExpandedModal({
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
-            {/* Primary instructions */}
-            {def.primaryField && (
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-fg-muted font-medium mb-2">
-                  {def.primaryLabel ?? "Instructions"}
-                </label>
-                <textarea
-                  className="w-full bg-bg-subtle border border-border rounded-md px-3 py-3 text-[13px] text-fg outline-none focus:border-brand resize-y min-h-[160px] leading-relaxed"
-                  placeholder={def.primaryPlaceholder ?? "Write text…"}
-                  value={(node.config[def.primaryField] as string) ?? ""}
-                  onChange={(e) => onConfigChange(def.primaryField!, e.target.value)}
-                />
-              </div>
+            {/* Multi-shot scene builder takes over the primary area when
+                videoGen.mode === "multi-shot". The instructions textarea
+                makes no sense here — the user authors per-scene prompts
+                in the builder below, and the runner packs them into
+                Kling's native multi_prompt field. */}
+            {node.type === "videoGen" && node.config.mode === "multi-shot" ? (
+              <SceneBuilder
+                scenes={(node.config.scenes as Scene[] | undefined) ?? []}
+                onChange={(next) => onConfigChange("scenes", next)}
+              />
+            ) : (
+              def.primaryField && (
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-fg-muted font-medium mb-2">
+                    {def.primaryLabel ?? "Instructions"}
+                  </label>
+                  <textarea
+                    className="w-full bg-bg-subtle border border-border rounded-md px-3 py-3 text-[13px] text-fg outline-none focus:border-brand resize-y min-h-[160px] leading-relaxed"
+                    placeholder={def.primaryPlaceholder ?? "Write text…"}
+                    value={(node.config[def.primaryField] as string) ?? ""}
+                    onChange={(e) => onConfigChange(def.primaryField!, e.target.value)}
+                  />
+                </div>
+              )
             )}
 
             {/* Examples & starters */}

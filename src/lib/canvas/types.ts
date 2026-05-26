@@ -17,7 +17,41 @@ export type Port = {
   // multimodal models (Nano Banana, GPT Image, vision LLMs) can receive
   // multiple images at once via a single visual port.
   multi?: boolean;
+  // When set, this port is only visible/active when the node's config
+  // satisfies the condition. Used by `videoGen` to show different ports
+  // depending on `mode` (text/image/keyframes/references). Edges to
+  // inactive ports are cleaned up automatically by Canvas when the
+  // condition stops matching (see `updateNodeConfig`).
+  // Read everywhere via `getActiveInputs(def, config)` — DO NOT iterate
+  // `def.inputs` directly anymore (it includes inactive ports).
+  activeWhen?: { field: string; values: string[] };
 };
+
+/** Return the subset of `def.inputs` that are active for the given config.
+ *  A port with no `activeWhen` is always active.
+ *
+ *  Backward-compat rule: when the gating field is NOT present in config
+ *  (i.e. a legacy node saved before `mode` existed), the port is treated
+ *  as active. This way existing workflows with start_frame + end_frame
+ *  edges keep rendering both ports and don't lose connections after the
+ *  field was added. New nodes (created from the palette) always have
+ *  `def.defaults[field]` populated, so they get proper filtering from
+ *  the moment they appear on canvas.
+ *
+ *  This is the SINGLE entry point Canvas / Edges / executor / runners use
+ *  to know which ports exist for a given node instance. */
+export function getActiveInputs(
+  def: NodeTypeDef | undefined,
+  config: Record<string, unknown> | undefined,
+): Port[] {
+  if (!def) return [];
+  return def.inputs.filter((p) => {
+    if (!p.activeWhen) return true;
+    const v = config?.[p.activeWhen.field];
+    if (v === undefined || v === null) return true; // legacy node — show
+    return p.activeWhen.values.includes(String(v));
+  });
+}
 
 export type NodeCategory = "text" | "image" | "video" | "audio" | "structural" | "integration" | "tools";
 
@@ -700,21 +734,94 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     name: "Video Generation",
     category: "video",
     icon: "clapperboard",
-    description: "Generate a video scene. Optional start frame, end frame (transition), or reference image.",
+    description:
+      "Generate a video. Pick a Mode: Text (prompt only), Image (one start frame), Keyframes (start + end), or References (multiple reference images for style/elements).",
+    // Ports are gated by `mode` via activeWhen. The UI (Canvas + Edges)
+    // reads `getActiveInputs(def, node.config)` and only renders the
+    // ports that match the current mode. When the user switches mode,
+    // edges to ports that just became inactive are auto-cleaned in
+    // Canvas.updateNodeConfig — no orphan edges left behind.
+    //
+    // Legacy nodes saved before `mode` existed have no config.mode at
+    // all → getActiveInputs returns ALL ports (start, end, reference,
+    // references) so existing edges and workflows keep working until
+    // the user sets the field explicitly.
     inputs: [
       { name: "prompt", type: "text", optional: true },
-      { name: "start_frame", type: "image", optional: true, label: "Start frame" },
-      { name: "end_frame", type: "image", optional: true, label: "End frame (transition)" },
-      { name: "reference", type: "image", optional: true, label: "Reference / style" },
+      {
+        name: "start_frame",
+        type: "image",
+        optional: true,
+        label: "Start frame",
+        activeWhen: { field: "mode", values: ["image", "keyframes", "multi-shot"] },
+      },
+      {
+        name: "end_frame",
+        type: "image",
+        optional: true,
+        label: "End frame (transition)",
+        activeWhen: { field: "mode", values: ["keyframes"] },
+      },
+      // Multi-port for References mode — up to 4 (Kling O3 reference-
+      // to-video pro/std, Seedance reference-to-video) or 7 (Kling O3
+      // 4K reference-to-video) reference images. Order is edge-creation
+      // order — matches the behaviour of imageGen's `images` port.
+      // BrandAssets node feeds its full selection here through the
+      // executor's multi-port expansion (already implemented).
+      {
+        name: "references",
+        type: "image",
+        optional: true,
+        multi: true,
+        label: "References (multi, up to 4-7)",
+        activeWhen: { field: "mode", values: ["references"] },
+      },
+      // Legacy single `reference` port. Kept in the schema so existing
+      // workflows that wired something to it before patch 5.1 don't
+      // lose edges on load. activeWhen values is empty → NEW nodes
+      // (which have config.mode set) never show this port. Legacy
+      // nodes (no config.mode) still show it because of the backward-
+      // compat rule in getActiveInputs.
+      {
+        name: "reference",
+        type: "image",
+        optional: true,
+        label: "Reference / style (legacy)",
+        activeWhen: { field: "mode", values: [] },
+      },
     ],
     outputs: [{ name: "video", type: "video" }],
     defaults: {
       instructions: "",
+      // Default mode = "image" — a single start_frame. Matches the most
+      // common workflow (drop one image, animate it) and keeps the
+      // simplest version of the node visible in the palette.
+      mode: "image",
+      // Multi-shot scenes — only consumed when mode === "multi-shot".
+      // Each scene becomes one element of Kling's native `multi_prompt`
+      // array, producing a SINGLE video with N scenes stitched together
+      // server-side (not N separate runs). Format intentionally kept
+      // simple: prompt + duration. Default seeds one empty scene so the
+      // SceneBuilder UI has something to render on first open.
+      scenes: [{ id: "scene-1", prompt: "", duration: "5" }],
       model: "fal-ai/kling-video/v3/pro/image-to-video",
       duration: "5",
       aspect: "9:16",
     },
     fields: [
+      {
+        name: "mode",
+        label: "Mode",
+        type: "select",
+        icon: "layers",
+        options: [
+          { value: "text", label: "Text to Video (prompt only)" },
+          { value: "image", label: "Image to Video (1 start frame)" },
+          { value: "keyframes", label: "Keyframes (start + end frame)" },
+          { value: "references", label: "References (multi-image, up to 4-7)" },
+          { value: "multi-shot", label: "Multi-shot (N scenes, 1 video)" },
+        ],
+      },
       {
         name: "model",
         label: "Model",
@@ -809,7 +916,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     primaryPlaceholder: "Your prompt here…",
     examples: ["Product 360° orbit"],
     starters: ["Animated background for…"],
-    quickFields: ["model", "duration", "aspect"],
+    quickFields: ["mode", "model", "duration", "aspect"],
   },
 
   talkingHead: {

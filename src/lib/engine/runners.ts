@@ -458,12 +458,110 @@ export async function runNode(
       const isText2Vid = model.includes("text-to-video");
       const startFrame = (inputs.start_frame ?? inputs.image) as string | undefined;
       const endFrame = inputs.end_frame as string | undefined;
-      const reference = inputs.reference as string | undefined;
+      // Legacy single `reference` port — still wired for old workflows
+      // saved before patch 5.1. New workflows use the multi-port
+      // `references` (filled when mode === "references"), captured below.
+      const legacyReference = inputs.reference as string | undefined;
+      // References mode: multi-port `references` arrives as string[].
+      // The executor's multi-port machinery + BrandAssets expansion is
+      // already wired up — by the time we get here we have a clean
+      // array of URLs in edge-connection order (so the user controls
+      // sequence via their Brand Assets selection order or the order
+      // they wired edges).
+      const referencesArr = Array.isArray(inputs.references)
+        ? (inputs.references as unknown[]).filter(
+            (v): v is string => typeof v === "string" && v.length > 0,
+          )
+        : [];
+      // The mode field gates port visibility on the canvas. Legacy nodes
+      // saved before patch 5.1 won't have it; treat absence as "image"
+      // for routing decisions but fall back gracefully if frames came
+      // through anyway (e.g. user wired end_frame on a legacy node).
+      const mode = String(config.mode ?? "image");
 
-      if (isImg2Vid && !startFrame && !reference && !isText2Vid)
+      if (isImg2Vid && !startFrame && !legacyReference && referencesArr.length === 0 && !isText2Vid)
         throw new Error("This model needs a start frame or reference image");
 
-      const payload: Record<string, unknown> = { prompt };
+      // Hard guardrails for References mode — fail fast with a clear
+      // message rather than silently sending a request that fal will
+      // either reject or, worse, accept but ignore the refs.
+      if (mode === "references" && referencesArr.length === 0) {
+        throw new Error("References mode needs at least one reference image connected to the References port");
+      }
+      if (mode === "references") {
+        const supportsRefs = model.includes("/reference-to-video");
+        if (!supportsRefs) {
+          throw new Error(
+            `Model ${model} doesn't accept multiple reference images. Pick a "Reference" model (Kling O3 reference-to-video or Seedance reference-to-video) for References mode.`,
+          );
+        }
+        // Cap to fal-side limits: o3 pro/std + seedance accept up to 4,
+        // o3/4k up to 7. Trim silently so users with brand kits of 10+
+        // selected screenshots don't blow up the request.
+        const cap = model.includes("/4k/") ? 7 : 4;
+        if (referencesArr.length > cap) {
+          console.warn(
+            `[videoGen] References capped from ${referencesArr.length} → ${cap} for ${model}`,
+          );
+          referencesArr.length = cap;
+        }
+      }
+
+      // ─── Multi-shot mode ────────────────────────────────────────────
+      // Kling V3 and O3 natively support `multi_prompt` — a list of
+      // scenes that get stitched into a SINGLE output video server-side
+      // (not N separate runs). Each scene has its own prompt + duration.
+      // Only V3/O3 endpoints expose this field, so we hard-fail with a
+      // clear error if the user picked something else.
+      //
+      // Format observed in fal docs:
+      //   multi_prompt: [{ prompt: string, duration?: string }, ...]
+      // We pass `shot_type: "customize"` (user-authored shots) — the
+      // alternative "intelligent" lets Kling auto-split a single
+      // prompt, which we don't want here since the whole point of this
+      // mode is the user authoring shots explicitly.
+      type Scene = { id?: string; prompt: string; duration?: string };
+      const scenesRaw = Array.isArray(config.scenes) ? (config.scenes as Scene[]) : [];
+      const scenes: Scene[] = scenesRaw
+        .filter((s) => s && typeof s.prompt === "string" && s.prompt.trim().length > 0)
+        .map((s) => ({
+          prompt: s.prompt.trim(),
+          duration: String(s.duration ?? "5"),
+        }));
+
+      if (mode === "multi-shot") {
+        const supportsMultiShot =
+          model.includes("/v3/") || model.includes("/o3/");
+        if (!supportsMultiShot) {
+          throw new Error(
+            `Model ${model} doesn't support multi-shot. Pick a Kling V3 or O3 model (any tier) for Multi-shot mode.`,
+          );
+        }
+        if (scenes.length === 0) {
+          throw new Error(
+            "Multi-shot mode needs at least one scene with a non-empty prompt. Open the node and use the scene builder.",
+          );
+        }
+        if (scenes.length < 2) {
+          // Single-scene multi-shot is technically valid on fal but
+          // defeats the purpose. Allow with a warning rather than block,
+          // since some users might be iterating.
+          console.warn(
+            `[videoGen] Multi-shot with only ${scenes.length} scene(s) — consider using Image/Text mode instead`,
+          );
+        }
+      }
+
+      const payload: Record<string, unknown> = {};
+      if (mode === "multi-shot") {
+        // multi_prompt + prompt are MUTUALLY EXCLUSIVE on Kling endpoints
+        // (docs: "Either prompt or multi_prompt must be provided, but not
+        // both"). Don't include `prompt` at all in this branch.
+        payload.multi_prompt = scenes;
+        payload.shot_type = "customize";
+      } else {
+        payload.prompt = prompt;
+      }
 
       // Model-family-specific field mapping (verified from fal.ai docs)
       if (model.includes("kling-video")) {
@@ -503,21 +601,31 @@ export async function runNode(
           else payload.tail_image_url = endFrame;
         }
 
-        // Reference image (from the single `reference` port):
-        //   V3/O3 reference-to-video → wrap into image_urls list (the
-        //     endpoint accepts up to 4 in pro/standard, 7 in 4k).
-        //   V3/O3 i2v + t2v → there's NO single-reference field on these
-        //     endpoints. The previous `reference_image_url` we were sending
-        //     simply didn't exist in the schema — fal ignored it. Drop
-        //     silently here (full multi-ref support comes in patch 3).
-        //   V2.x → keep legacy `reference_image_url` in case it ever
-        //     worked on older endpoints.
-        if (reference) {
+        // Reference images (NEW: References mode multi-port + legacy single)
+        //   References mode → up to 4 (pro/std) or 7 (4k) URLs in image_urls
+        //   Legacy single `reference` port → wrapped into image_urls [url]
+        //     for reference-to-video endpoints, ignored elsewhere on V3/O3
+        //     (no schema field accepted them anyway, see comment below),
+        //     stored as reference_image_url on V2.x for compat.
+        // Order of precedence: multi-port wins if both somehow set.
+        const refList: string[] =
+          referencesArr.length > 0
+            ? referencesArr
+            : legacyReference
+              ? [legacyReference]
+              : [];
+        if (refList.length > 0) {
           if (isKlingRefToVid) {
-            payload.image_urls = [reference];
+            payload.image_urls = refList;
           } else if (!isV3OrO3) {
-            payload.reference_image_url = reference;
+            // V2.x legacy compat — only the first ref fits the single field
+            payload.reference_image_url = refList[0];
           }
+          // V3/O3 i2v + t2v have no schema field for refs. We already
+          // throw above when mode === "references" + non-ref model, so
+          // any silent drops here only happen for legacy nodes that
+          // wired the old single port to a V3/O3 i2v — same behaviour
+          // they had post-patch 5.0.
         }
 
         payload.duration = duration;
@@ -543,9 +651,23 @@ export async function runNode(
           payload.generate_audio = true;
         }
       } else if (model.includes("seedance-2.0")) {
-        // Seedance: image_url (start), end_image_url, references via [Image1] in prompt
+        // Seedance: image_url (start), end_image_url, references via
+        // image_urls list on the reference-to-video endpoint specifically.
+        // Other Seedance endpoints (i2v / t2v / fast variants) accept
+        // only [Image1]-style inline prompt refs, which the multi-port
+        // flow doesn't address. Refs are only sent on the ref-to-video
+        // endpoint to avoid silent ignores.
         if (startFrame) payload.image_url = startFrame;
         if (endFrame) payload.end_image_url = endFrame;
+        if (model.includes("/reference-to-video")) {
+          const refList: string[] =
+            referencesArr.length > 0
+              ? referencesArr
+              : legacyReference
+                ? [legacyReference]
+                : [];
+          if (refList.length > 0) payload.image_urls = refList;
+        }
         payload.duration = duration;
         payload.resolution = "720p";
         payload.aspect_ratio = aspect;
@@ -636,7 +758,7 @@ export async function runNode(
         // Default: try common field names
         if (startFrame) payload.image_url = startFrame;
         if (endFrame) payload.end_image_url = endFrame;
-        if (reference) payload.reference_image_url = reference;
+        if (legacyReference) payload.reference_image_url = legacyReference;
         payload.duration = duration;
         payload.aspect_ratio = aspect;
       }

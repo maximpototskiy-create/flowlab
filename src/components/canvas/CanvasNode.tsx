@@ -3,7 +3,7 @@
 import { useState, memo } from "react";
 import { ChevronDown, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand } from "lucide-react";
 import Lightbox from "./Lightbox";
-import { NODE_TYPES, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
+import { NODE_TYPES, getActiveInputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import UploadZone from "./UploadZone";
 import BrandAssetsPicker from "./BrandAssetsPicker";
@@ -22,7 +22,11 @@ export function getNodeHeight(node: GraphNode): number {
 export function portYOffset(node: GraphNode, portId: string, side: "in" | "out"): number {
   const def = NODE_TYPES[node.type];
   if (!def) return NODE_HEADER_HEIGHT;
-  const list = side === "in" ? def.inputs : def.outputs;
+  // For input side we use the ACTIVE-only list so port Y positions match
+  // exactly what the user sees on the node. If we used `def.inputs` here
+  // (which contains inactive/legacy ports too), edges to the visible
+  // ports would land in the wrong vertical slots.
+  const list = side === "in" ? getActiveInputs(def, node.config) : def.outputs;
   const idx = list.findIndex((p) => p.name === portId);
   if (idx < 0) return NODE_HEADER_HEIGHT;
   return NODE_HEADER_HEIGHT + 14 + idx * NODE_PORT_SPACING;
@@ -155,8 +159,8 @@ function CanvasNodeImpl({
         </button>
       </div>
 
-      {/* Ports */}
-      {def.inputs.map((p, i) => (
+      {/* Ports — only the ones active for current config (mode-gated etc) */}
+      {getActiveInputs(def, node.config).map((p, i) => (
         <Port
           key={`in-${p.name}`}
           side="in"
@@ -408,30 +412,64 @@ function CanvasNodeImpl({
           );
         })}
 
-        {/* Primary instructions textarea */}
-        {def.primaryField && !def.custom && (
-          <div className="rounded-md bg-bg-subtle border border-border p-2 mt-1">
-            <label className="block text-[9px] uppercase tracking-wider text-fg-subtle font-medium mb-1">
-              {def.primaryLabel ?? "Instructions"}
-            </label>
-            <textarea
-              className="w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none min-h-[40px] max-h-[120px] leading-snug nodrag"
-              placeholder={def.primaryPlaceholder ?? "Write text…"}
-              value={(node.config[def.primaryField] as string) ?? ""}
-              onChange={(e) => onConfigChange(def.primaryField!, e.target.value)}
-              onMouseDown={(e) => e.stopPropagation()}
-              onPointerDown={(e) => e.stopPropagation()}
-              onKeyDown={(e) => e.stopPropagation()}
-              // Auto-grow up to max-h. Past that point the textarea becomes
-              // scrollable in-place. For viewing the FULL text users can hit
-              // the Maximize2 icon in the header to open the expanded modal.
-              ref={(el) => {
-                if (!el) return;
-                el.style.height = "auto";
-                el.style.height = `${Math.min(120, el.scrollHeight)}px`;
-              }}
-            />
-          </div>
+        {/* Primary instructions textarea OR multi-shot scene summary.
+            For videoGen in multi-shot mode the instructions field has
+            no meaning — each scene has its own prompt. We replace the
+            textarea with a compact summary card that opens the scene
+            builder in the expanded modal on click. */}
+        {node.type === "videoGen" && node.config.mode === "multi-shot" ? (
+          (() => {
+            const scenes = (node.config.scenes as Array<{ prompt: string; duration: string }> | undefined) ?? [];
+            const totalDur = scenes.reduce((sum, s) => sum + Number(s?.duration || 0), 0);
+            const filled = scenes.filter((s) => s?.prompt?.trim()).length;
+            return (
+              <button
+                type="button"
+                onClick={onExpand}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="w-full rounded-md bg-bg-subtle border border-border hover:border-brand p-2 mt-1 text-left transition-colors"
+              >
+                <div className="text-[9px] uppercase tracking-wider text-fg-subtle font-medium mb-1">
+                  Scene constructor
+                </div>
+                <div className="text-[12px] text-fg">
+                  {scenes.length} scene{scenes.length !== 1 ? "s" : ""} · ~{totalDur}s
+                  {filled < scenes.length && (
+                    <span className="text-amber-600 ml-1">
+                      ({scenes.length - filled} empty)
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-fg-muted mt-0.5">Click to edit scenes</div>
+              </button>
+            );
+          })()
+        ) : (
+          def.primaryField && !def.custom && (
+            <div className="rounded-md bg-bg-subtle border border-border p-2 mt-1">
+              <label className="block text-[9px] uppercase tracking-wider text-fg-subtle font-medium mb-1">
+                {def.primaryLabel ?? "Instructions"}
+              </label>
+              <textarea
+                className="w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none min-h-[40px] max-h-[120px] leading-snug nodrag"
+                placeholder={def.primaryPlaceholder ?? "Write text…"}
+                value={(node.config[def.primaryField] as string) ?? ""}
+                onChange={(e) => onConfigChange(def.primaryField!, e.target.value)}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                // Auto-grow up to max-h. Past that point the textarea becomes
+                // scrollable in-place. For viewing the FULL text users can hit
+                // the Maximize2 icon in the header to open the expanded modal.
+                ref={(el) => {
+                  if (!el) return;
+                  el.style.height = "auto";
+                  el.style.height = `${Math.min(120, el.scrollHeight)}px`;
+                }}
+              />
+            </div>
+          )
         )}
 
         {/* Quick controls + Run button */}
