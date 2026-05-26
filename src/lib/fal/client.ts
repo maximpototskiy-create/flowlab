@@ -187,8 +187,18 @@ export function estimateCost(modelId: string, params: { duration?: number; numIm
   if (id.includes("ideogram")) return 0.04 * numImg;
   if (id.includes("stable-diffusion")) return 0.025 * numImg;
 
+  // Kling pricing varies a lot by tier (per fal.ai docs). Approximate
+  // values, biased slightly high so we don't undercount in budgets:
+  //   4k:           $0.42/s flat (regardless of audio)
+  //   master:       $0.42/s (V2.1 master)
+  //   pro:          ~$0.11-0.17/s (depends on audio + V3 voice control)
+  //   standard:     ~$0.08-0.13/s
+  //   unspecified:  fallback used for older listed models
+  if (id.includes("kling-video") && id.includes("/4k/")) return 0.42 * dur;
   if (id.includes("kling-video") && id.includes("master")) return 0.42 * dur;
-  if (id.includes("kling-video")) return 0.28 * dur;
+  if (id.includes("kling-video") && id.includes("/pro/")) return 0.17 * dur;
+  if (id.includes("kling-video") && id.includes("/standard/")) return 0.12 * dur;
+  if (id.includes("kling-video")) return 0.20 * dur;
   if (id.includes("veo3")) return 0.5 * dur;
   if (id.includes("runway-gen3")) return 0.5 * dur;
   if (id.includes("hailuo")) return 0.25 * dur;

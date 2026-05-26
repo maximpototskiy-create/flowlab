@@ -467,18 +467,81 @@ export async function runNode(
 
       // Model-family-specific field mapping (verified from fal.ai docs)
       if (model.includes("kling-video")) {
-        // Kling v3 I2V uses `start_image_url`; older v2.1 + 4K + o3 use `image_url`.
-        // For T2V no image needed at all.
-        const isKlingV3I2V = model.includes("/v3/") && model.includes("image-to-video");
+        // ─── Endpoint flavor detection ─────────────────────────────────
+        // V3 is the newest, O3 is the older flagship line, V2.x is legacy.
+        // The three lines disagree on field names — V3 i2v wants
+        // start_image_url, O3 i2v wants image_url, etc. Get it wrong and
+        // fal silently ignores the field (no 422, you just don't see the
+        // end frame applied — exactly what was happening before this fix).
+        const isV3 = model.includes("/v3/");
+        const isO3 = model.includes("/o3/");
+        const isV3OrO3 = isV3 || isO3;
+        const isKlingI2V = model.includes("image-to-video");
+        const isKlingT2V = model.includes("text-to-video");
+        const isKlingRefToVid = model.includes("reference-to-video");
+
+        // Start frame:
+        //   V3 i2v → start_image_url (required by API)
+        //   V3/O3 reference-to-video → start_image_url (optional)
+        //   O3 i2v + V2.x i2v + any /4k/ i2v → image_url
         if (startFrame) {
-          if (isKlingV3I2V) payload.start_image_url = startFrame;
-          else payload.image_url = startFrame;
+          if ((isV3 && isKlingI2V) || isKlingRefToVid) {
+            payload.start_image_url = startFrame;
+          } else {
+            payload.image_url = startFrame;
+          }
         }
-        if (endFrame) payload.tail_image_url = endFrame;
-        if (reference) payload.reference_image_url = reference;
+
+        // End frame:
+        //   V3/O3 → end_image_url
+        //   V2.x legacy → tail_image_url (kept untouched for compat)
+        // This was the silent bug: code used tail_image_url for all kling
+        // including V3, where fal accepts only end_image_url. End frame
+        // was effectively ignored on V3 i2v.
+        if (endFrame) {
+          if (isV3OrO3) payload.end_image_url = endFrame;
+          else payload.tail_image_url = endFrame;
+        }
+
+        // Reference image (from the single `reference` port):
+        //   V3/O3 reference-to-video → wrap into image_urls list (the
+        //     endpoint accepts up to 4 in pro/standard, 7 in 4k).
+        //   V3/O3 i2v + t2v → there's NO single-reference field on these
+        //     endpoints. The previous `reference_image_url` we were sending
+        //     simply didn't exist in the schema — fal ignored it. Drop
+        //     silently here (full multi-ref support comes in patch 3).
+        //   V2.x → keep legacy `reference_image_url` in case it ever
+        //     worked on older endpoints.
+        if (reference) {
+          if (isKlingRefToVid) {
+            payload.image_urls = [reference];
+          } else if (!isV3OrO3) {
+            payload.reference_image_url = reference;
+          }
+        }
+
         payload.duration = duration;
-        payload.aspect_ratio = aspect;
-        if (generateAudio) payload.generate_audio = true;
+
+        // aspect_ratio:
+        //   Accepted by: t2v, reference-to-video, any /4k/ endpoint, V2.x.
+        //   NOT accepted by: V3/O3 i2v at pro/standard tier. fal silently
+        //     ignores it there, but cleaner to omit so logs aren't noisy.
+        const acceptsAspect =
+          isKlingT2V ||
+          isKlingRefToVid ||
+          model.includes("/4k/") ||
+          !isV3OrO3;
+        if (acceptsAspect) payload.aspect_ratio = aspect;
+
+        // generate_audio:
+        //   V3 → fal default is TRUE. To honor the user's OFF toggle we
+        //     must send explicit false. Always send an explicit bool.
+        //   O3 / V2.x → fal default is FALSE. Send only when user wants ON.
+        if (isV3) {
+          payload.generate_audio = generateAudio;
+        } else if (generateAudio) {
+          payload.generate_audio = true;
+        }
       } else if (model.includes("seedance-2.0")) {
         // Seedance: image_url (start), end_image_url, references via [Image1] in prompt
         if (startFrame) payload.image_url = startFrame;

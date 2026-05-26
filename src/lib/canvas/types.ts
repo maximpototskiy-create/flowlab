@@ -721,16 +721,35 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          // Kling 3.0 (latest, confirmed on fal)
+          // ─── Kling V3 (newest, confirmed on fal) ──────────────────────
+          // V3 supports native multi_prompt (multi-shot) and elements
+          // (frontal+reference image sets) — used by future patches.
+          // NOTE: V3 i2v has generate_audio default=TRUE on fal side, so
+          // runner sends explicit bool to honor the user toggle.
           { value: "fal-ai/kling-video/v3/pro/image-to-video", label: "Kling 3.0 Pro (I2V) ⭐" },
           { value: "fal-ai/kling-video/v3/standard/image-to-video", label: "Kling 3.0 Standard (I2V)" },
           { value: "fal-ai/kling-video/v3/pro/text-to-video", label: "Kling 3.0 Pro (T2V)" },
           { value: "fal-ai/kling-video/v3/standard/text-to-video", label: "Kling 3.0 Standard (T2V)" },
           { value: "fal-ai/kling-video/v3/4k/image-to-video", label: "Kling 3.0 4K (I2V)" },
           { value: "fal-ai/kling-video/v3/4k/text-to-video", label: "Kling 3.0 4K (T2V)" },
-          // Kling 2.5 Turbo
+          // ─── Kling O3 (older flagship line, still on fal) ─────────────
+          // O3 i2v uses `image_url` (not start_image_url like V3).
+          // O3 reference-to-video accepts up to 4 image_urls + elements +
+          // optional start/end frames — basis for the upcoming References
+          // mode in patch 3. End frame field is `end_image_url` (not
+          // tail_image_url, which is V2.1 legacy).
+          { value: "fal-ai/kling-video/o3/pro/image-to-video", label: "Kling O3 Pro (I2V)" },
+          { value: "fal-ai/kling-video/o3/standard/image-to-video", label: "Kling O3 Standard (I2V)" },
+          { value: "fal-ai/kling-video/o3/pro/text-to-video", label: "Kling O3 Pro (T2V)" },
+          { value: "fal-ai/kling-video/o3/standard/text-to-video", label: "Kling O3 Standard (T2V)" },
+          { value: "fal-ai/kling-video/o3/pro/reference-to-video", label: "Kling O3 Pro (Reference)" },
+          { value: "fal-ai/kling-video/o3/standard/reference-to-video", label: "Kling O3 Standard (Reference)" },
+          { value: "fal-ai/kling-video/o3/4k/image-to-video", label: "Kling O3 4K (I2V)" },
+          { value: "fal-ai/kling-video/o3/4k/text-to-video", label: "Kling O3 4K (T2V)" },
+          { value: "fal-ai/kling-video/o3/4k/reference-to-video", label: "Kling O3 4K (Reference)" },
+          // ─── Kling 2.5 Turbo ──────────────────────────────────────────
           { value: "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", label: "Kling 2.5 Turbo Pro (T2V)" },
-          // Kling 2.1
+          // ─── Kling 2.1 (legacy, uses tail_image_url for end frame) ────
           { value: "fal-ai/kling-video/v2.1/master/text-to-video", label: "Kling 2.1 Master (T2V)" },
           { value: "fal-ai/kling-video/v2.1/master/image-to-video", label: "Kling 2.1 Master (I2V)" },
           { value: "fal-ai/kling-video/v2.1/pro/image-to-video", label: "Kling 2.1 Pro (I2V)" },
