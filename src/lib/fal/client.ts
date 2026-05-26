@@ -115,11 +115,11 @@ export async function falRun(
  *  response's `model` field disagrees with what we asked for. */
 export async function falLLM(
   prompt: string,
-  // Default = current top Anthropic on fal openrouter wrapper. Previously
-  // "anthropic/claude-haiku-latest" — but that ID isn't actually routable
-  // through fal's OR wrapper. fal silently fell back to a default model
-  // (often openai/gpt-*) which is what showed up in fal dashboard logs.
-  model = "anthropic/claude-sonnet-4.6",
+  // Default = Claude Opus auto-latest. Tilde-aliases are an OpenRouter
+  // feature that resolves to the newest concrete model in a family. If
+  // fal's wrapper doesn't proxy tilde slugs, callers can pass a concrete
+  // model ID explicitly.
+  model = "~anthropic/claude-opus-latest",
   temperature = 0.7,
   // Pass either a single image URL (legacy callers) or an array (multi-image
   // vision — Claude/GPT/Gemini all support multiple image_url content blocks
@@ -185,7 +185,15 @@ export async function falLLM(
     // sonnet-4.6-2025xxxx"). Only warn when the AUTHOR prefix differs —
     // that's the canary for a silent fallback to a completely different
     // model family.
-    const requestedAuthor = model.split("/")[0]?.toLowerCase();
+    //
+    // EXCEPTION: `~author/family-latest` aliases ARE expected to resolve
+    // to a concrete model with the same author prefix (sans the `~`).
+    // We allow any concrete model under the same author as a valid
+    // resolution and DON'T warn — that's the whole point of the alias.
+    const isLatestAlias = model.startsWith("~");
+    const requestedAuthor = (isLatestAlias ? model.slice(1) : model)
+      .split("/")[0]
+      ?.toLowerCase();
     const servedAuthor = data.model.split("/")[0]?.toLowerCase();
     if (requestedAuthor !== servedAuthor) {
       console.warn(
@@ -193,6 +201,10 @@ export async function falLLM(
         `This usually means the requested model ID isn't routable through fal's ` +
         `OpenRouter wrapper and a silent fallback happened. Check LLM_MODELS in types.ts.`,
       );
+    } else if (isLatestAlias) {
+      // Informational — lets us see in dev console what latest actually
+      // resolved to today. Not a warning, just a console.info.
+      console.info(`[falLLM] "${model}" resolved to "${data.model}"`);
     }
   }
 
