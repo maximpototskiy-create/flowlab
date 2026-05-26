@@ -100,44 +100,25 @@ export const CATEGORY_ORDER: NodeCategory[] = [
 // (Vision-capable models indicated by `vision: true`)
 // ─────────────────────────────────────────────
 export const LLM_MODELS = [
-  // ─── Auto-latest aliases (EXPERIMENTAL) ─────────────────────────────
-  // OpenRouter natively supports `~author/family-latest` slugs that auto-
-  // resolve to the newest concrete model in a given family — so when
-  // Anthropic ships Claude 4.8 we automatically pick it up without
-  // editing this list. The response's `model` field echoes the concrete
-  // model that actually served the request, so we can see what we got.
+  // All model IDs confirmed in fal's official docs for `openrouter/router`
+  // wrapper (the NATIVE one — `client.ts` routes text-only calls there).
+  // Tilde-aliases (`~author/family-latest`) were tried in patch 5.3.1 and
+  // also fell back silently — fal doesn't proxy them. Sticking to concrete
+  // slugs from fal's published example list.
   //
-  // NOTE: tilde-aliases are documented on NATIVE OpenRouter API but not
-  // explicitly mentioned in fal's openrouter/router wrapper docs. fal may
-  // pass them through unchanged (most likely — it's just a proxy) OR
-  // reject them as unknown slugs. If you hit 4xx errors specifically on
-  // these rows, fall back to the concrete IDs below.
-  { id: "~anthropic/claude-opus-latest", label: "Claude Opus (latest) ⭐", vision: true },
-  { id: "~anthropic/claude-sonnet-latest", label: "Claude Sonnet (latest)", vision: true },
-  { id: "~anthropic/claude-haiku-latest", label: "Claude Haiku (latest)", vision: true },
-  { id: "~openai/gpt-latest", label: "GPT (latest)", vision: true },
-  { id: "~google/gemini-pro-latest", label: "Gemini Pro (latest)", vision: true },
-  { id: "~google/gemini-flash-latest", label: "Gemini Flash (latest)", vision: true },
-  // ─── Anthropic (concrete versions) ──────────────────────────────────
-  // Confirmed in fal openrouter/router docs example list. fal's wrapper
-  // currently lags native OpenRouter by ~one minor version (claude-opus-
-  // 4.7 exists on native OR but not yet on fal proxy when this patch
-  // shipped). Use the latest aliases above if you want auto-upgrade.
+  // ─── Anthropic ──────────────────────────────────────────────────────
+  { id: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6 ⭐", vision: true },
   { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6", vision: true },
-  { id: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6", vision: true },
   { id: "anthropic/claude-sonnet-4.5", label: "Claude Sonnet 4.5", vision: true },
   // ─── OpenAI ─────────────────────────────────────────────────────────
   { id: "openai/gpt-4.1", label: "GPT-4.1", vision: true },
   { id: "openai/gpt-oss-120b", label: "GPT OSS 120B", vision: false },
   // ─── Google ─────────────────────────────────────────────────────────
-  // Gemini 3.x confirmed in fal openrouter/router/audio docs example
-  // list (May 2026). 2.5-flash confirmed in chat docs. Reasonable
-  // assumption that chat endpoint accepts the same set as audio since
-  // they share the underlying OpenRouter routing.
-  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview ⭐", vision: true },
+  // Gemini 3.x confirmed in audio docs example list. 2.5-flash in chat docs.
+  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview", vision: true },
   { id: "google/gemini-3-pro-preview", label: "Gemini 3 Pro Preview", vision: true },
   { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash Preview", vision: true },
-  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", vision: true },
+  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash (default for vision)", vision: true },
   // ─── Meta ──────────────────────────────────────────────────────────
   { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", vision: false },
   // ─── Moonshot ──────────────────────────────────────────────────────
@@ -229,12 +210,10 @@ function llmNode(opts: {
     outputs: opts.outputs ?? [{ name: "text", type: "text" }],
     defaults: {
       instructions: opts.defaultInstructions,
-      // Default LLM = Claude Opus auto-latest. The `~` prefix is an
-      // OpenRouter alias that resolves to the newest Claude Opus model
-      // available — so when 4.7, 4.8, 5.0 ship we pick them up without
-      // editing this file. If fal's wrapper doesn't proxy tilde slugs,
-      // user can manually switch to a concrete ID from the picker.
-      model: opts.defaultModel ?? "~anthropic/claude-opus-latest",
+      // Default = Claude Opus 4.6 (concrete slug, documented working on
+      // fal's NATIVE openrouter/router wrapper that we switched to in
+      // patch 5.3.2). Tilde-aliases didn't work — fal doesn't proxy them.
+      model: opts.defaultModel ?? "anthropic/claude-opus-4.6",
       temperature: opts.defaultTemp ?? 0.7,
       // Brand kit voice + screenshots auto-attached by default. User can
       // flip OFF in expanded settings for off-brand experiments.

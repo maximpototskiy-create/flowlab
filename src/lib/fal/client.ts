@@ -105,58 +105,80 @@ export async function falRun(
 }
 
 /** Call OpenRouter via fal.ai for text completion.
- *  Uses fal's OpenAI-compatible proxy at https://fal.run/openrouter/router/openai/v1
- *  (undocumented but accepts standard OpenAI chat completions schema, including
- *  multi-image vision via image_url content blocks).
+ *  Splits into two paths because fal exposes TWO different OpenRouter wrappers:
  *
- *  Model IDs confirmed working on fal as of May 2026 (see LLM_MODELS in
- *  types.ts for the full list). Unknown model IDs trigger SILENT fallback
- *  to a default (often openai/gpt-*), so this function warns when the
- *  response's `model` field disagrees with what we asked for. */
+ *  1. NATIVE wrapper at `https://fal.run/openrouter/router`
+ *     - Schema: { prompt, model, system_prompt?, temperature?, max_tokens? } → { output }
+ *     - Documented models: Claude (sonnet-4.6, opus-4.6, sonnet-4.5),
+ *       GPT-4.1, Gemini 2.5 Flash, Llama 4, Kimi K2.5, GPT OSS.
+ *     - Single-turn only (no `messages` array, no vision).
+ *
+ *  2. OPENAI-COMPAT wrapper at `https://fal.run/openrouter/router/openai/v1/chat/completions`
+ *     - Schema: standard OpenAI chat completions (messages array, image_url blocks).
+ *     - Officially documented ONLY with `google/gemini-2.5-flash` — accepts
+ *       Gemini models reliably. With Claude/etc IDs, silently falls back to
+ *       openai/gpt-* (this is the bug Maxim saw: he requested Claude in
+ *       textGen, fal dashboard showed his calls as $0.022/10s = GPT pricing,
+ *       not Claude).
+ *
+ *  Routing rule: text-only → native wrapper, vision → OpenAI-compat with
+ *  Gemini forced. If user picked Claude but added images, we log that we're
+ *  forcing Gemini (because vision on this path only reliably works with
+ *  Gemini). */
 export async function falLLM(
   prompt: string,
-  // Default = Claude Opus auto-latest. Tilde-aliases are an OpenRouter
-  // feature that resolves to the newest concrete model in a family. If
-  // fal's wrapper doesn't proxy tilde slugs, callers can pass a concrete
-  // model ID explicitly.
-  model = "~anthropic/claude-opus-latest",
+  // Default = Claude Opus 4.6 (concrete slug, documented working on native
+  // wrapper). We had `~anthropic/claude-opus-latest` briefly but tilde-
+  // aliases aren't documented on fal's wrapper and turned out to also fall
+  // back. Concrete IDs from fal's published example list are the safe bet.
+  model = "anthropic/claude-opus-4.6",
   temperature = 0.7,
-  // Pass either a single image URL (legacy callers) or an array (multi-image
-  // vision — Claude/GPT/Gemini all support multiple image_url content blocks
-  // in a single user turn). Empty array or undefined = text-only.
   imageUrls?: string | string[],
+  systemPrompt?: string,
+): Promise<string> {
+  // Normalise images list. Empty array or no URLs = text path.
+  const images = (Array.isArray(imageUrls) ? imageUrls : imageUrls ? [imageUrls] : [])
+    .filter((u): u is string => typeof u === "string" && u.length > 0);
+
+  if (images.length === 0) {
+    return falLLMText(prompt, model, temperature, systemPrompt);
+  }
+
+  // Vision path. We must use OpenAI-compat endpoint (only one with image
+  // support), and the only model family that reliably accepts vision
+  // there is Gemini. If the user explicitly picked a non-Gemini model,
+  // tell them in console that we're overriding for this call.
+  const visionModel = "google/gemini-2.5-flash";
+  if (!model.toLowerCase().includes("google/gemini")) {
+    console.info(
+      `[falLLM] Vision request with ${images.length} image(s). User picked "${model}" ` +
+      `but fal's OpenRouter wrapper only reliably handles vision via Gemini — ` +
+      `forcing "${visionModel}" for this call.`,
+    );
+  }
+  return falLLMVision(prompt, visionModel, images, temperature, systemPrompt);
+}
+
+/** Text-only LLM call via fal's NATIVE openrouter/router wrapper.
+ *  This endpoint is properly documented with Claude/GPT/Gemini/etc and
+ *  doesn't silent-fallback. Pass `model` as the OpenRouter slug. */
+async function falLLMText(
+  prompt: string,
+  model: string,
+  temperature: number,
   systemPrompt?: string,
 ): Promise<string> {
   const key = nextFalKey();
 
-  // Normalise to array, filter out empty strings (which would otherwise become
-  // broken image_url content blocks and fail the request).
-  const images = (Array.isArray(imageUrls) ? imageUrls : imageUrls ? [imageUrls] : [])
-    .filter((u): u is string => typeof u === "string" && u.length > 0);
-
-  // Build messages — OpenAI chat format. Vision models support image content
-  // blocks; non-vision models receive text-only and ignore images silently.
-  const userContent: unknown =
-    images.length > 0
-      ? [
-          { type: "text", text: prompt },
-          ...images.map((url) => ({ type: "image_url", image_url: { url } })),
-        ]
-      : prompt;
-
-  const messages: Array<{ role: string; content: unknown }> = [];
-  if (systemPrompt && systemPrompt.trim()) {
-    messages.push({ role: "system", content: systemPrompt });
+  const body: Record<string, unknown> = { prompt, model };
+  if (systemPrompt && systemPrompt.trim()) body.system_prompt = systemPrompt;
+  // fal's wrapper defaults temperature to 1; only send when user-overridden
+  // (any value other than the OpenRouter default of 1).
+  if (typeof temperature === "number" && temperature !== 1) {
+    body.temperature = temperature;
   }
-  messages.push({ role: "user", content: userContent });
 
-  const body = {
-    model,
-    messages,
-    temperature,
-  };
-
-  const res = await fetch("https://fal.run/openrouter/router/openai/v1/chat/completions", {
+  const res = await fetch("https://fal.run/openrouter/router", {
     method: "POST",
     headers: {
       Authorization: `Key ${key}`,
@@ -171,40 +193,75 @@ export async function falLLM(
   }
 
   const data = (await res.json()) as {
+    output?: string;
+    error?: string;
+    // Native wrapper response doesn't echo `model` per docs — no mismatch
+    // detection possible here. Bug we hit before (silent fallback on
+    // OpenAI-compat path) shouldn't happen on this path since Claude is
+    // explicitly documented as supported.
+  };
+
+  if (data.error) {
+    throw new Error(`fal/openrouter: ${data.error}`);
+  }
+  return data.output ?? "";
+}
+
+/** Vision LLM call via fal's OpenAI-compat wrapper.
+ *  Always uses Gemini — the only model family that reliably handles vision
+ *  through this endpoint. Caller is responsible for telling the user when
+ *  their selected model is being overridden. */
+async function falLLMVision(
+  prompt: string,
+  model: string, // forced to Gemini by caller
+  images: string[],
+  temperature: number,
+  systemPrompt?: string,
+): Promise<string> {
+  const key = nextFalKey();
+
+  const userContent = [
+    { type: "text", text: prompt },
+    ...images.map((url) => ({ type: "image_url", image_url: { url } })),
+  ];
+
+  const messages: Array<{ role: string; content: unknown }> = [];
+  if (systemPrompt && systemPrompt.trim()) {
+    messages.push({ role: "system", content: systemPrompt });
+  }
+  messages.push({ role: "user", content: userContent });
+
+  const body = { model, messages, temperature };
+
+  const res = await fetch("https://fal.run/openrouter/router/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`fal/openrouter vision ${res.status}: ${text.slice(0, 400)}`);
+  }
+
+  const data = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
-    // The response echoes the model that actually served the request.
-    // When this disagrees with what we asked for (e.g. fal fell back to
-    // openai/gpt-* because our model ID was unknown), surface that loudly
-    // so it doesn't sit silent for weeks — exactly the bug Maxim hit.
     model?: string;
   };
 
+  // On vision path we DO want mismatch detection — if Gemini was requested
+  // and OpenAI replied, that's a silent fallback we should know about.
   if (data.model && data.model !== model) {
-    // Loose match: providers sometimes return slightly different cased or
-    // versioned slugs ("anthropic/claude-sonnet-4.6" vs "anthropic/claude-
-    // sonnet-4.6-2025xxxx"). Only warn when the AUTHOR prefix differs —
-    // that's the canary for a silent fallback to a completely different
-    // model family.
-    //
-    // EXCEPTION: `~author/family-latest` aliases ARE expected to resolve
-    // to a concrete model with the same author prefix (sans the `~`).
-    // We allow any concrete model under the same author as a valid
-    // resolution and DON'T warn — that's the whole point of the alias.
-    const isLatestAlias = model.startsWith("~");
-    const requestedAuthor = (isLatestAlias ? model.slice(1) : model)
-      .split("/")[0]
-      ?.toLowerCase();
+    const requestedAuthor = model.split("/")[0]?.toLowerCase();
     const servedAuthor = data.model.split("/")[0]?.toLowerCase();
     if (requestedAuthor !== servedAuthor) {
       console.warn(
-        `[falLLM] Model mismatch: requested "${model}" but fal served "${data.model}". ` +
-        `This usually means the requested model ID isn't routable through fal's ` +
-        `OpenRouter wrapper and a silent fallback happened. Check LLM_MODELS in types.ts.`,
+        `[falLLM:vision] Model mismatch: requested "${model}" but fal served "${data.model}". ` +
+        `Vision path silent fallback — investigate.`,
       );
-    } else if (isLatestAlias) {
-      // Informational — lets us see in dev console what latest actually
-      // resolved to today. Not a warning, just a console.info.
-      console.info(`[falLLM] "${model}" resolved to "${data.model}"`);
     }
   }
 
