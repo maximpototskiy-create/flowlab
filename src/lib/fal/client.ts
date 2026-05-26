@@ -104,12 +104,22 @@ export async function falRun(
   throw new Error(`fal.ai timeout after ${timeout}ms`);
 }
 
-/** Call OpenRouter via fal.ai for text completion. Replaces deprecated fal-ai/any-llm.
- *  Uses OpenAI-compatible chat completions API at https://fal.run/openrouter/router/openai/v1
- *  All major models available: claude-opus-4-7, gpt-5.5, gemini-3-pro, deepseek-v4, llama-4, etc. */
+/** Call OpenRouter via fal.ai for text completion.
+ *  Uses fal's OpenAI-compatible proxy at https://fal.run/openrouter/router/openai/v1
+ *  (undocumented but accepts standard OpenAI chat completions schema, including
+ *  multi-image vision via image_url content blocks).
+ *
+ *  Model IDs confirmed working on fal as of May 2026 (see LLM_MODELS in
+ *  types.ts for the full list). Unknown model IDs trigger SILENT fallback
+ *  to a default (often openai/gpt-*), so this function warns when the
+ *  response's `model` field disagrees with what we asked for. */
 export async function falLLM(
   prompt: string,
-  model = "anthropic/claude-haiku-latest",
+  // Default = current top Anthropic on fal openrouter wrapper. Previously
+  // "anthropic/claude-haiku-latest" — but that ID isn't actually routable
+  // through fal's OR wrapper. fal silently fell back to a default model
+  // (often openai/gpt-*) which is what showed up in fal dashboard logs.
+  model = "anthropic/claude-sonnet-4.6",
   temperature = 0.7,
   // Pass either a single image URL (legacy callers) or an array (multi-image
   // vision — Claude/GPT/Gemini all support multiple image_url content blocks
@@ -162,7 +172,30 @@ export async function falLLM(
 
   const data = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
+    // The response echoes the model that actually served the request.
+    // When this disagrees with what we asked for (e.g. fal fell back to
+    // openai/gpt-* because our model ID was unknown), surface that loudly
+    // so it doesn't sit silent for weeks — exactly the bug Maxim hit.
+    model?: string;
   };
+
+  if (data.model && data.model !== model) {
+    // Loose match: providers sometimes return slightly different cased or
+    // versioned slugs ("anthropic/claude-sonnet-4.6" vs "anthropic/claude-
+    // sonnet-4.6-2025xxxx"). Only warn when the AUTHOR prefix differs —
+    // that's the canary for a silent fallback to a completely different
+    // model family.
+    const requestedAuthor = model.split("/")[0]?.toLowerCase();
+    const servedAuthor = data.model.split("/")[0]?.toLowerCase();
+    if (requestedAuthor !== servedAuthor) {
+      console.warn(
+        `[falLLM] Model mismatch: requested "${model}" but fal served "${data.model}". ` +
+        `This usually means the requested model ID isn't routable through fal's ` +
+        `OpenRouter wrapper and a silent fallback happened. Check LLM_MODELS in types.ts.`,
+      );
+    }
+  }
+
   return data.choices?.[0]?.message?.content ?? "";
 }
 

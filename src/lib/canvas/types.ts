@@ -100,32 +100,32 @@ export const CATEGORY_ORDER: NodeCategory[] = [
 // (Vision-capable models indicated by `vision: true`)
 // ─────────────────────────────────────────────
 export const LLM_MODELS = [
-  // Anthropic — OpenRouter IDs use DOTS (claude-opus-4.7), not dashes.
-  { id: "anthropic/claude-opus-4.7", label: "Claude Opus 4.7 ⭐", vision: true },
-  { id: "anthropic/claude-opus-4.7:fast", label: "Claude Opus 4.7 Fast", vision: true },
-  { id: "anthropic/claude-opus-4.5", label: "Claude Opus 4.5", vision: true },
-  { id: "anthropic/claude-opus-4.6-fast", label: "Claude Opus 4.6 Fast", vision: true },
-  { id: "anthropic/claude-opus-4.1", label: "Claude Opus 4.1", vision: true },
-  { id: "anthropic/claude-sonnet-latest", label: "Claude Sonnet (latest)", vision: true },
-  { id: "anthropic/claude-haiku-latest", label: "Claude Haiku (latest)", vision: true },
-  { id: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet", vision: true },
-  { id: "anthropic/claude-3.5-haiku", label: "Claude 3.5 Haiku", vision: false },
-  // OpenAI
-  { id: "openai/gpt-5.1", label: "GPT-5.1", vision: true },
-  { id: "openai/gpt-5", label: "GPT-5", vision: true },
-  { id: "openai/gpt-5-mini", label: "GPT-5 mini", vision: true },
-  { id: "openai/gpt-4o", label: "GPT-4o", vision: true },
-  { id: "openai/gpt-4o-mini", label: "GPT-4o mini", vision: true },
-  // Google
-  { id: "google/gemini-3-pro-preview", label: "Gemini 3 Pro ⭐", vision: true },
-  { id: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro", vision: true },
+  // ─── Anthropic ──────────────────────────────────────────────────────
+  // Confirmed in fal openrouter/router docs example list (May 2026).
+  // Note: model slugs use DOT in minor versions (claude-sonnet-4.6, NOT
+  // 4-6 like raw OpenRouter native). Anthropic's latest visible on
+  // fal-OpenRouter is the 4.6 line — Claude 4.7 isn't routed through
+  // this endpoint yet, so the previous `4.7` ID silently fell back to
+  // a default model (often openai/gpt-*), which is the bug Maxim hit.
+  { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6 ⭐", vision: true },
+  { id: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6", vision: true },
+  { id: "anthropic/claude-sonnet-4.5", label: "Claude Sonnet 4.5", vision: true },
+  // ─── OpenAI ─────────────────────────────────────────────────────────
+  // Confirmed in fal docs. The "5.x" IDs we had before don't exist on
+  // this endpoint — gpt-4.1 is current top, gpt-oss-120b is the open
+  // alternative. gpt-4o is widely supported but isn't in fal example
+  // list, leaving it out until verified.
+  { id: "openai/gpt-4.1", label: "GPT-4.1", vision: true },
+  { id: "openai/gpt-oss-120b", label: "GPT OSS 120B", vision: false },
+  // ─── Google ─────────────────────────────────────────────────────────
+  // gemini-2.5-flash is the only Gemini slug fal docs explicitly
+  // mention. 3-pro-preview / 2.5-pro / 2.0-flash-001 weren't confirmed
+  // — keeping them out for now, add later when verified.
   { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", vision: true },
-  { id: "google/gemini-2.0-flash-001", label: "Gemini 2.0 Flash", vision: true },
-  // DeepSeek
-  { id: "deepseek/deepseek-v3.2", label: "DeepSeek V3.2", vision: false },
-  { id: "deepseek/deepseek-chat", label: "DeepSeek Chat", vision: false },
-  // Meta
-  { id: "meta-llama/llama-3.2-3b-instruct", label: "Llama 3.2 3B", vision: false },
+  // ─── Meta ──────────────────────────────────────────────────────────
+  { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", vision: false },
+  // ─── Moonshot ──────────────────────────────────────────────────────
+  { id: "moonshotai/kimi-k2.5", label: "Kimi K2.5", vision: false },
 ];
 
 // ─────────────────────────────────────────────
@@ -213,7 +213,11 @@ function llmNode(opts: {
     outputs: opts.outputs ?? [{ name: "text", type: "text" }],
     defaults: {
       instructions: opts.defaultInstructions,
-      model: opts.defaultModel ?? "anthropic/claude-haiku-latest",
+      // Default LLM = Sonnet 4.6 (current top Anthropic on fal openrouter
+      // wrapper, vision-capable). Previously was haiku-latest which is a
+      // non-existent ID — fal silently fell back to a default (often
+      // openai/gpt-*), which is the bug Maxim saw in his fal dashboard.
+      model: opts.defaultModel ?? "anthropic/claude-sonnet-4.6",
       temperature: opts.defaultTemp ?? 0.7,
       // Brand kit voice + screenshots auto-attached by default. User can
       // flip OFF in expanded settings for off-brand experiments.
@@ -261,7 +265,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     examples: ["Meal planning app brief"],
     starters: ["Write a brief for…"],
     defaultInstructions: "Generate a creative brief: target audience, key insight, message, tone, visual direction, CTA.",
-    defaultModel: "anthropic/claude-sonnet-latest",
+    defaultModel: "anthropic/claude-opus-4.6",
   }),
 
   adAnalysis: {
@@ -276,7 +280,9 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     outputs: [{ name: "analysis", type: "text" }],
     defaults: {
       instructions: "Analyse the ad. Extract: 1) main hook 2) target emotion 3) visual style 4) what makes it work 5) ideas for variations.",
-      model: "anthropic/claude-sonnet-latest",
+      // Was claude-sonnet-latest which doesn't exist on fal-OR wrapper.
+      // Opus 4.6 is the top vision model now available there.
+      model: "anthropic/claude-opus-4.6",
       temperature: 0.4,
     },
     fields: llmFields(),

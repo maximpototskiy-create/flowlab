@@ -109,7 +109,7 @@ export async function runNode(
     case "musicPrompt":
     case "characterPrompt": {
       const instructions = String(config.instructions ?? "");
-      const model = String(config.model ?? "anthropic/claude-haiku-latest");
+      const model = String(config.model ?? "anthropic/claude-sonnet-4.6");
       const temperature = Number(config.temperature ?? 0.7);
       const context = inputs.context as string | undefined;
       // Multi-image input — array (possibly empty) from the multi-port.
@@ -148,7 +148,7 @@ export async function runNode(
 
     case "adAnalysis": {
       const instructions = String(config.instructions ?? "");
-      const model = String(config.model ?? "anthropic/claude-sonnet-latest");
+      const model = String(config.model ?? "anthropic/claude-opus-4.6");
       const temperature = Number(config.temperature ?? 0.4);
       const description = inputs.description as string | undefined;
       const images = collectImages(inputs);
