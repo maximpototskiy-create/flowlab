@@ -282,7 +282,21 @@ export default function Canvas({
   const updateNodeConfig = useCallback((nodeId: string, key: string, value: unknown) => {
     setGraph((g) => ({
       ...g,
-      nodes: g.nodes.map((n) => (n.id === nodeId ? { ...n, config: { ...n.config, [key]: value } } : n)),
+      nodes: g.nodes.map((n) => {
+        if (n.id !== nodeId) return n;
+        const next = { ...n, config: { ...n.config, [key]: value } };
+        // For Brand Assets node, changing the selection MUST invalidate
+        // cached outputs/results — otherwise the executor's subgraph cache
+        // serves stale URLs on re-run and the user's new selection has no
+        // effect. Same logic applies to any future config-driven node
+        // where the config materially changes what the runner produces.
+        if (n.type === "brandAssets" && key === "selected") {
+          next.outputs = undefined;
+          next.results = undefined;
+          next.status = "idle";
+        }
+        return next;
+      }),
     }));
   }, []);
 

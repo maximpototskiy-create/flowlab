@@ -148,6 +148,7 @@ function llmFields(): FieldDef[] {
   return [
     { name: "model", label: "Model", type: "select", options: LLM_OPTS, icon: "settings" },
     { name: "temperature", label: "Temperature", type: "number", min: 0, max: 2, step: 0.1 },
+    { name: "useBrandKit", label: "Use brand kit (voice + screenshots)", type: "toggle" },
   ];
 }
 
@@ -180,6 +181,9 @@ function llmNode(opts: {
       instructions: opts.defaultInstructions,
       model: opts.defaultModel ?? "anthropic/claude-haiku-latest",
       temperature: opts.defaultTemp ?? 0.7,
+      // Brand kit voice + screenshots auto-attached by default. User can
+      // flip OFF in expanded settings for off-brand experiments.
+      useBrandKit: true,
     },
     fields: llmFields(),
     primaryField: "instructions",
@@ -337,6 +341,12 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       model: "fal-ai/nano-banana-2",
       aspect: "1:1",
       num_results: 1,
+      // Brand kit auto-inject is ON by default. Users can flip it OFF in
+      // the expanded settings to generate something off-brand without
+      // having to delete the brand or its kit. Has no effect when the
+      // workflow isn't inside a brand, or when Brand Assets node is
+      // wired upstream (explicit takes precedence).
+      useBrandKit: true,
     },
     fields: [
       {
@@ -363,6 +373,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       },
       { name: "aspect", label: "Aspect ratio", type: "select", options: ASPECT_OPTS },
       { name: "num_results", label: "Number of results in a run", type: "number", min: 1, max: 4, step: 1 },
+      { name: "useBrandKit", label: "Auto-attach brand UI screenshots", type: "toggle" },
     ],
     primaryField: "instructions",
     primaryLabel: "Instructions",

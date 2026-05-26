@@ -32,6 +32,13 @@ export default function BrandAssetsPicker({
 }) {
   const [urls, setUrls] = useState<string[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Collapsed vs expanded picker. The full picker is bulky when a brand
+  // has 50+ screenshots; once the user has picked their subset we shrink
+  // the node down to just the selected thumbnails + an Edit button.
+  // Initial state: collapsed when there's already a selection (returning
+  // user opens the workflow and doesn't need to browse 100 screenshots),
+  // expanded when nothing's chosen yet (first-time use).
+  const [expanded, setExpanded] = useState(() => selected.length === 0);
 
   useEffect(() => {
     if (!brandId) {
@@ -138,6 +145,58 @@ export default function BrandAssetsPicker({
   const noneSelected = selected.length === 0;
   const effectiveCount = noneSelected ? urls.length : selected.length;
 
+  // Compact (collapsed) view — shows current selection as a small strip
+  // with an Edit button. Used after user has finalised their picks so the
+  // node doesn't dominate the canvas.
+  if (!expanded) {
+    const previewUrls = noneSelected ? urls.slice(0, 4) : selected.slice(0, 4);
+    const extraCount = (noneSelected ? urls.length : selected.length) - previewUrls.length;
+    return (
+      <div
+        className="space-y-2 nodrag"
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between text-[10px] text-fg-muted">
+          <span>
+            {noneSelected
+              ? `All ${urls.length} will be used`
+              : `${selected.length} selected`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="text-brand hover:underline"
+          >
+            Edit
+          </button>
+        </div>
+        <div className="flex gap-1">
+          {previewUrls.map((u) => (
+            <div
+              key={u}
+              className="relative w-12 aspect-[9/16] rounded-md overflow-hidden border border-border bg-bg-card flex-shrink-0"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={u}
+                alt=""
+                className="w-full h-full object-cover"
+                loading="lazy"
+                draggable={false}
+              />
+            </div>
+          ))}
+          {extraCount > 0 && (
+            <div className="w-12 aspect-[9/16] rounded-md border border-dashed border-border flex items-center justify-center text-[10px] text-fg-muted flex-shrink-0">
+              +{extraCount}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between text-[10px] text-fg-muted">
@@ -165,13 +224,28 @@ export default function BrandAssetsPicker({
           >
             None
           </button>
+          {/* Collapse — only shows when user has made some kind of decision.
+              Lets them shrink the node back down once they're happy. */}
+          {!noneSelected && (
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              onMouseDown={(e) => e.stopPropagation()}
+              className="text-brand hover:underline"
+            >
+              Done
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Scrollable container — caps at ~240px height so a 100-screenshot
+          brand kit doesn't make the node 6000px tall. */}
       <div
-        className="grid grid-cols-3 gap-1.5 nodrag"
+        className="grid grid-cols-3 gap-1.5 nodrag max-h-[240px] overflow-y-auto pr-1"
         onMouseDown={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
       >
         {urls.map((u) => {
           const isOn = selected.includes(u);

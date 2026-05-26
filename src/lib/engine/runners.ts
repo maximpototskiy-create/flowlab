@@ -116,14 +116,18 @@ export async function runNode(
       // Also accepts legacy `inputs.image` (single string) for backwards
       // compatibility with workflows saved before the multi-port was added.
       const userImages = collectImages(inputs);
-      // Auto-attach brand UI screenshots ONLY when the user hasn't already
-      // wired their own references — same logic as imageGen. Lets vision
-      // models (Claude, GPT, Gemini) see the actual app UI when generating
-      // ad copy or prompts FOR that app, without any manual node wiring.
+      // Auto-attach brand kit (screenshots AND voice text) ONLY when:
+      //   1. user hasn't wired their own references AND
+      //   2. "Use brand kit" toggle is on (default true; old nodes lacking
+      //      the field also default true for backwards compatibility).
+      const useBrandKit = config.useBrandKit !== false;
       const brandImages =
-        userImages.length === 0 ? (ctx.brandUiScreenshots ?? []) : [];
+        useBrandKit && userImages.length === 0
+          ? (ctx.brandUiScreenshots ?? [])
+          : [];
       const images = [...userImages, ...brandImages];
-      const brandSuffix = ctx.brandVoice ? `\n\nBrand voice:\n${ctx.brandVoice}` : "";
+      const brandSuffix =
+        useBrandKit && ctx.brandVoice ? `\n\nBrand voice:\n${ctx.brandVoice}` : "";
       // Defense-in-depth: even with system prompt, some models still drift into
       // preambles when the user input is conversational ("напиши промпт..."). 
       // Adding an explicit final reminder at the END of the user message
@@ -168,15 +172,17 @@ export async function runNode(
       // cap at 14 — Nano Banana 2 edit's documented max — and silently drop
       // extras to avoid 4xx from fal.ai.
       const userRefs = collectImages(inputs);
-      // Auto-attach brand UI screenshots as references — UNLESS the user has
-      // already connected explicit references upstream. The "user already
-      // provided refs" check prevents brand screenshots from polluting a
-      // workflow where the user purposefully wants different visuals.
-      // The Brand Assets canvas node is a different beast: it COUNTS as a
-      // user-provided edge, so when wired up the user gets exactly the
-      // screenshots they selected, not all of them.
+      // Auto-attach brand UI screenshots as references — UNLESS:
+      //   1. user already wired explicit references upstream (multi-port
+      //      has values), OR
+      //   2. user disabled "Use brand kit" toggle on this node.
+      // For old workflows without the toggle (config.useBrandKit undefined),
+      // we default to TRUE so behaviour matches what was working before.
+      const useBrandKit = config.useBrandKit !== false; // default true
       const brandRefs =
-        userRefs.length === 0 ? (ctx.brandUiScreenshots ?? []) : [];
+        useBrandKit && userRefs.length === 0
+          ? (ctx.brandUiScreenshots ?? [])
+          : [];
       const refImages = [...userRefs, ...brandRefs].slice(0, 14);
       const hasRefs = refImages.length > 0;
 

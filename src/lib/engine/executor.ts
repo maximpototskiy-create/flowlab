@@ -87,7 +87,12 @@ export function layerByDepth(graph: Graph, order: string[]): string[][] {
  * outputs (parent failed or skipped) are filtered out, so the runner can
  * trust that the array contains only real, usable values.
  */
-function resolveInputs(graph: Graph, node: GraphNode, outputs: Map<string, Record<string, unknown>>) {
+function resolveInputs(
+  graph: Graph,
+  node: GraphNode,
+  outputs: Map<string, Record<string, unknown>>,
+  results: Map<string, { value: string; mime?: string }[]>,
+) {
   const inputs: Record<string, unknown> = {};
   const def = NODE_TYPES[node.type];
   // Build a set of port names that are declared multi on this node type.
@@ -130,16 +135,31 @@ function resolveInputs(graph: Graph, node: GraphNode, outputs: Map<string, Recor
     if (multiPortNames.has(edge.to.port)) {
       const arr = (inputs[edge.to.port] as unknown[] | undefined) ?? [];
       // Special case: Brand Assets node carries its full selection in
-      // `results[]` because it can produce multiple URLs from one port.
-      // Expand all results into the multi-port instead of just the first.
-      // For other multi-result nodes we keep one-edge-one-value semantics
-      // because the user pick via _selectedResultIdx already chose one.
-      if (
-        upstreamNode?.type === "brandAssets" &&
-        Array.isArray(upstreamNode.results)
-      ) {
-        for (const r of upstreamNode.results) {
-          if (r && typeof r.value === "string") arr.push(r.value);
+      // results[] because it produces multiple URLs from one port. Expand
+      // all results into the multi-port instead of just the first.
+      //
+      // CRITICAL: we read from the live `results` Map (state.results from
+      // executor), NOT from `upstreamNode.results` — the latter is the
+      // graph snapshot, which is stale (was only populated on previous
+      // saves and gets overwritten AFTER the run). Without this, the very
+      // first execution of brandAssets node passed only one URL even
+      // though the user selected several.
+      if (upstreamNode?.type === "brandAssets") {
+        // First try the live runtime map (current run's fresh results).
+        const liveResults = results.get(upstreamNode.id);
+        if (liveResults && liveResults.length > 0) {
+          for (const r of liveResults) {
+            if (r && typeof r.value === "string") arr.push(r.value);
+          }
+        } else if (Array.isArray(upstreamNode.results)) {
+          // Fallback to snapshot for cached subgraph runs (when brandAssets
+          // was already executed in a prior run and its outputs are cached).
+          for (const r of upstreamNode.results) {
+            if (r && typeof r.value === "string") arr.push(r.value);
+          }
+        } else {
+          // Last resort — push the single value from outputs.
+          arr.push(value);
         }
       } else {
         arr.push(value);
@@ -177,7 +197,7 @@ async function executeOne(
   state: ExecState,
 ): Promise<void> {
   state.status.set(node.id, "running");
-  const inputs = resolveInputs(state.graph, node, state.outputs);
+  const inputs = resolveInputs(state.graph, node, state.outputs, state.results);
 
   const runStep = await prisma.runStep.create({
     data: {
@@ -419,6 +439,18 @@ export async function executeGraph(
       if (cached && Object.keys(cached).length > 0) {
         state.outputs.set(node.id, cached);
         state.status.set(node.id, "done");
+        // ALSO restore the multi-result array if present. Without this,
+        // brandAssets (and other multi-result nodes) only pass their first
+        // URL downstream on a subgraph run — even though all the URLs
+        // were stored on the graph. Symptom: selected 4 screenshots in
+        // Brand Assets, ran ImageGen alone, only 1 reference reached
+        // Nano Banana.
+        const cachedResults = (node as GraphNode & {
+          results?: { value: string; mime?: string }[];
+        }).results;
+        if (cachedResults && cachedResults.length > 0) {
+          state.results.set(node.id, cachedResults);
+        }
         cachedCount++;
       }
     }
