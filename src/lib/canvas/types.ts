@@ -99,31 +99,51 @@ export const CATEGORY_ORDER: NodeCategory[] = [
 // LLM models — via fal-ai/any-llm endpoint
 // (Vision-capable models indicated by `vision: true`)
 // ─────────────────────────────────────────────
+// `vision: true` means the model is in fal's Vision wrapper dropdown
+// (openrouter/router/vision endpoint). `vision: false` means text-only —
+// if user wires images to it, runner falls back to claude-sonnet-4.6.
+// Source of truth for the `vision` flag: fal openrouter/router/vision
+// docs example list (May 2026) + the playground dropdown.
 export const LLM_MODELS = [
-  // All model IDs confirmed in fal's official docs for `openrouter/router`
-  // wrapper (the NATIVE one — `client.ts` routes text-only calls there).
-  // Tilde-aliases (`~author/family-latest`) were tried in patch 5.3.1 and
-  // also fell back silently — fal doesn't proxy them. Sticking to concrete
-  // slugs from fal's published example list.
-  //
   // ─── Anthropic ──────────────────────────────────────────────────────
-  { id: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6 ⭐", vision: true },
+  // Opus is documented for TEXT only — it's NOT in fal's Vision wrapper
+  // dropdown. Sonnet 4.6 and 4.5 work for both text and vision.
+  { id: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6 (text only) ⭐", vision: false },
   { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6", vision: true },
   { id: "anthropic/claude-sonnet-4.5", label: "Claude Sonnet 4.5", vision: true },
   // ─── OpenAI ─────────────────────────────────────────────────────────
-  { id: "openai/gpt-4.1", label: "GPT-4.1", vision: true },
-  { id: "openai/gpt-oss-120b", label: "GPT OSS 120B", vision: false },
+  // gpt-4o is in Vision dropdown. gpt-4.1 is in Text dropdown only.
+  // gpt-oss-120b — text only.
+  { id: "openai/gpt-4o", label: "GPT-4o", vision: true },
+  { id: "openai/gpt-4.1", label: "GPT-4.1 (text only)", vision: false },
+  { id: "openai/gpt-oss-120b", label: "GPT OSS 120B (text only)", vision: false },
   // ─── Google ─────────────────────────────────────────────────────────
-  // Gemini 3.x confirmed in audio docs example list. 2.5-flash in chat docs.
-  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview", vision: true },
-  { id: "google/gemini-3-pro-preview", label: "Gemini 3 Pro Preview", vision: true },
-  { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash Preview", vision: true },
-  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash (default for vision)", vision: true },
+  // gemini-2.5-flash confirmed in Vision docs. Gemini 3.x mentioned in
+  // audio docs but NOT in vision dropdown — assume text-only for now.
+  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", vision: true },
+  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (text)", vision: false },
+  { id: "google/gemini-3-pro-preview", label: "Gemini 3 Pro Preview (text)", vision: false },
+  { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash Preview (text)", vision: false },
   // ─── Meta ──────────────────────────────────────────────────────────
-  { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", vision: false },
+  { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick (text only)", vision: false },
   // ─── Moonshot ──────────────────────────────────────────────────────
-  { id: "moonshotai/kimi-k2.5", label: "Kimi K2.5", vision: false },
+  // Kimi K2.5 is in BOTH text and vision wrappers. Solid all-rounder.
+  { id: "moonshotai/kimi-k2.5", label: "Kimi K2.5", vision: true },
+  // ─── Vision-only specialists (new in 5.3.3) ────────────────────────
+  // From Vision wrapper dropdown. These don't have a text-only mode in
+  // fal's wrappers as far as docs show — Qwen3-VL is the vision variant.
+  { id: "qwen/qwen3-vl-235b-a22b-instruct", label: "Qwen3-VL 235B (vision)", vision: true },
+  { id: "x-ai/grok-4-fast", label: "Grok-4 Fast", vision: true },
 ];
+
+/** Helper used by the runner — does this model accept image inputs on
+ *  fal's openrouter/router/vision wrapper? Used to know whether to
+ *  preserve the user's choice for vision calls or fall back to a known
+ *  vision-capable Claude. */
+export function isVisionCapable(modelId: string): boolean {
+  const m = LLM_MODELS.find((x) => x.id === modelId);
+  return m?.vision === true;
+}
 
 // ─────────────────────────────────────────────
 // Field schemas — what shows in node settings panel
