@@ -7,6 +7,7 @@ import {
 } from "@/lib/canvas/types";
 import CanvasNode, { NODE_WIDTH } from "./CanvasNode";
 import CanvasEdges from "./CanvasEdges";
+import Minimap from "./Minimap";
 import NodePalette from "./NodePalette";
 import ContextMenu from "./ContextMenu";
 import ConnectionPicker from "./ConnectionPicker";
@@ -88,6 +89,8 @@ export default function Canvas({
   // ─────────────────────────────── Pan/Zoom
   const [pan, setPan] = useState({ x: 200, y: 100 });
   const [zoom, setZoom] = useState(1);
+  // Viewport pixel size — tracked for the minimap's viewport rectangle.
+  const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
   // Spacebar-hold pan: standard Figma/Miro pattern. Hold Space and drag
   // with left button to pan the canvas, even on top of nodes. Released —
   // back to normal interaction.
@@ -115,6 +118,21 @@ export default function Canvas({
   const canvasRef = useRef<HTMLDivElement>(null);
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+
+  // Track viewport pixel size for the minimap. ResizeObserver keeps it in
+  // sync with window/panel resizes without polling.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setViewportSize({ w: r.width, h: r.height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // ─────────────────────────────── Drag
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -1031,6 +1049,18 @@ export default function Canvas({
               <Maximize size={11} />
             </button>
           </div>
+
+          {/* Minimap — overview + click-to-navigate. Hidden when empty. */}
+          {graph.nodes.length > 0 && (
+            <Minimap
+              nodes={graph.nodes}
+              nodeWidth={NODE_WIDTH}
+              pan={pan}
+              zoom={zoom}
+              viewportSize={viewportSize}
+              onNavigate={setPan}
+            />
+          )}
 
           <RunsPanel runs={runs} />
         </div>
