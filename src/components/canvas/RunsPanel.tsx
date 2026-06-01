@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { ChevronDown, ChevronUp, Activity, CheckCircle2, XCircle, Clock } from "lucide-react";
 
 export type RunSummary = {
@@ -29,8 +29,40 @@ export default function RunsPanel({
 }) {
   const [collapsed, setCollapsed] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Draggable position — offset (px) from the default bottom-right anchor.
+  // Negative dx moves left, negative dy moves up. Persists for the session.
+  const [offset, setOffset] = useState({ dx: 0, dy: 0 });
+  const dragState = useRef<{ startX: number; startY: number; baseDx: number; baseDy: number } | null>(null);
 
   const activeCount = runs.filter((r) => r.status === "running").length;
+
+  function onDragStart(e: React.PointerEvent) {
+    // Only start drag from the header bar, and not when clicking the
+    // collapse chevron (that's a separate click handler).
+    dragState.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      baseDx: offset.dx,
+      baseDy: offset.dy,
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+  function onDragMove(e: React.PointerEvent) {
+    const d = dragState.current;
+    if (!d) return;
+    setOffset({
+      dx: d.baseDx + (e.clientX - d.startX),
+      dy: d.baseDy + (e.clientY - d.startY),
+    });
+  }
+  function onDragEnd(e: React.PointerEvent) {
+    dragState.current = null;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }
 
   function toggleExpanded(id: string) {
     setExpanded((s) => {
@@ -44,18 +76,32 @@ export default function RunsPanel({
   if (runs.length === 0) return null;
 
   return (
-    <div className="absolute right-4 bottom-4 z-20 w-80 rounded-xl bg-bg-card border border-border shadow-panel overflow-hidden">
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="w-full flex items-center gap-2 px-3.5 py-2.5 hover:bg-bg-hover border-b border-border"
+    <div
+      className="absolute right-4 bottom-4 z-20 w-80 rounded-xl bg-bg-card border border-border shadow-panel overflow-hidden"
+      style={{ transform: `translate(${offset.dx}px, ${offset.dy}px)` }}
+    >
+      <div
+        className="w-full flex items-center gap-2 px-3.5 py-2.5 border-b border-border cursor-move select-none touch-none"
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
       >
         <Activity size={13} strokeWidth={1.5} className={activeCount > 0 ? "text-amber-500" : "text-fg-muted"} />
         <span className="text-[12px] font-medium text-fg flex-1 text-left">
           {activeCount > 0 ? `${activeCount} run${activeCount > 1 ? "s" : ""} in progress` : "Recent runs"}
         </span>
         <span className="text-[10px] bg-bg-subtle px-2 py-0.5 rounded-full text-fg-muted">{runs.length}</span>
-        {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-      </button>
+        {/* Collapse toggle — separate click target so dragging the bar
+            doesn't accidentally collapse the panel. */}
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="w-5 h-5 rounded flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+          title={collapsed ? "Expand" : "Collapse"}
+        >
+          {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        </button>
+      </div>
 
       {!collapsed && (
         <div className="max-h-80 overflow-y-auto">

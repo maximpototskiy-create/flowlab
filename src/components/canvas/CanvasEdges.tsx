@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
-import { NODE_TYPES, PORT_COLORS, type Graph, type GraphNode } from "@/lib/canvas/types";
+import { NODE_TYPES, PORT_COLORS, getActiveInputs, type Graph, type GraphNode } from "@/lib/canvas/types";
 import { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING } from "./CanvasNode";
 
 type EdgePos = { x1: number; y1: number; x2: number; y2: number; color: string; id: string };
@@ -26,7 +26,13 @@ const PORT_BASE_Y = NODE_HEADER_HEIGHT + 14 + PORT_RADIUS;
 function fallbackPortY(node: GraphNode, portName: string, side: "in" | "out"): number {
   const def = NODE_TYPES[node.type];
   if (!def) return PORT_BASE_Y;
-  const list = side === "in" ? def.inputs : def.outputs;
+  // IMPORTANT: input ports are mode-gated — CanvasNode renders only the
+  // ACTIVE inputs via getActiveInputs(def, config), so a port's visual row
+  // index is its index in the ACTIVE list, NOT in the full def.inputs.
+  // Using def.inputs here made the formula disagree with the measured DOM
+  // position, so dragging a node (which switches edges to this formula)
+  // made connectors jump downward. Mirror CanvasNode exactly.
+  const list = side === "in" ? getActiveInputs(def, node.config) : def.outputs;
   const idx = list.findIndex((p) => p.name === portName);
   return PORT_BASE_Y + (idx < 0 ? 0 : idx) * NODE_PORT_SPACING;
 }
@@ -126,11 +132,26 @@ export default function CanvasEdges({
   function portCentre(node: GraphNode, portName: string, side: "in" | "out"): { x: number; y: number } {
     const key = `${node.id}::${portName}::${side}`;
     const m = measuredRef.current.get(key);
+
+    // Node being dragged: shift its MEASURED port position by how far the
+    // node has moved (liveDragPos − committed position). This is exact —
+    // it reuses the real DOM-measured offset instead of the formula, so
+    // connectors stay glued to ports during drag regardless of whether the
+    // formula's PORT_BASE_Y / spacing happens to match the rendered layout.
+    // (The earlier formula-only approach drifted; this doesn't.)
+    if (liveDragNodeId === node.id && liveDragPos && m) {
+      const dx = liveDragPos.x - node.position.x;
+      const dy = liveDragPos.y - node.position.y;
+      return { x: m.x + dx, y: m.y + dy };
+    }
+
     if (m && liveDragNodeId !== node.id) {
-      // Use measured value for stationary nodes — pixel-perfect.
+      // Stationary node — pixel-perfect measured value.
       return m;
     }
-    // Fallback for dragging or unmeasured ports: formula.
+
+    // Fallback: formula (first paint / not yet measured / dragging an
+    // unmeasured port).
     const p = posOf(node);
     const y = p.y + fallbackPortY(node, portName, side);
     const x = side === "out" ? p.x + NODE_WIDTH : p.x;
