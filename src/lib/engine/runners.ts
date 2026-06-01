@@ -479,7 +479,30 @@ export async function runNode(
       // through anyway (e.g. user wired end_frame on a legacy node).
       const mode = String(config.mode ?? "image");
 
-      if (isImg2Vid && !startFrame && !legacyReference && referencesArr.length === 0 && !isText2Vid)
+      // Video-to-Video (Kling O3 v2v/edit + v2v/reference). Source video
+      // comes through the `source_video` port; refs (if any) become
+      // image_urls. keep_audio controls whether the source track survives.
+      const sourceVideo = inputs.source_video as string | undefined;
+      const keepAudio = config.keep_audio !== false; // default true
+      const isV2V = model.includes("/video-to-video/");
+
+      if (mode === "video-to-video") {
+        if (!isV2V) {
+          throw new Error(
+            `Mode is Video-to-Video but model "${model}" isn't a V2V endpoint. Pick "Kling O3 (V2V Edit)" or "(V2V Reference)".`,
+          );
+        }
+        if (!sourceVideo) {
+          throw new Error("Video-to-Video needs a source video connected to the Source video port");
+        }
+      }
+      // Guard the reverse too — a V2V model selected outside v2v mode has
+      // no source video and would 400 on fal.
+      if (isV2V && !sourceVideo) {
+        throw new Error("This V2V model needs a source video. Switch Mode to Video-to-Video and connect one.");
+      }
+
+      if (isImg2Vid && !startFrame && !legacyReference && referencesArr.length === 0 && !isText2Vid && !isV2V)
         throw new Error("This model needs a start frame or reference image");
 
       // Hard guardrails for References mode — fail fast with a clear
@@ -563,8 +586,32 @@ export async function runNode(
         payload.prompt = prompt;
       }
 
-      // Model-family-specific field mapping (verified from fal.ai docs)
-      if (model.includes("kling-video")) {
+      // ─── Video-to-Video branch ──────────────────────────────────────
+      // Kling O3 v2v/edit + v2v/reference. Different schema from i2v:
+      //   video_url (required) + prompt (references video as @Video1) +
+      //   optional image_urls (style/element refs, max 4 with video) +
+      //   keep_audio. We branch BEFORE the kling i2v block because these
+      //   endpoints also contain "kling-video" but must NOT get
+      //   start_image_url / end_image_url / aspect_ratio treatment.
+      if (isV2V) {
+        payload.video_url = sourceVideo;
+        if (referencesArr.length > 0) {
+          // O3 docs: max 4 total (elements + image refs) when using video.
+          payload.image_urls = referencesArr.slice(0, 4);
+          if (referencesArr.length > 4) {
+            console.warn(
+              `[videoGen:v2v] image refs capped from ${referencesArr.length} → 4 for ${model}`,
+            );
+          }
+        }
+        payload.keep_audio = keepAudio;
+        // The reference endpoint accepts duration + aspect_ratio; the edit
+        // endpoint derives them from the source video and ignores both.
+        if (model.includes("/video-to-video/reference")) {
+          payload.duration = duration;
+          payload.aspect_ratio = aspect;
+        }
+      } else if (model.includes("kling-video")) {
         // ─── Endpoint flavor detection ─────────────────────────────────
         // V3 is the newest, O3 is the older flagship line, V2.x is legacy.
         // The three lines disagree on field names — V3 i2v wants

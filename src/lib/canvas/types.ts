@@ -798,19 +798,27 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         label: "End frame (transition)",
         activeWhen: { field: "mode", values: ["keyframes"] },
       },
-      // Multi-port for References mode — up to 4 (Kling O3 reference-
-      // to-video pro/std, Seedance reference-to-video) or 7 (Kling O3
-      // 4K reference-to-video) reference images. Order is edge-creation
-      // order — matches the behaviour of imageGen's `images` port.
-      // BrandAssets node feeds its full selection here through the
-      // executor's multi-port expansion (already implemented).
+      // Source video for Video-to-Video mode (Kling O3 v2v/edit and
+      // v2v/reference). The endpoint takes video_url + a text prompt that
+      // references the video as @Video1, plus optional image references.
+      {
+        name: "source_video",
+        type: "video",
+        optional: true,
+        label: "Source video",
+        activeWhen: { field: "mode", values: ["video-to-video"] },
+      },
+      // Multi-port for References mode AND Video-to-Video mode. In v2v the
+      // refs become `image_urls` (style/element references, max 4 when a
+      // video is present per Kling O3 docs). In references mode they're the
+      // primary input. Order is edge-creation order.
       {
         name: "references",
         type: "image",
         optional: true,
         multi: true,
         label: "References (multi, up to 4-7)",
-        activeWhen: { field: "mode", values: ["references"] },
+        activeWhen: { field: "mode", values: ["references", "video-to-video"] },
       },
       // Legacy single `reference` port. Kept in the schema so existing
       // workflows that wired something to it before patch 5.1 don't
@@ -843,6 +851,10 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       model: "fal-ai/kling-video/v3/pro/image-to-video",
       duration: "5",
       aspect: "9:16",
+      // keep_audio — used only in video-to-video mode. Whether to preserve
+      // the original audio track from the source video (Kling O3 v2v
+      // endpoints default this to true).
+      keep_audio: true,
     },
     fields: [
       {
@@ -856,6 +868,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "keyframes", label: "Keyframes (start + end frame)" },
           { value: "references", label: "References (multi-image, up to 4-7)" },
           { value: "multi-shot", label: "Multi-shot (N scenes, 1 video)" },
+          { value: "video-to-video", label: "Video to Video (edit / restyle source)" },
         ],
       },
       {
@@ -890,6 +903,15 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "fal-ai/kling-video/o3/4k/image-to-video", label: "Kling O3 4K (I2V)" },
           { value: "fal-ai/kling-video/o3/4k/text-to-video", label: "Kling O3 4K (T2V)" },
           { value: "fal-ai/kling-video/o3/4k/reference-to-video", label: "Kling O3 4K (Reference)" },
+          // ─── Kling O3 Video-to-Video (mode: video-to-video) ───────────
+          // edit: transforms source video guided by prompt + image refs
+          //   (@Image1) + elements (@Element1). keep_audio default true.
+          // reference: style-transfers from a reference video, preserving
+          //   cinematic motion/camera. Both take video_url + prompt.
+          { value: "fal-ai/kling-video/o3/pro/video-to-video/edit", label: "Kling O3 Pro (V2V Edit)" },
+          { value: "fal-ai/kling-video/o3/standard/video-to-video/edit", label: "Kling O3 Standard (V2V Edit)" },
+          { value: "fal-ai/kling-video/o3/pro/video-to-video/reference", label: "Kling O3 Pro (V2V Reference)" },
+          { value: "fal-ai/kling-video/o3/standard/video-to-video/reference", label: "Kling O3 Standard (V2V Reference)" },
           // ─── Kling 2.5 Turbo ──────────────────────────────────────────
           { value: "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", label: "Kling 2.5 Turbo Pro (T2V)" },
           // ─── Kling 2.1 (legacy, uses tail_image_url for end frame) ────
@@ -946,6 +968,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         ],
       },
       { name: "generate_audio", label: "Generate audio (Veo only)", type: "toggle" },
+      { name: "keep_audio", label: "Keep source audio (V2V only)", type: "toggle" },
     ],
     primaryField: "instructions",
     primaryLabel: "Instructions",
