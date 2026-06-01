@@ -2,7 +2,7 @@
 // Uses up to 2 API keys with simple round-robin to avoid one-key throttling.
 // Keys are read from env vars FAL_API_KEY_1 and FAL_API_KEY_2 (set in Vercel).
 
-import { isVisionCapable } from "@/lib/canvas/types";
+import { isVisionCapable, requiresReasoning } from "@/lib/canvas/types";
 
 let _keyIndex = 0;
 
@@ -176,6 +176,10 @@ async function falLLMText(
   if (typeof temperature === "number" && temperature !== 1) {
     body.temperature = temperature;
   }
+  // Reasoning models (gpt-oss-120b, gemini-3.x-preview) reject the request
+  // with 400 "Reasoning is mandatory and cannot be disabled" unless we
+  // explicitly send reasoning:true.
+  if (requiresReasoning(model)) body.reasoning = true;
 
   const res = await fetch("https://fal.run/openrouter/router", {
     method: "POST",
@@ -218,6 +222,7 @@ async function falLLMVision(
   if (typeof temperature === "number" && temperature !== 1) {
     body.temperature = temperature;
   }
+  if (requiresReasoning(model)) body.reasoning = true;
 
   const res = await fetch("https://fal.run/openrouter/router/vision", {
     method: "POST",

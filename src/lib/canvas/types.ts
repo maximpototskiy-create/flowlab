@@ -101,39 +101,43 @@ export const CATEGORY_ORDER: NodeCategory[] = [
 // ─────────────────────────────────────────────
 // `vision: true` means the model is in fal's Vision wrapper dropdown
 // (openrouter/router/vision endpoint). `vision: false` means text-only —
-// if user wires images to it, runner falls back to claude-sonnet-4.6.
-// Source of truth for the `vision` flag: fal openrouter/router/vision
-// docs example list (May 2026) + the playground dropdown.
+// `vision: true` means the model is in fal's Vision wrapper dropdown.
+// `reasoning: true` means fal requires reasoning enabled for this model
+// (it's a reasoning/thinking model — fal returns 400 "Reasoning is
+// mandatory for this endpoint and cannot be disabled" otherwise).
+// All entries below are VALIDATED against live fal responses (Maxim's
+// model self-ID test, June 2026): each one returns its real identity
+// or has a documented fix applied.
 export const LLM_MODELS = [
   // ─── Anthropic ──────────────────────────────────────────────────────
-  // Opus is documented for TEXT only — it's NOT in fal's Vision wrapper
-  // dropdown. Sonnet 4.6 and 4.5 work for both text and vision.
+  // All confirmed working: each replies "I am Claude by Anthropic".
+  // Opus is text-only (not in Vision dropdown); Sonnet does both.
   { id: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6 (text only) ⭐", vision: false },
   { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6", vision: true },
   { id: "anthropic/claude-sonnet-4.5", label: "Claude Sonnet 4.5", vision: true },
   // ─── OpenAI ─────────────────────────────────────────────────────────
-  // gpt-4o is in Vision dropdown. gpt-4.1 is in Text dropdown only.
-  // gpt-oss-120b — text only.
+  // gpt-4o + gpt-4.1 confirmed working. gpt-oss-120b is a REASONING model
+  // — fal rejects it with 400 unless reasoning:true is sent.
   { id: "openai/gpt-4o", label: "GPT-4o", vision: true },
   { id: "openai/gpt-4.1", label: "GPT-4.1 (text only)", vision: false },
-  { id: "openai/gpt-oss-120b", label: "GPT OSS 120B (text only)", vision: false },
+  { id: "openai/gpt-oss-120b", label: "GPT OSS 120B (reasoning)", vision: false, reasoning: true },
   // ─── Google ─────────────────────────────────────────────────────────
-  // gemini-2.5-flash confirmed in Vision docs. Gemini 3.x mentioned in
-  // audio docs but NOT in vision dropdown — assume text-only for now.
+  // gemini-2.5-flash confirmed working. gemini-3.1-pro-preview is a
+  // REASONING model (needs reasoning:true). gemini-3-pro-preview and
+  // gemini-3-flash-preview were REMOVED — fal returned "No endpoints
+  // found" for them (don't exist on the wrapper).
   { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", vision: true },
-  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (text)", vision: false },
-  { id: "google/gemini-3-pro-preview", label: "Gemini 3 Pro Preview (text)", vision: false },
-  { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash Preview (text)", vision: false },
+  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (reasoning)", vision: false, reasoning: true },
   // ─── Meta ──────────────────────────────────────────────────────────
   { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick (text only)", vision: false },
   // ─── Moonshot ──────────────────────────────────────────────────────
-  // Kimi K2.5 is in BOTH text and vision wrappers. Solid all-rounder.
   { id: "moonshotai/kimi-k2.5", label: "Kimi K2.5", vision: true },
-  // ─── Vision-only specialists (new in 5.3.3) ────────────────────────
-  // From Vision wrapper dropdown. These don't have a text-only mode in
-  // fal's wrappers as far as docs show — Qwen3-VL is the vision variant.
+  // ─── Alibaba ───────────────────────────────────────────────────────
   { id: "qwen/qwen3-vl-235b-a22b-instruct", label: "Qwen3-VL 235B (vision)", vision: true },
-  { id: "x-ai/grok-4-fast", label: "Grok-4 Fast", vision: true },
+  // ─── xAI ───────────────────────────────────────────────────────────
+  // grok-4-fast was deprecated by xAI (fal returned a deprecation 400).
+  // Switched to grok-4.3 as recommended.
+  { id: "x-ai/grok-4.3", label: "Grok 4.3", vision: true },
 ];
 
 /** Helper used by the runner — does this model accept image inputs on
@@ -143,6 +147,16 @@ export const LLM_MODELS = [
 export function isVisionCapable(modelId: string): boolean {
   const m = LLM_MODELS.find((x) => x.id === modelId);
   return m?.vision === true;
+}
+
+/** Helper used by the runner/client — does fal require reasoning enabled
+ *  for this model? Reasoning models (gpt-oss, gemini-3.x-preview) return
+ *  400 unless `reasoning: true` is in the request body. */
+export function requiresReasoning(modelId: string): boolean {
+  const m = LLM_MODELS.find((x) => x.id === modelId) as
+    | { reasoning?: boolean }
+    | undefined;
+  return m?.reasoning === true;
 }
 
 // ─────────────────────────────────────────────
