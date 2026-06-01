@@ -36,7 +36,7 @@ export async function ensureBucket() {
  *  The client uploads via supabase.storage.from(BUCKET).uploadToSignedUrl(). */
 export async function createUploadUrl(
   storagePath: string,
-): Promise<{ path: string; token: string }> {
+): Promise<{ path: string; token: string; signedUrl: string }> {
   await ensureBucket();
   const supa = adminClient();
   const { data, error } = await supa.storage
@@ -45,7 +45,7 @@ export async function createUploadUrl(
   if (error || !data) {
     throw new Error(`createSignedUploadUrl failed: ${error?.message ?? "no data"}`);
   }
-  return { path: storagePath, token: data.token };
+  return { path: storagePath, token: data.token, signedUrl: data.signedUrl };
 }
 
 /** Upload a remote URL's content to storage and return path. */

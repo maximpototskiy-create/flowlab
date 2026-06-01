@@ -28,6 +28,6 @@ export async function POST(req: Request) {
     ext: body.ext ?? "bin",
   });
 
-  const { path, token } = await createUploadUrl(storagePath);
-  return NextResponse.json({ bucket: BUCKET, path, token });
+  const { path, token, signedUrl } = await createUploadUrl(storagePath);
+  return NextResponse.json({ bucket: BUCKET, path, token, signedUrl });
 }

@@ -16,7 +16,6 @@ import CanvasToolbar from "./CanvasToolbar";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
-import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Minus, Plus, Maximize, Grid3X3 } from "lucide-react";
 
 type Drag = { nodeId: string; startX: number; startY: number; pointerX: number; pointerY: number };
@@ -705,14 +704,17 @@ export default function Canvas({
   // ─────────────────────────────── File upload helper (used by upload nodes)
   // Direct-to-Supabase upload: the file bytes go STRAIGHT from the browser
   // into Supabase Storage via a one-time signed URL, bypassing our
-  // serverless route (and its ~4.5MB body limit). This is what lets heavy
-  // video files upload. Three steps: (1) ask server for a signed upload
-  // token, (2) PUT the file directly to Supabase, (3) finalize — register
-  // the Asset row and get a signed download URL fal can fetch.
-  async function uploadFile(file: File): Promise<{ cdnUrl: string }> {
+  // serverless route (and its ~4.5MB body limit). Uses a raw XHR PUT so we
+  // get upload progress events (supabase-js uploadToSignedUrl gives no
+  // progress). Three steps: (1) signed upload URL, (2) PUT directly to
+  // Supabase with progress, (3) finalize — register Asset + download URL.
+  async function uploadFile(
+    file: File,
+    onProgress?: (pct: number) => void,
+  ): Promise<{ cdnUrl: string }> {
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "bin";
 
-    // (1) signed upload token
+    // (1) signed upload URL
     const signedRes = await fetch("/api/upload/signed-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -726,22 +728,38 @@ export default function Canvas({
     if (!signedRes.ok) {
       throw new Error(`Could not start upload (${signedRes.status})`);
     }
-    const { bucket, path, token } = (await signedRes.json()) as {
+    const { path, signedUrl } = (await signedRes.json()) as {
       bucket: string;
       path: string;
       token: string;
+      signedUrl: string;
     };
 
-    // (2) upload DIRECTLY to Supabase — no Vercel body limit on this path
-    const supa = createSupabaseBrowserClient();
-    const { error: upErr } = await supa.storage
-      .from(bucket)
-      .uploadToSignedUrl(path, token, file, {
-        contentType: file.type || "application/octet-stream",
-      });
-    if (upErr) {
-      throw new Error(`Upload failed: ${upErr.message}`);
-    }
+    // (2) PUT directly to Supabase with progress. The signed upload URL
+    // accepts a PUT with the raw file body; token is embedded in the URL,
+    // so no auth header is needed. x-upsert mirrors uploadToSignedUrl.
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", signedUrl, true);
+      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      xhr.setRequestHeader("x-upsert", "true");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else
+          reject(
+            new Error(
+              `Upload failed (${xhr.status})${xhr.responseText ? `: ${xhr.responseText.slice(0, 200)}` : ""}`,
+            ),
+          );
+      };
+      xhr.onerror = () => reject(new Error("Upload network error"));
+      xhr.send(file);
+    });
 
     // (3) finalize — Asset row + signed download URL
     const finRes = await fetch("/api/upload/finalize", {

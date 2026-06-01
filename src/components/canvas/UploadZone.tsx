@@ -13,7 +13,7 @@ export default function UploadZone({
 }: {
   kind: "image" | "video" | "audio";
   currentUrl: string;
-  onUpload: (file: File) => Promise<void>;
+  onUpload: (file: File, onProgress?: (pct: number) => void) => Promise<void>;
   onClear: () => void;
   onUrl?: (url: string) => void;
   /** Open this asset in a fullscreen Lightbox. If omitted, no Expand button
@@ -24,6 +24,7 @@ export default function UploadZone({
   const fileInput = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const accept = { image: "image/*", video: "video/*", audio: "audio/*" }[kind];
   const extLabel = { image: "JPG, PNG, WebP", video: "MP4, WebM, MOV", audio: "MP3, WAV, M4A" }[kind];
@@ -43,12 +44,14 @@ export default function UploadZone({
       return;
     }
     setUploading(true);
+    setProgress(0);
     try {
-      await onUpload(file);
+      await onUpload(file, (pct) => setProgress(pct));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(false);
+      setProgress(0);
     }
   }
 
@@ -137,9 +140,20 @@ export default function UploadZone({
           <Upload size={16} strokeWidth={1.5} />
         )}
         <div className="text-[11px]">
-          {uploading ? "Uploading…" : `Drop ${kind} here or click`}
+          {uploading ? `Uploading… ${progress}%` : `Drop ${kind} here or click`}
         </div>
-        <div className="text-[9px] text-fg-subtle">{extLabel}</div>
+        {uploading ? (
+          // Progress bar — fills as the file uploads. Falls back to an
+          // indeterminate look at 0% (before first progress event fires).
+          <div className="w-full mt-1 h-1.5 rounded-full bg-bg-subtle overflow-hidden">
+            <div
+              className="h-full bg-brand transition-[width] duration-150"
+              style={{ width: `${Math.max(3, progress)}%` }}
+            />
+          </div>
+        ) : (
+          <div className="text-[9px] text-fg-subtle">{extLabel}</div>
+        )}
       </button>
       {error && (
         <div className="mt-1.5 px-2 py-1.5 rounded bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 text-[10px] leading-snug">

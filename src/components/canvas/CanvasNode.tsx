@@ -68,7 +68,7 @@ function CanvasNodeImpl({
   onRun: () => void;
   onStop?: () => void;
   onExpand: () => void;
-  onUploadFile: (file: File) => Promise<{ cdnUrl: string }>;
+  onUploadFile: (file: File, onProgress?: (pct: number) => void) => Promise<{ cdnUrl: string }>;
   workflowMeta: { brandId: string | null; brandSlug?: string | null; projectId: string; workflowId: string };
 }) {
   const def = NODE_TYPES[node.type];
@@ -251,8 +251,8 @@ function CanvasNodeImpl({
           <UploadZone
             kind="image"
             currentUrl={(node.config.cdnUrl as string) || (node.config.dataUrl as string) || ""}
-            onUpload={async (file) => {
-              const r = await onUploadFile(file);
+            onUpload={async (file, onProgress) => {
+              const r = await onUploadFile(file, onProgress);
               onConfigChange("cdnUrl", r.cdnUrl);
               onConfigChange("dataUrl", r.cdnUrl);
               onConfigChange("filename", file.name);
@@ -274,8 +274,8 @@ function CanvasNodeImpl({
           <UploadZone
             kind="video"
             currentUrl={(node.config.cdnUrl as string) || (node.config.url as string) || ""}
-            onUpload={async (file) => {
-              const r = await onUploadFile(file);
+            onUpload={async (file, onProgress) => {
+              const r = await onUploadFile(file, onProgress);
               onConfigChange("cdnUrl", r.cdnUrl);
               onConfigChange("url", r.cdnUrl);
             }}
@@ -297,8 +297,8 @@ function CanvasNodeImpl({
           <UploadZone
             kind="audio"
             currentUrl={(node.config.cdnUrl as string) || (node.config.url as string) || ""}
-            onUpload={async (file) => {
-              const r = await onUploadFile(file);
+            onUpload={async (file, onProgress) => {
+              const r = await onUploadFile(file, onProgress);
               onConfigChange("cdnUrl", r.cdnUrl);
               onConfigChange("url", r.cdnUrl);
             }}
