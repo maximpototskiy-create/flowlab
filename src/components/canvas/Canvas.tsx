@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti,
-  type Graph, type GraphNode, type PortKind, EMPTY_GRAPH,
+  type Graph, type GraphNode, type PortKind, type Group, EMPTY_GRAPH,
 } from "@/lib/canvas/types";
 import CanvasNode, { NODE_WIDTH } from "./CanvasNode";
 import CanvasEdges from "./CanvasEdges";
@@ -37,6 +37,15 @@ type EdgeDraft = {
 };
 
 const STORAGE_AREA = { width: 5000, height: 4000 };
+
+// Drop deleted nodes from groups and discard groups that fall below 2
+// members. `remaining` is the surviving node list.
+function cleanGroups(groups: Group[] | undefined, remaining: GraphNode[]): Group[] {
+  const live = new Set(remaining.map((n) => n.id));
+  return (groups ?? [])
+    .map((gr) => ({ ...gr, nodeIds: gr.nodeIds.filter((id) => live.has(id)) }))
+    .filter((gr) => gr.nodeIds.length >= 2);
+}
 
 export default function Canvas({
   workflowId,
@@ -301,7 +310,7 @@ export default function Canvas({
     (type: string, canvasX: number, canvasY: number, opts?: { connectFrom?: { node: string; port: string }; toInput?: string }) => {
       const newNode = makeNode(type, { x: canvasX - NODE_WIDTH / 2, y: canvasY - 30 });
       setGraph((g) => {
-        const next: Graph = { nodes: [...g.nodes, newNode], edges: g.edges };
+        const next: Graph = { nodes: [...g.nodes, newNode], edges: g.edges, groups: g.groups };
         if (opts?.connectFrom && opts.toInput) {
           next.edges = [...next.edges, makeEdge(opts.connectFrom.node, opts.connectFrom.port, newNode.id, opts.toInput)];
         }
@@ -313,10 +322,14 @@ export default function Canvas({
   );
 
   const deleteNode = useCallback((nodeId: string) => {
-    setGraph((g) => ({
-      nodes: g.nodes.filter((n) => n.id !== nodeId),
-      edges: g.edges.filter((e) => e.from.nodeId !== nodeId && e.to.nodeId !== nodeId),
-    }));
+    setGraph((g) => {
+      const nodes = g.nodes.filter((n) => n.id !== nodeId);
+      return {
+        nodes,
+        edges: g.edges.filter((e) => e.from.nodeId !== nodeId && e.to.nodeId !== nodeId),
+        groups: cleanGroups(g.groups, nodes),
+      };
+    });
     setSelectedIds((s) => {
       if (!s.has(nodeId)) return s;
       const next = new Set(s);
@@ -330,10 +343,14 @@ export default function Canvas({
   const deleteSelected = useCallback(() => {
     setSelectedIds((sel) => {
       if (sel.size === 0) return sel;
-      setGraph((g) => ({
-        nodes: g.nodes.filter((n) => !sel.has(n.id)),
-        edges: g.edges.filter((e) => !sel.has(e.from.nodeId) && !sel.has(e.to.nodeId)),
-      }));
+      setGraph((g) => {
+        const nodes = g.nodes.filter((n) => !sel.has(n.id));
+        return {
+          nodes,
+          edges: g.edges.filter((e) => !sel.has(e.from.nodeId) && !sel.has(e.to.nodeId)),
+          groups: cleanGroups(g.groups, nodes),
+        };
+      });
       return new Set();
     });
   }, []);
@@ -354,6 +371,43 @@ export default function Canvas({
       }
       if (prev.has(nodeId) && prev.size > 1) return prev;
       return new Set([nodeId]);
+    });
+  }
+
+  // ─────────────────────────────── Groups
+  // Group the current selection into a labelled box. Groups store only node
+  // ids — their on-screen box is computed live from member positions, so it
+  // follows drags and auto-organize automatically.
+  const groupSelected = useCallback(() => {
+    setSelectedIds((sel) => {
+      if (sel.size < 2) return sel; // need ≥2 to form a group
+      const ids = [...sel];
+      const group: Group = { id: `grp-${Date.now().toString(36)}`, nodeIds: ids };
+      setGraph((g) => ({ ...g, groups: [...(g.groups ?? []), group] }));
+      return sel;
+    });
+  }, []);
+
+  // Ungroup: drop any group that contains a currently-selected node.
+  const ungroupSelected = useCallback(() => {
+    setSelectedIds((sel) => {
+      if (sel.size === 0) return sel;
+      setGraph((g) => ({
+        ...g,
+        groups: (g.groups ?? []).filter((gr) => !gr.nodeIds.some((id) => sel.has(id))),
+      }));
+      return sel;
+    });
+  }, []);
+
+  // Select every node belonging to a group (used when its box is clicked).
+  function selectGroup(groupId: string, additive?: boolean) {
+    const gr = (graph.groups ?? []).find((x) => x.id === groupId);
+    if (!gr) return;
+    setSelectedIds((prev) => {
+      const next = additive ? new Set(prev) : new Set<string>();
+      for (const id of gr.nodeIds) next.add(id);
+      return next;
     });
   }
 
@@ -770,10 +824,18 @@ export default function Canvas({
         startRun(selected);
         return;
       }
+
+      // Cmd/Ctrl+G → group selection · Cmd/Ctrl+Shift+G → ungroup
+      if (meta && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        if (e.shiftKey) ungroupSelected();
+        else groupSelected();
+        return;
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, graph.nodes, ]);
+  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, groupSelected, ungroupSelected, graph.nodes, ]);
 
   // ─────────────────────────────── Pan & background interaction
   function onCanvasPointerDown(e: React.PointerEvent) {
@@ -1182,6 +1244,54 @@ export default function Canvas({
               transformOrigin: "0 0",
             }}
           >
+            {/* Group boxes — drawn behind edges/nodes. Box is computed live
+                from member positions so it follows drags & auto-organize. */}
+            {(graph.groups ?? []).map((gr) => {
+              const members = gr.nodeIds
+                .map((id) => graph.nodes.find((n) => n.id === id))
+                .filter((n): n is GraphNode => !!n);
+              if (members.length === 0) return null;
+              const PAD = 24;
+              const LABEL_H = 20;
+              const NODE_H = 90;
+              let minX = Infinity;
+              let minY = Infinity;
+              let maxX = -Infinity;
+              let maxY = -Infinity;
+              for (const n of members) {
+                minX = Math.min(minX, n.position.x);
+                minY = Math.min(minY, n.position.y);
+                maxX = Math.max(maxX, n.position.x + NODE_WIDTH);
+                maxY = Math.max(maxY, n.position.y + NODE_H);
+              }
+              const allSelected = members.every((n) => selectedIds.has(n.id));
+              return (
+                <div
+                  key={gr.id}
+                  onPointerDown={(e) => {
+                    // Let pan gestures (middle/alt/space) pass through to the
+                    // canvas instead of selecting the group.
+                    if (e.button !== 0 || e.altKey || spaceHeld) return;
+                    e.stopPropagation();
+                    selectGroup(gr.id, e.shiftKey || e.metaKey || e.ctrlKey);
+                  }}
+                  className={`absolute rounded-xl border border-dashed cursor-pointer ${
+                    allSelected ? "border-brand bg-brand/10" : "border-brand/40 bg-brand/5"
+                  }`}
+                  style={{
+                    left: minX - PAD,
+                    top: minY - PAD - LABEL_H,
+                    width: maxX - minX + PAD * 2,
+                    height: maxY - minY + PAD * 2 + LABEL_H,
+                  }}
+                >
+                  <div className="text-[10px] font-medium text-brand px-2 py-0.5 select-none">
+                    {gr.label ?? "Group"}
+                  </div>
+                </div>
+              );
+            })}
+
             <CanvasEdges
               graph={graph}
               hoveredEdgeId={hoveredEdge}

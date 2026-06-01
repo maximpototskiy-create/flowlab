@@ -1459,7 +1459,17 @@ export type GraphEdge = {
   to: { nodeId: string; port: string };
 };
 
-export type Graph = { nodes: GraphNode[]; edges: GraphEdge[] };
+// A visual grouping of nodes — drawn as a labelled box behind them. Purely
+// organisational: dragging the box moves all members, clicking it selects
+// them. Optional on Graph so existing graphs (saved before groups existed)
+// keep working untouched.
+export type Group = {
+  id: string;
+  nodeIds: string[];
+  label?: string;
+};
+
+export type Graph = { nodes: GraphNode[]; edges: GraphEdge[]; groups?: Group[] };
 
 export const EMPTY_GRAPH: Graph = { nodes: [], edges: [] };
 
