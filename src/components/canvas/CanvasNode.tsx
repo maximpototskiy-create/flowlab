@@ -62,7 +62,7 @@ function CanvasNodeImpl({
   onPointerDown: (e: React.PointerEvent) => void;
   onOutputPortDown: (portId: string, e: React.PointerEvent) => void;
   onInputPortUp: (portId: string, e: React.PointerEvent) => void;
-  onSelect: () => void;
+  onSelect: (additive?: boolean) => void;
   onDelete: () => void;
   onConfigChange: (key: string, value: unknown) => void;
   onRun: () => void;
@@ -115,7 +115,7 @@ function CanvasNodeImpl({
       }}
       onClick={(e) => {
         e.stopPropagation();
-        onSelect();
+        onSelect(e.shiftKey || e.metaKey || e.ctrlKey);
       }}
     >
       {/* Header — colored top */}

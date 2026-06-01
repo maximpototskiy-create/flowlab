@@ -16,9 +16,19 @@ import CanvasToolbar from "./CanvasToolbar";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
-import { Minus, Plus, Maximize, Grid3X3 } from "lucide-react";
+import { autoLayout } from "@/lib/canvas/autoLayout";
+import { Minus, Plus, Maximize, Grid3X3, Network } from "lucide-react";
 
-type Drag = { nodeId: string; startX: number; startY: number; pointerX: number; pointerY: number };
+type Drag = {
+  nodeId: string;
+  startX: number;
+  startY: number;
+  pointerX: number;
+  pointerY: number;
+  // When dragging a multi-selection, the start positions of every node
+  // that moves together (includes the grabbed node). Absent = single node.
+  group?: { nodeId: string; startX: number; startY: number }[];
+};
 type EdgeDraft = {
   fromNode: string;
   fromPort: string;
@@ -79,7 +89,18 @@ export default function Canvas({
       }),
     };
   });
-  const [selected, setSelected] = useState<string | null>(null);
+  // Multi-select: a Set of selected node ids. Single-select is just a
+  // one-element set. `selected` (legacy single id) is derived as the sole
+  // member when exactly one node is selected — used by actions that only
+  // make sense for one node (copy/duplicate/run/expand).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selected = selectedIds.size === 1 ? [...selectedIds][0] : null;
+  function setSelected(id: string | null) {
+    setSelectedIds(id ? new Set([id]) : new Set());
+  }
+  // Marquee (rubber-band) selection rectangle, in canvas coords. Null when
+  // not marqueeing.
+  const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
   // ─────────────────────────────── Save state
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -140,6 +161,13 @@ export default function Canvas({
   // We mutate the DOM transform directly instead of going through React state on each frame.
   // Only commit to setGraph on pointer up.
   const liveDragPos = useRef<{ x: number; y: number } | null>(null);
+  // Live positions of ALL nodes moving in the current (possibly multi-node)
+  // drag — keyed by nodeId. Read by CanvasEdges so every dragged node's
+  // edges follow in real time.
+  const liveDragPositions = useRef<Map<string, { x: number; y: number }> | null>(null);
+  // Marquee rubber-band rectangle in canvas coords (mirrors `marquee` state
+  // for the always-mounted pointer listeners).
+  const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   // Tick increments on every drag frame to make edges re-render with the new position.
   // (Nodes themselves use direct DOM transform — no React re-render needed.)
   const [dragTick, setDragTick] = useState(0);
@@ -289,12 +317,64 @@ export default function Canvas({
       nodes: g.nodes.filter((n) => n.id !== nodeId),
       edges: g.edges.filter((e) => e.from.nodeId !== nodeId && e.to.nodeId !== nodeId),
     }));
-    if (selected === nodeId) setSelected(null);
+    setSelectedIds((s) => {
+      if (!s.has(nodeId)) return s;
+      const next = new Set(s);
+      next.delete(nodeId);
+      return next;
+    });
     if (expandedNodeId === nodeId) setExpandedNodeId(null);
-  }, [selected, expandedNodeId]);
+  }, [expandedNodeId]);
+
+  // Delete every selected node (and their edges) in one shot.
+  const deleteSelected = useCallback(() => {
+    setSelectedIds((sel) => {
+      if (sel.size === 0) return sel;
+      setGraph((g) => ({
+        nodes: g.nodes.filter((n) => !sel.has(n.id)),
+        edges: g.edges.filter((e) => !sel.has(e.from.nodeId) && !sel.has(e.to.nodeId)),
+      }));
+      return new Set();
+    });
+  }, []);
 
   const deleteEdge = useCallback((edgeId: string) => {
     setGraph((g) => ({ ...g, edges: g.edges.filter((e) => e.id !== edgeId) }));
+  }, []);
+
+  // Select a node. additive (shift/cmd-click) toggles it in the current
+  // selection; otherwise it becomes the sole selection.
+  function toggleSelect(nodeId: string, additive?: boolean) {
+    setSelectedIds((prev) => {
+      if (additive) {
+        const next = new Set(prev);
+        if (next.has(nodeId)) next.delete(nodeId);
+        else next.add(nodeId);
+        return next;
+      }
+      if (prev.has(nodeId) && prev.size > 1) return prev;
+      return new Set([nodeId]);
+    });
+  }
+
+  // Auto-organize: re-position all nodes into a left-to-right layered
+  // layout following the data-flow edges. Pure layout in autoLayout();
+  // here we just apply the new positions and recenter the view.
+  const organizeNodes = useCallback(() => {
+    setGraph((g) => {
+      if (g.nodes.length === 0) return g;
+      const pos = autoLayout(g.nodes, g.edges);
+      return {
+        ...g,
+        nodes: g.nodes.map((n) => {
+          const p = pos.get(n.id);
+          return p ? { ...n, position: p } : n;
+        }),
+      };
+    });
+    // Recenter so the freshly-laid-out graph is visible from the top-left.
+    setZoom(1);
+    setPan({ x: 80, y: 80 });
   }, []);
 
   const updateNodeConfig = useCallback((nodeId: string, key: string, value: unknown) => {
@@ -330,12 +410,23 @@ export default function Canvas({
     e.stopPropagation();
     const node = graph.nodes.find((n) => n.id === nodeId);
     if (!node) return;
+    // If the grabbed node is part of a multi-selection, drag the whole
+    // selection together. Otherwise just this node.
+    const groupIds =
+      selectedIds.has(nodeId) && selectedIds.size > 1 ? [...selectedIds] : [nodeId];
+    const group = groupIds
+      .map((id) => {
+        const n = graph.nodes.find((x) => x.id === id);
+        return n ? { nodeId: id, startX: n.position.x, startY: n.position.y } : null;
+      })
+      .filter((x): x is { nodeId: string; startX: number; startY: number } => x !== null);
     setDrag({
       nodeId,
       startX: node.position.x,
       startY: node.position.y,
       pointerX: e.clientX,
       pointerY: e.clientY,
+      group,
     });
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
   }
@@ -405,6 +496,11 @@ export default function Canvas({
   const zoomRef = useRef(zoom);
   const screenToCanvasRef = useRef(screenToCanvas);
 
+  // Mirror graph into a ref so the always-mounted pointer listeners can read
+  // the current nodes (e.g. marquee hit-testing) without re-registering.
+  const graphRef = useRef(graph);
+  useEffect(() => { graphRef.current = graph; }, [graph]);
+
   // Keep refs in sync with state
   useEffect(() => { dragRef.current = drag; }, [drag]);
   useEffect(() => { edgeDraftRef.current = edgeDraft; }, [edgeDraft]);
@@ -425,16 +521,21 @@ export default function Canvas({
       if (drag) {
         const dx = (ptr.x - drag.pointerX) / zoom;
         const dy = (ptr.y - drag.pointerY) / zoom;
-        const newX = drag.startX + dx;
-        const newY = drag.startY + dy;
-        liveDragPos.current = { x: newX, y: newY };
-        // Direct DOM update — no React re-render of nodes during drag
-        const el = document.querySelector(`[data-node-id="${drag.nodeId}"]`) as HTMLElement | null;
-        if (el) {
-          el.style.transform = `translate(${newX}px, ${newY}px)`;
+        // Move every node in the drag group (single-node drag = group of 1).
+        const group = drag.group ?? [
+          { nodeId: drag.nodeId, startX: drag.startX, startY: drag.startY },
+        ];
+        const livePositions = new Map<string, { x: number; y: number }>();
+        for (const gi of group) {
+          const nx = gi.startX + dx;
+          const ny = gi.startY + dy;
+          livePositions.set(gi.nodeId, { x: nx, y: ny });
+          const el = document.querySelector(`[data-node-id="${gi.nodeId}"]`) as HTMLElement | null;
+          if (el) el.style.transform = `translate(${nx}px, ${ny}px)`;
         }
+        liveDragPos.current = livePositions.get(drag.nodeId) ?? null;
+        liveDragPositions.current = livePositions;
         // Edges still need re-render but it's cheap — they're SVG paths.
-        // Tick increments — CanvasEdges reads liveDragPos.current via the ref.
         setDragTick((t) => t + 1);
       }
       if (edgeDraft) {
@@ -447,11 +548,18 @@ export default function Canvas({
           y: panStart.current.panY + (ptr.y - panStart.current.y),
         });
       }
+      if (marqueeRef.current) {
+        const pt = screenToCanvas(ptr.x, ptr.y);
+        const next = { ...marqueeRef.current, x2: pt.x, y2: pt.y };
+        marqueeRef.current = next;
+        setMarquee(next);
+      }
     }
 
     function onMove(e: PointerEvent) {
       lastPointer.current = { x: e.clientX, y: e.clientY };
-      const hasAction = dragRef.current || edgeDraftRef.current || isPanningRef.current;
+      const hasAction =
+        dragRef.current || edgeDraftRef.current || isPanningRef.current || marqueeRef.current;
       if (!rafPending.current && hasAction) {
         rafPending.current = true;
         requestAnimationFrame(applyDrag);
@@ -463,19 +571,19 @@ export default function Canvas({
       const isPanning = isPanningRef.current;
       const screenToCanvas = screenToCanvasRef.current;
       if (drag) {
-        // Commit final position to graph state — this triggers React re-render once.
-        const finalPos = liveDragPos.current;
-        if (finalPos) {
+        // Commit final positions of ALL dragged nodes to graph state.
+        const livePositions = liveDragPositions.current;
+        if (livePositions && livePositions.size > 0) {
           setGraph((g) => ({
             ...g,
-            nodes: g.nodes.map((n) =>
-              n.id === drag.nodeId
-                ? { ...n, position: { x: finalPos.x, y: finalPos.y } }
-                : n,
-            ),
+            nodes: g.nodes.map((n) => {
+              const p = livePositions.get(n.id);
+              return p ? { ...n, position: { x: p.x, y: p.y } } : n;
+            }),
           }));
         }
         liveDragPos.current = null;
+        liveDragPositions.current = null;
         setDrag(null);
       }
       if (edgeDraft) {
@@ -552,6 +660,34 @@ export default function Canvas({
         setIsPanning(false);
         panStart.current = null;
       }
+      if (marqueeRef.current) {
+        const m = marqueeRef.current;
+        marqueeRef.current = null;
+        setMarquee(null);
+        const minX = Math.min(m.x1, m.x2);
+        const maxX = Math.max(m.x1, m.x2);
+        const minY = Math.min(m.y1, m.y2);
+        const maxY = Math.max(m.y1, m.y2);
+        // Ignore tiny marquees (treated as a plain click / deselect).
+        if (Math.abs(maxX - minX) < 6 && Math.abs(maxY - minY) < 6) return;
+        const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+        // A node is selected if its box intersects the marquee rect.
+        const hit = new Set<string>();
+        for (const n of graphRef.current.nodes) {
+          const nx1 = n.position.x;
+          const ny1 = n.position.y;
+          const nx2 = n.position.x + NODE_WIDTH;
+          const ny2 = n.position.y + 90; // representative node height
+          const intersects = nx1 < maxX && nx2 > minX && ny1 < maxY && ny2 > minY;
+          if (intersects) hit.add(n.id);
+        }
+        setSelectedIds((prev) => {
+          if (!additive) return hit;
+          const next = new Set(prev);
+          for (const id of hit) next.add(id);
+          return next;
+        });
+      }
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -574,10 +710,10 @@ export default function Canvas({
 
       const meta = e.metaKey || e.ctrlKey;
 
-      // Delete / Backspace → delete selected
-      if ((e.key === "Delete" || e.key === "Backspace") && selected && !expandedNodeId) {
+      // Delete / Backspace → delete ALL selected nodes
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.size > 0 && !expandedNodeId) {
         e.preventDefault();
-        deleteNode(selected);
+        deleteSelected();
         return;
       }
 
@@ -586,6 +722,13 @@ export default function Canvas({
         setSelected(null);
         setCtxMenu(null);
         setConnPicker(null);
+        return;
+      }
+
+      // Cmd/Ctrl+A → select all nodes
+      if (meta && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        setSelectedIds(new Set(graph.nodes.map((n) => n.id)));
         return;
       }
 
@@ -630,7 +773,7 @@ export default function Canvas({
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selected, expandedNodeId, deleteNode, graph.nodes, ]);
+  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, graph.nodes, ]);
 
   // ─────────────────────────────── Pan & background interaction
   function onCanvasPointerDown(e: React.PointerEvent) {
@@ -648,7 +791,13 @@ export default function Canvas({
       e.target === e.currentTarget ||
       (e.target as HTMLElement).classList.contains("canvas-bg-hit");
     if (isOnBackground) {
-      setSelected(null);
+      // Plain left-drag on empty canvas = marquee select. Clear selection
+      // first (unless shift/cmd held to add to it).
+      const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+      if (!additive) setSelected(null);
+      const pt = screenToCanvas(e.clientX, e.clientY);
+      marqueeRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
+      setMarquee(marqueeRef.current);
     }
   }
 
@@ -1039,6 +1188,7 @@ export default function Canvas({
               draftEdge={edgeDraft ? { x1: edgeDraft.x1, y1: edgeDraft.y1, x2: edgeDraft.x2, y2: edgeDraft.y2, color: PORT_COLORS[edgeDraft.fromKind] } : null}
               liveDragNodeId={drag?.nodeId ?? null}
               liveDragPos={liveDragPos.current}
+              liveDragPositions={liveDragPositions.current}
               dragTick={dragTick}
               pan={pan}
               zoom={zoom}
@@ -1046,6 +1196,18 @@ export default function Canvas({
               onDelete={deleteEdge}
             />
 
+            {/* Marquee rubber-band rectangle (canvas coords) */}
+            {marquee && (
+              <div
+                className="absolute border border-brand bg-brand/10 pointer-events-none rounded-sm"
+                style={{
+                  left: Math.min(marquee.x1, marquee.x2),
+                  top: Math.min(marquee.y1, marquee.y2),
+                  width: Math.abs(marquee.x2 - marquee.x1),
+                  height: Math.abs(marquee.y2 - marquee.y1),
+                }}
+              />
+            )}
             {graph.nodes.map((node) => {
               // Compute upstream string-typed inputs for this node so the
               // CanvasNode can render a "← context preview" above the
@@ -1072,12 +1234,12 @@ export default function Canvas({
                 node={node}
                 edges={graph.edges}
                 resolvedInputs={resolvedInputs}
-                isSelected={selected === node.id}
+                isSelected={selectedIds.has(node.id)}
                 isRunning={isRunning}
                 onPointerDown={(e) => startNodeDrag(node.id, e)}
                 onOutputPortDown={(portId, e) => startEdge(node.id, portId, e)}
                 onInputPortUp={(portId, e) => endEdgeOnInput(node.id, portId, e)}
-                onSelect={() => setSelected(node.id)}
+                onSelect={(additive) => toggleSelect(node.id, additive)}
                 onDelete={() => deleteNode(node.id)}
                 onConfigChange={(k, v) => updateNodeConfig(node.id, k, v)}
                 onRun={() => startRun(node.id)}
@@ -1128,6 +1290,13 @@ export default function Canvas({
               title="Reset view"
             >
               <Maximize size={11} />
+            </button>
+            <button
+              onClick={organizeNodes}
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              title="Auto-organize (arrange nodes by flow)"
+            >
+              <Network size={12} />
             </button>
           </div>
 

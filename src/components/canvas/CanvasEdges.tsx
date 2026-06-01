@@ -43,6 +43,7 @@ export default function CanvasEdges({
   draftEdge,
   liveDragNodeId,
   liveDragPos,
+  liveDragPositions,
   // dragTick / pan / zoom are passed only to trigger re-render on relevant
   // changes from the parent — we don't read them directly except where noted.
   dragTick,
@@ -56,6 +57,9 @@ export default function CanvasEdges({
   draftEdge: { x1: number; y1: number; x2: number; y2: number; color: string } | null;
   liveDragNodeId?: string | null;
   liveDragPos?: { x: number; y: number } | null;
+  /** Live positions of all nodes in a multi-node drag, keyed by id. Takes
+   *  precedence over liveDragNodeId/liveDragPos when present. */
+  liveDragPositions?: Map<string, { x: number; y: number }> | null;
   dragTick?: number;
   pan?: { x: number; y: number };
   zoom?: number;
@@ -122,30 +126,38 @@ export default function CanvasEdges({
     // deps — the dragged node's position is handled via the fallback formula.
   }, [graph.nodes, graph.edges, pan?.x, pan?.y, zoom]);
 
+  // Helper: live drag position of a node if it's being dragged (handles
+  // both single-node liveDragPos and multi-node liveDragPositions map).
+  function livePosOf(nodeId: string): { x: number; y: number } | null {
+    if (liveDragPositions && liveDragPositions.has(nodeId)) {
+      return liveDragPositions.get(nodeId)!;
+    }
+    if (liveDragNodeId === nodeId && liveDragPos) return liveDragPos;
+    return null;
+  }
+
   // Helper: position of a node (possibly overridden by live drag).
   function posOf(n: GraphNode): { x: number; y: number } {
-    if (liveDragNodeId && liveDragPos && n.id === liveDragNodeId) return liveDragPos;
-    return n.position;
+    return livePosOf(n.id) ?? n.position;
   }
 
   // Helper: port centre — measured first, formula fallback.
   function portCentre(node: GraphNode, portName: string, side: "in" | "out"): { x: number; y: number } {
     const key = `${node.id}::${portName}::${side}`;
     const m = measuredRef.current.get(key);
+    const live = livePosOf(node.id);
 
     // Node being dragged: shift its MEASURED port position by how far the
-    // node has moved (liveDragPos − committed position). This is exact —
-    // it reuses the real DOM-measured offset instead of the formula, so
-    // connectors stay glued to ports during drag regardless of whether the
-    // formula's PORT_BASE_Y / spacing happens to match the rendered layout.
-    // (The earlier formula-only approach drifted; this doesn't.)
-    if (liveDragNodeId === node.id && liveDragPos && m) {
-      const dx = liveDragPos.x - node.position.x;
-      const dy = liveDragPos.y - node.position.y;
+    // node has moved (live − committed position). This is exact — it reuses
+    // the real DOM-measured offset instead of the formula, so connectors
+    // stay glued to ports during drag (single or multi-node).
+    if (live && m) {
+      const dx = live.x - node.position.x;
+      const dy = live.y - node.position.y;
       return { x: m.x + dx, y: m.y + dy };
     }
 
-    if (m && liveDragNodeId !== node.id) {
+    if (m && !live) {
       // Stationary node — pixel-perfect measured value.
       return m;
     }
