@@ -121,7 +121,7 @@ export default function Minimap({
 
   return (
     <div
-      className="absolute bottom-4 left-4 z-10 rounded-lg border border-border bg-bg-card/90 shadow-node backdrop-blur-sm overflow-hidden cursor-pointer"
+      className="absolute bottom-4 right-4 z-10 rounded-lg border border-border bg-bg-card/90 shadow-node backdrop-blur-sm overflow-hidden cursor-pointer"
       style={{ width: MM_W, height: MM_H }}
       onClick={handleClick}
       onPointerDown={(e) => e.stopPropagation()}

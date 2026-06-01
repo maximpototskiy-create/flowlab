@@ -750,12 +750,26 @@ export default function Canvas({
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) resolve();
-        else
+        else {
+          // Supabase returns 413 (sometimes wrapped in a 400 body) when the
+          // file exceeds the PROJECT-level upload size limit (50MB on the
+          // free plan — a Supabase setting, not something the app controls).
+          const txt = xhr.responseText ?? "";
+          const isTooLarge =
+            xhr.status === 413 ||
+            txt.includes('"statusCode":"413"') ||
+            txt.toLowerCase().includes("payload too large") ||
+            txt.toLowerCase().includes("exceeded the maximum");
           reject(
             new Error(
-              `Upload failed (${xhr.status})${xhr.responseText ? `: ${xhr.responseText.slice(0, 200)}` : ""}`,
+              isTooLarge
+                ? "File exceeds your Supabase upload limit (50MB on the free plan). " +
+                  "Raise it in Supabase Dashboard → Project Settings → Storage → " +
+                  "“Upload file size limit” (Pro plan needed above 50MB), or compress the video."
+                : `Upload failed (${xhr.status})${txt ? `: ${txt.slice(0, 160)}` : ""}`,
             ),
           );
+        }
       };
       xhr.onerror = () => reject(new Error("Upload network error"));
       xhr.send(file);
