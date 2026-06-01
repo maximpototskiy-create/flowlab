@@ -24,13 +24,29 @@ export default function UploadZone({
   const fileInput = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const accept = { image: "image/*", video: "video/*", audio: "audio/*" }[kind];
   const extLabel = { image: "JPG, PNG, WebP", video: "MP4, WebM, MOV", audio: "MP3, WAV, M4A" }[kind];
 
   async function handleFile(file: File) {
+    setError(null);
+    // Files now upload DIRECTLY to Supabase (signed URL) so the old ~4.5MB
+    // serverless limit is gone. We still cap at the bucket's 200MB ceiling
+    // (also matches Kling O3 v2v's max source-video size) to fail fast with
+    // a clear message rather than after a long upload.
+    const MAX_MB = 200;
+    if (file.size > MAX_MB * 1024 * 1024) {
+      setError(
+        `File is ${(file.size / 1024 / 1024).toFixed(1)}MB — over the ${MAX_MB}MB limit. ` +
+          `Compress the ${kind} or paste a hosted URL below.`,
+      );
+      return;
+    }
     setUploading(true);
     try {
       await onUpload(file);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(false);
     }
@@ -125,6 +141,11 @@ export default function UploadZone({
         </div>
         <div className="text-[9px] text-fg-subtle">{extLabel}</div>
       </button>
+      {error && (
+        <div className="mt-1.5 px-2 py-1.5 rounded bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 text-[10px] leading-snug">
+          {error}
+        </div>
+      )}
       {kind !== "image" && onUrl && (
         <input
           type="text"

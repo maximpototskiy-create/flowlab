@@ -4,7 +4,7 @@
 
 import { createClient as createServerClient } from "@supabase/supabase-js";
 
-const BUCKET = "flowlab-assets";
+export const BUCKET = "flowlab-assets";
 
 function adminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -16,9 +16,36 @@ function adminClient() {
 /** Ensure bucket exists (idempotent). Called on server startup / first asset upload. */
 export async function ensureBucket() {
   const supa = adminClient();
+  // 200MB — Kling O3 video-to-video accepts source videos up to 200MB.
+  // The bucket was originally created at 100MB; bump it if it already
+  // exists so big uploads don't get rejected by the storage layer.
+  const LIMIT = 1024 * 1024 * 200;
   const { data: buckets } = await supa.storage.listBuckets();
-  if (buckets?.some((b) => b.name === BUCKET)) return;
-  await supa.storage.createBucket(BUCKET, { public: false, fileSizeLimit: 1024 * 1024 * 100 });
+  const existing = buckets?.some((b) => b.name === BUCKET);
+  if (existing) {
+    await supa.storage.updateBucket(BUCKET, { public: false, fileSizeLimit: LIMIT });
+    return;
+  }
+  await supa.storage.createBucket(BUCKET, { public: false, fileSizeLimit: LIMIT });
+}
+
+/** Create a one-time signed UPLOAD url so the browser can PUT a file
+ *  DIRECTLY into Supabase Storage, bypassing our serverless route (and its
+ *  ~4.5MB request-body limit). Server uses the service-role key to authorise;
+ *  the returned token is single-use and scoped to exactly `storagePath`.
+ *  The client uploads via supabase.storage.from(BUCKET).uploadToSignedUrl(). */
+export async function createUploadUrl(
+  storagePath: string,
+): Promise<{ path: string; token: string }> {
+  await ensureBucket();
+  const supa = adminClient();
+  const { data, error } = await supa.storage
+    .from(BUCKET)
+    .createSignedUploadUrl(storagePath);
+  if (error || !data) {
+    throw new Error(`createSignedUploadUrl failed: ${error?.message ?? "no data"}`);
+  }
+  return { path: storagePath, token: data.token };
 }
 
 /** Upload a remote URL's content to storage and return path. */

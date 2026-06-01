@@ -16,6 +16,7 @@ import CanvasToolbar from "./CanvasToolbar";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
+import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Minus, Plus, Maximize, Grid3X3 } from "lucide-react";
 
 type Drag = { nodeId: string; startX: number; startY: number; pointerX: number; pointerY: number };
@@ -702,15 +703,63 @@ export default function Canvas({
 
 
   // ─────────────────────────────── File upload helper (used by upload nodes)
+  // Direct-to-Supabase upload: the file bytes go STRAIGHT from the browser
+  // into Supabase Storage via a one-time signed URL, bypassing our
+  // serverless route (and its ~4.5MB body limit). This is what lets heavy
+  // video files upload. Three steps: (1) ask server for a signed upload
+  // token, (2) PUT the file directly to Supabase, (3) finalize — register
+  // the Asset row and get a signed download URL fal can fetch.
   async function uploadFile(file: File): Promise<{ cdnUrl: string }> {
-    const fd = new FormData();
-    fd.append("file", file);
-    if (workflowMeta.brandId) fd.append("brandId", workflowMeta.brandId);
-    fd.append("projectId", workflowMeta.projectId);
-    fd.append("workflowId", workflowId);
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
-    if (!res.ok) throw new Error("Upload failed");
-    return (await res.json()) as { cdnUrl: string };
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "bin";
+
+    // (1) signed upload token
+    const signedRes = await fetch("/api/upload/signed-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ext,
+        brandId: workflowMeta.brandId,
+        projectId: workflowMeta.projectId,
+        workflowId,
+      }),
+    });
+    if (!signedRes.ok) {
+      throw new Error(`Could not start upload (${signedRes.status})`);
+    }
+    const { bucket, path, token } = (await signedRes.json()) as {
+      bucket: string;
+      path: string;
+      token: string;
+    };
+
+    // (2) upload DIRECTLY to Supabase — no Vercel body limit on this path
+    const supa = createSupabaseBrowserClient();
+    const { error: upErr } = await supa.storage
+      .from(bucket)
+      .uploadToSignedUrl(path, token, file, {
+        contentType: file.type || "application/octet-stream",
+      });
+    if (upErr) {
+      throw new Error(`Upload failed: ${upErr.message}`);
+    }
+
+    // (3) finalize — Asset row + signed download URL
+    const finRes = await fetch("/api/upload/finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        storagePath: path,
+        mime: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        brandId: workflowMeta.brandId,
+        projectId: workflowMeta.projectId,
+      }),
+    });
+    if (!finRes.ok) {
+      throw new Error(`Could not finalize upload (${finRes.status})`);
+    }
+    const { cdnUrl } = (await finRes.json()) as { cdnUrl: string };
+    return { cdnUrl };
   }
 
   // ─────────────────────────────── Run execution
