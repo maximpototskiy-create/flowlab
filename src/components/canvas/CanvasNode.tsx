@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, memo } from "react";
-import { ChevronDown, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand } from "lucide-react";
+import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand } from "lucide-react";
 import Lightbox from "./Lightbox";
 import { NODE_TYPES, getActiveInputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
@@ -77,6 +77,12 @@ function CanvasNodeImpl({
   const status = node.status ?? "idle";
   const color = node.type ? CAT_COLORS[def.category] : "#71717a";
   const [selectedResultIdx, setSelectedResultIdx] = useState(0);
+  // Inline-expand: a middle size between compact (default) and the full
+  // modal. Toggled by the chevron in the header. Only grows the node's
+  // CONTENT height (bigger textarea, bigger preview) — width stays
+  // NODE_WIDTH so output-port X positions (computed from NODE_WIDTH in
+  // CanvasEdges) don't drift and edges keep landing correctly.
+  const [inlineExpanded, setInlineExpanded] = useState(false);
   // Lightbox state — when set, renders fullscreen viewer for image/video.
   // `list` and `idx` enable ←/→ navigation through a multi-result carousel.
   const [lightbox, setLightbox] = useState<{
@@ -130,6 +136,26 @@ function CanvasNodeImpl({
           onPointerDown={(e) => e.stopPropagation()}
         >
           <Info size={11} strokeWidth={1.5} />
+        </button>
+
+        {/* Inline-expand toggle — middle size between compact and modal.
+            Grows the textarea + preview in place without opening the
+            fullscreen modal. Chevron flips to indicate state. */}
+        <button
+          className="w-5 h-5 rounded flex items-center justify-center text-fg-subtle hover:text-fg hover:bg-bg-hover"
+          title={inlineExpanded ? "Collapse" : "Expand inline"}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            setInlineExpanded((v) => !v);
+          }}
+        >
+          {inlineExpanded ? (
+            <ChevronUp size={12} strokeWidth={1.5} />
+          ) : (
+            <ChevronDown size={12} strokeWidth={1.5} />
+          )}
         </button>
 
         {def.fields.length > 0 && (
@@ -330,6 +356,7 @@ function CanvasNodeImpl({
             outputs={node.outputs ?? {}}
             results={node.results}
             selectedIdx={selectedResultIdx}
+            expanded={inlineExpanded}
             onSelectIdx={(i) => {
               setSelectedResultIdx(i);
               // Persist the selection so downstream nodes pick up the chosen
@@ -452,20 +479,23 @@ function CanvasNodeImpl({
                 {def.primaryLabel ?? "Instructions"}
               </label>
               <textarea
-                className="w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none min-h-[40px] max-h-[120px] leading-snug nodrag"
+                className={`w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none leading-snug nodrag ${
+                  inlineExpanded ? "min-h-[200px] max-h-[400px]" : "min-h-[40px] max-h-[120px]"
+                }`}
                 placeholder={def.primaryPlaceholder ?? "Write text…"}
                 value={(node.config[def.primaryField] as string) ?? ""}
                 onChange={(e) => onConfigChange(def.primaryField!, e.target.value)}
                 onMouseDown={(e) => e.stopPropagation()}
                 onPointerDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
-                // Auto-grow up to max-h. Past that point the textarea becomes
-                // scrollable in-place. For viewing the FULL text users can hit
-                // the Maximize2 icon in the header to open the expanded modal.
+                // Auto-grow up to max-h (120px compact / 400px inline-expanded).
+                // Past that point the textarea scrolls in place. For the FULL
+                // editor users can still hit Maximize2 for the modal.
                 ref={(el) => {
                   if (!el) return;
+                  const cap = inlineExpanded ? 400 : 120;
                   el.style.height = "auto";
-                  el.style.height = `${Math.min(120, el.scrollHeight)}px`;
+                  el.style.height = `${Math.min(cap, el.scrollHeight)}px`;
                 }}
               />
             </div>
@@ -748,6 +778,7 @@ function OutputPreview({
   selectedIdx,
   onSelectIdx,
   onExpand,
+  expanded,
 }: {
   outputs: Record<string, unknown>;
   results?: { value: string; mime?: string }[];
@@ -755,6 +786,8 @@ function OutputPreview({
   onSelectIdx: (i: number) => void;
   /** Open the URL in a fullscreen lightbox. */
   onExpand?: (url: string) => void;
+  /** Inline-expanded node — render a taller preview. */
+  expanded?: boolean;
 }) {
   const list = results && results.length > 0 ? results : Object.values(outputs).filter((v) => typeof v === "string").map((v) => ({ value: v as string }));
   if (list.length === 0) return null;
@@ -765,7 +798,7 @@ function OutputPreview({
   return (
     <div className="mb-2">
       <div className="relative group/preview">
-        <PreviewMedia url={url} />
+        <PreviewMedia url={url} expanded={expanded} />
         {/* Overlay expand button — appears on hover, opens fullscreen view */}
         {canExpand && onExpand && (
           <button
@@ -810,10 +843,13 @@ function OutputPreview({
   );
 }
 
-function PreviewMedia({ url }: { url: string }) {
+function PreviewMedia({ url, expanded }: { url: string; expanded?: boolean }) {
   if (!url) return null;
+  // Inline-expanded nodes show a bigger preview (max-h-80 = 320px) vs the
+  // compact default (max-h-40 = 160px).
+  const mediaMax = expanded ? "max-h-80" : "max-h-40";
   if (isVideo(url)) {
-    return <video src={url} controls muted className="w-full max-h-40 rounded-md bg-black" />;
+    return <video src={url} controls muted className={`w-full ${mediaMax} rounded-md bg-black`} />;
   }
   if (isAudio(url)) {
     return <audio src={url} controls className="w-full" />;
@@ -821,15 +857,12 @@ function PreviewMedia({ url }: { url: string }) {
   if (isImage(url) || url.startsWith("data:image")) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={url} alt="" className="w-full max-h-40 rounded-md object-cover bg-bg-subtle" />
+      <img src={url} alt="" className={`w-full ${mediaMax} rounded-md object-cover bg-bg-subtle`} />
     );
   }
   // text — compact view with scroll. The full text is always available via
   // the Maximize2 (Expand) button in the node header, which opens the
-  // NodeExpandedModal. Inside the node we cap at 160px to keep nodes
-  // visually compact (the screenshot reference user provided shows nodes
-  // shouldn't be very tall by default — focus is on the result, not the
-  // text wall).
+  // NodeExpandedModal. Inline-expanded shows more (400px vs 160px).
   return (
     <div className="relative rounded-md bg-bg-subtle border border-border text-fg group/text">
       <button
@@ -844,7 +877,11 @@ function PreviewMedia({ url }: { url: string }) {
       >
         Copy
       </button>
-      <div className="p-2 pr-12 max-h-[160px] overflow-auto text-[11px] font-mono whitespace-pre-wrap break-words leading-snug nodrag">
+      <div
+        className={`p-2 pr-12 overflow-auto text-[11px] font-mono whitespace-pre-wrap break-words leading-snug nodrag ${
+          expanded ? "max-h-[400px]" : "max-h-[160px]"
+        }`}
+      >
         {url}
       </div>
     </div>
