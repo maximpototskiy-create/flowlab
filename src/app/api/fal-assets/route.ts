@@ -62,6 +62,11 @@ export async function GET(req: Request): Promise<NextResponse> {
   if (searchImage) upstream.set("search_image_url", searchImage);
   const searchVideo = searchParams.get("search_video_url");
   if (searchVideo) upstream.set("search_video_url", searchVideo);
+  // Filter the feed by a character (semantic @mention) or a tag.
+  const characterId = searchParams.get("character_identifier");
+  if (characterId) upstream.append("character_identifier", characterId);
+  const tagId = searchParams.get("tag_id");
+  if (tagId) upstream.append("tag_id", tagId);
 
   const keys = getFalKeys();
   if (keys.length === 0) {

@@ -35,6 +35,29 @@ export default function AssetDrawer({
   const [limit, setLimit] = useState(60);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // fal taxonomy: tags + characters, and the active filter selection.
+  const [tags, setTags] = useState<{ id: string; name: string }[]>([]);
+  const [characters, setCharacters] = useState<{ id: string; name: string; identifier: string | null; cover: string | null }[]>([]);
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [activeChar, setActiveChar] = useState<string | null>(null);
+
+  // Load tags + characters once we're on the fal source.
+  useEffect(() => {
+    if (source !== "fal") return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/fal-taxonomy");
+        const data = await res.json();
+        if (!alive) return;
+        setTags(data.tags ?? []);
+        setCharacters(data.characters ?? []);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { alive = false; };
+  }, [source]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
@@ -53,6 +76,8 @@ export default function AssetDrawer({
       if (source === "fal" && similar) {
         p.set(similar.kind === "video" ? "search_video_url" : "search_image_url", similar.url);
       }
+      if (source === "fal" && activeTag) p.set("tag_id", activeTag);
+      if (source === "fal" && activeChar) p.set("character_identifier", activeChar);
       // UI = brand-kit screenshots for the current brand.
       if (source === "ui") {
         p.set("source", "brand_kit");
@@ -70,13 +95,18 @@ export default function AssetDrawer({
     } finally {
       if (append) setLoadingMore(false); else setLoading(false);
     }
-  }, [debouncedQ, source, similar, brandId]);
+  }, [debouncedQ, source, similar, brandId, activeTag, activeChar]);
 
   // Initial load + reload on filter change (resets to first page).
   useEffect(() => {
     setLimit(60);
     loadPage(60, false);
   }, [loadPage]);
+
+  // Clear taxonomy filters when leaving fal.
+  useEffect(() => {
+    if (source !== "fal") { setActiveTag(null); setActiveChar(null); }
+  }, [source]);
 
   const loadMore = useCallback(() => {
     const next = limit + 60;
@@ -167,6 +197,58 @@ export default function AssetDrawer({
           </div>
         )}
       </div>
+
+      {/* fal: characters + tags */}
+      {source === "fal" && (characters.length > 0 || tags.length > 0) && (
+        <div className="px-3 py-2 border-b border-border space-y-2">
+          {characters.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {characters.map((c) => {
+                const on = activeChar === c.identifier;
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => c.identifier && setActiveChar(on ? null : c.identifier)}
+                    disabled={!c.identifier}
+                    title={c.name}
+                    className={`flex-shrink-0 flex flex-col items-center gap-1 ${!c.identifier ? "opacity-40" : ""}`}
+                  >
+                    <span className={`w-9 h-9 rounded-full overflow-hidden border-2 ${on ? "border-brand" : "border-transparent"}`}>
+                      {c.cover ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={c.cover} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="w-full h-full flex items-center justify-center bg-bg text-fg-subtle text-[10px]">
+                          {c.name.slice(0, 1)}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-[8px] text-fg-muted max-w-[44px] truncate">{c.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {tags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {tags.map((t) => {
+                const on = activeTag === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setActiveTag(on ? null : t.id)}
+                    className={`px-2 py-0.5 rounded-full text-[9px] border transition ${
+                      on ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+                    }`}
+                  >
+                    #{t.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Similar-search banner */}
       {source === "fal" && similar && (
