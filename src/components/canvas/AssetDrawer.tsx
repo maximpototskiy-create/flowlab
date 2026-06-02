@@ -36,8 +36,10 @@ export default function AssetDrawer({
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // Don't filter by kind on the server — load once and filter tabs
+      // locally so switching tabs is instant and fal's own `type` is the
+      // source of truth (the server media_type filter was returning empty).
       const p = new URLSearchParams();
-      if (kind) p.set(source === "fal" ? "media_type" : "kind", kind);
       if (debouncedQ) p.set("q", debouncedQ);
       const endpoint = source === "fal" ? "/api/fal-assets" : "/api/assets";
       const res = await fetch(`${endpoint}?${p.toString()}`);
@@ -48,12 +50,18 @@ export default function AssetDrawer({
     } finally {
       setLoading(false);
     }
-  }, [kind, debouncedQ, source]);
+  }, [debouncedQ, source]);
 
   useEffect(() => { load(); }, [load]);
 
+  // Tab filter is purely local now → instant switching, no refetch.
+  const visible = kind ? assets.filter((a) => a.kind === kind) : assets;
+
   return (
-    <div className="absolute top-0 right-0 h-full w-[340px] z-30 bg-bg-card border-l border-border shadow-panel flex flex-col">
+    <div
+      className="absolute top-0 right-0 h-full w-[340px] z-30 bg-bg-card border-l border-border shadow-panel flex flex-col"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-3 h-12 border-b border-border">
         <span className="text-[12px] font-semibold text-fg">Asset library</span>
@@ -106,16 +114,16 @@ export default function AssetDrawer({
       </div>
 
       {/* Grid */}
-      <div className="flex-1 overflow-auto p-3">
+      <div className="flex-1 overflow-auto p-3" onWheel={(e) => e.stopPropagation()}>
         {loading ? (
           <div className="flex items-center justify-center py-12 text-fg-subtle">
             <Loader2 size={18} className="animate-spin" />
           </div>
-        ) : assets.length === 0 ? (
+        ) : visible.length === 0 ? (
           <p className="text-center text-fg-subtle text-[11px] py-12">No assets.</p>
         ) : (
           <div className="grid grid-cols-2 gap-2">
-            {assets.map((a) => (
+            {visible.map((a) => (
               <div
                 key={a.id}
                 draggable
