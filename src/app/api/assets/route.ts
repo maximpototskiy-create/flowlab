@@ -11,6 +11,7 @@ export async function GET(req: Request): Promise<NextResponse> {
   await requireUser();
   const { searchParams } = new URL(req.url);
   const get = (k: string) => searchParams.get(k) || undefined;
+  const limit = Math.min(Number(searchParams.get("limit")) || 120, 600);
   try {
     const data = await queryAssets({
       project: get("project"),
@@ -18,7 +19,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       kind: get("kind"),
       source: get("source"),
       q: get("q")?.trim(),
-      limit: 120,
+      limit,
     });
     return NextResponse.json(data);
   } catch (err) {

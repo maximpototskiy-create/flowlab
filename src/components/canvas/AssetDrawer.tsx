@@ -30,6 +30,8 @@ export default function AssetDrawer({
   const [preview, setPreview] = useState<AssetItem | null>(null);
   // "Find similar" mode: search fal by a reference media URL.
   const [similar, setSimilar] = useState<{ url: string; kind: string; label: string } | null>(null);
+  const [limit, setLimit] = useState(60);
+  const [hasMore, setHasMore] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
@@ -41,22 +43,29 @@ export default function AssetDrawer({
     try {
       const p = new URLSearchParams();
       if (debouncedQ) p.set("q", debouncedQ);
-      // Image/video similarity search (fal only).
+      p.set("limit", String(limit));
       if (source === "fal" && similar) {
         p.set(similar.kind === "video" ? "search_video_url" : "search_image_url", similar.url);
       }
       const endpoint = source === "fal" ? "/api/fal-assets" : "/api/assets";
       const res = await fetch(`${endpoint}?${p.toString()}`);
       const data = await res.json();
-      setAssets(data.assets ?? []);
+      const list: AssetItem[] = data.assets ?? [];
+      setAssets(list);
+      // fal returns has_more; FlowLab: assume more if we filled the page.
+      setHasMore(source === "fal" ? !!data.has_more : list.length >= limit);
     } catch {
       setAssets([]);
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
-  }, [debouncedQ, source, similar]);
+  }, [debouncedQ, source, similar, limit]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Reset the page size whenever the query scope changes.
+  useEffect(() => { setLimit(60); }, [source, debouncedQ, similar]);
 
   // Tab filter is purely local now → instant switching, no refetch.
   const visible = kind ? assets.filter((a) => a.kind === kind) : assets;
@@ -194,6 +203,16 @@ export default function AssetDrawer({
               </div>
             ))}
           </div>
+        )}
+
+        {/* Load more — only when not filtering tabs locally to a subset */}
+        {!loading && hasMore && (!kind || visible.length >= 4) && (
+          <button
+            onClick={() => setLimit((n) => n + 60)}
+            className="w-full mt-3 py-2 rounded-md border border-border text-fg-muted hover:text-fg hover:border-border-strong text-[11px] transition"
+          >
+            Load more
+          </button>
         )}
       </div>
 
