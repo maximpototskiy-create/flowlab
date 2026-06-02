@@ -23,6 +23,7 @@ export default function AssetDrawer({
 }) {
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [source, setSource] = useState<"flowlab" | "fal">("flowlab");
   const [kind, setKind] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -36,9 +37,10 @@ export default function AssetDrawer({
     setLoading(true);
     try {
       const p = new URLSearchParams();
-      if (kind) p.set("kind", kind);
+      if (kind) p.set(source === "fal" ? "media_type" : "kind", kind);
       if (debouncedQ) p.set("q", debouncedQ);
-      const res = await fetch(`/api/assets?${p.toString()}`);
+      const endpoint = source === "fal" ? "/api/fal-assets" : "/api/assets";
+      const res = await fetch(`${endpoint}?${p.toString()}`);
       const data = await res.json();
       setAssets(data.assets ?? []);
     } catch {
@@ -46,7 +48,7 @@ export default function AssetDrawer({
     } finally {
       setLoading(false);
     }
-  }, [kind, debouncedQ]);
+  }, [kind, debouncedQ, source]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -60,12 +62,31 @@ export default function AssetDrawer({
 
       {/* Filters */}
       <div className="p-3 space-y-2 border-b border-border">
+        {/* Source switch */}
+        <div className="flex gap-1">
+          <button
+            onClick={() => setSource("flowlab")}
+            className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
+              source === "flowlab" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+            }`}
+          >
+            FlowLab
+          </button>
+          <button
+            onClick={() => setSource("fal")}
+            className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
+              source === "fal" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+            }`}
+          >
+            fal
+          </button>
+        </div>
         <div className="relative">
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search…"
+            placeholder={source === "fal" ? "Semantic search…" : "Search…"}
             className="w-full bg-bg border border-border rounded-md pl-7 pr-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand"
           />
         </div>
