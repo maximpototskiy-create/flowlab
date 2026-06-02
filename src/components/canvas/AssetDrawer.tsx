@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Search, X, Image as ImageIcon, Video, Music, Loader2 } from "lucide-react";
+import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
 
 const KINDS = [
@@ -27,6 +27,7 @@ export default function AssetDrawer({
   const [kind, setKind] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
+  const [preview, setPreview] = useState<AssetItem | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
@@ -149,7 +150,7 @@ export default function AssetDrawer({
                   );
                   e.dataTransfer.effectAllowed = "copy";
                 }}
-                onClick={() => onPick(a)}
+                onClick={() => setPreview(a)}
                 title={a.prompt || a.model || a.kind}
                 className="group relative aspect-square rounded-md overflow-hidden bg-bg border border-border hover:border-brand cursor-grab active:cursor-grabbing"
               >
@@ -178,8 +179,99 @@ export default function AssetDrawer({
       </div>
 
       <div className="px-3 py-2 border-t border-border text-[10px] text-fg-subtle">
-        Drag onto canvas or click to add a node.
+        Drag onto canvas, or click to preview.
       </div>
+
+      {/* Preview overlay — inside the drawer */}
+      {preview && (
+        <div className="absolute inset-0 z-10 bg-bg-card flex flex-col">
+          <div className="flex items-center justify-between px-3 h-12 border-b border-border">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-brand">
+              {preview.kind} · {preview.source}
+            </span>
+            <button onClick={() => setPreview(null)} className="text-fg-subtle hover:text-fg">
+              <X size={16} />
+            </button>
+          </div>
+
+          {/* Media */}
+          <div className="bg-black flex items-center justify-center" style={{ maxHeight: "45%" }}>
+            {preview.kind === "image" && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={preview.cdnUrl} alt="" className="max-w-full max-h-[45vh] object-contain" />
+            )}
+            {preview.kind === "video" && (
+              <video src={preview.cdnUrl} className="max-w-full max-h-[45vh]" controls autoPlay loop />
+            )}
+            {preview.kind === "audio" && (
+              <div className="p-6 w-full">
+                <Music size={36} className="mx-auto mb-3 text-fg-subtle" />
+                <audio src={preview.cdnUrl} controls className="w-full" />
+              </div>
+            )}
+            {preview.kind === "text" && (
+              <div className="p-4 text-fg text-[12px] leading-relaxed overflow-auto max-h-[45vh]">
+                {preview.prompt}
+              </div>
+            )}
+          </div>
+
+          {/* Meta */}
+          <div className="flex-1 overflow-auto p-3 space-y-3">
+            {preview.prompt && (
+              <div>
+                <div className="text-[9px] uppercase tracking-wider text-fg-subtle mb-1">Prompt</div>
+                <p className="text-[12px] text-fg-muted leading-snug">{preview.prompt}</p>
+              </div>
+            )}
+            <div className="space-y-1.5 text-[11px]">
+              {preview.model && (
+                <div className="flex justify-between gap-3">
+                  <span className="text-fg-subtle">Model</span>
+                  <span className="text-fg-muted text-right truncate">{preview.model}</span>
+                </div>
+              )}
+              {preview.width && preview.height && (
+                <div className="flex justify-between gap-3">
+                  <span className="text-fg-subtle">Size</span>
+                  <span className="text-fg-muted">{preview.width}×{preview.height}</span>
+                </div>
+              )}
+              {preview.projectName && (
+                <div className="flex justify-between gap-3">
+                  <span className="text-fg-subtle">Project</span>
+                  <span className="text-fg-muted text-right truncate">{preview.projectName}</span>
+                </div>
+              )}
+              {preview.brandName && (
+                <div className="flex justify-between gap-3">
+                  <span className="text-fg-subtle">Brand</span>
+                  <span className="text-fg-muted text-right truncate">{preview.brandName}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="p-3 border-t border-border flex gap-2">
+            <button
+              onClick={() => { onPick(preview); setPreview(null); }}
+              className="flex-1 flex items-center justify-center gap-1.5 bg-brand text-black font-medium text-[12px] py-2 rounded-md hover:bg-emerald-400 transition"
+            >
+              <Plus size={13} /> Add to canvas
+            </button>
+            <a
+              href={preview.cdnUrl}
+              download
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-1.5 border border-border text-fg-muted hover:text-fg text-[12px] px-3 py-2 rounded-md transition"
+            >
+              <Download size={13} />
+            </a>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
