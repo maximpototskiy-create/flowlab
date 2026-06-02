@@ -177,6 +177,19 @@ export default function Canvas({
   // Marquee rubber-band rectangle in canvas coords (mirrors `marquee` state
   // for the always-mounted pointer listeners).
   const marqueeRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  // Real measured node heights (px), keyed by id — used for non-overlapping
+  // auto-organize and for accurate group-box bounds. offsetHeight is the
+  // node's CSS layout height (transform scale doesn't affect it), i.e. in
+  // canvas coordinates. Refreshed after graph changes and during drags.
+  const [nodeHeights, setNodeHeights] = useState<Map<string, number>>(new Map());
+  function measureNodeHeights(): Map<string, number> {
+    const m = new Map<string, number>();
+    for (const n of graphRef.current.nodes) {
+      const el = document.querySelector(`[data-node-id="${n.id}"]`) as HTMLElement | null;
+      if (el) m.set(n.id, el.offsetHeight);
+    }
+    return m;
+  }
   // Tick increments on every drag frame to make edges re-render with the new position.
   // (Nodes themselves use direct DOM transform — no React re-render needed.)
   const [dragTick, setDragTick] = useState(0);
@@ -415,9 +428,10 @@ export default function Canvas({
   // layout following the data-flow edges. Pure layout in autoLayout();
   // here we just apply the new positions and recenter the view.
   const organizeNodes = useCallback(() => {
+    const heights = measureNodeHeights();
     setGraph((g) => {
       if (g.nodes.length === 0) return g;
-      const pos = autoLayout(g.nodes, g.edges);
+      const pos = autoLayout(g.nodes, g.edges, { heights });
       return {
         ...g,
         nodes: g.nodes.map((n) => {
@@ -554,6 +568,15 @@ export default function Canvas({
   // the current nodes (e.g. marquee hit-testing) without re-registering.
   const graphRef = useRef(graph);
   useEffect(() => { graphRef.current = graph; }, [graph]);
+
+  // Refresh measured node heights after the graph changes (add/remove/config
+  // can change a node's rendered height). Done on the next frame so the DOM
+  // has painted. Feeds group-box bounds + auto-organize.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setNodeHeights(measureNodeHeights()));
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph.nodes]);
 
   // Keep refs in sync with state
   useEffect(() => { dragRef.current = drag; }, [drag]);
@@ -848,13 +871,17 @@ export default function Canvas({
     }
     // Right-click: context menu (handled by onCanvasContextMenu below).
     if (e.button === 2) return;
-    // Plain left-click on empty canvas background = deselect (standard).
-    const isOnBackground =
-      e.target === e.currentTarget ||
-      (e.target as HTMLElement).classList.contains("canvas-bg-hit");
-    if (isOnBackground) {
-      // Plain left-drag on empty canvas = marquee select. Clear selection
-      // first (unless shift/cmd held to add to it).
+    // Marquee on empty field = anywhere NOT on a node, port, group box, or
+    // interactive control. Previously this only fired on the exact bg layer,
+    // which the transform container covered — so most of the canvas didn't
+    // respond. closest() covers the whole free area.
+    const t = e.target as HTMLElement;
+    const onInteractive =
+      t.closest("[data-node-id]") ||
+      t.closest("[data-port-side]") ||
+      t.closest("[data-group-box]") ||
+      t.closest("button, input, textarea, select, a");
+    if (!onInteractive) {
       const additive = e.shiftKey || e.metaKey || e.ctrlKey;
       if (!additive) setSelected(null);
       const pt = screenToCanvas(e.clientX, e.clientY);
@@ -1253,21 +1280,26 @@ export default function Canvas({
               if (members.length === 0) return null;
               const PAD = 24;
               const LABEL_H = 20;
-              const NODE_H = 90;
+              const live = liveDragPositions.current;
               let minX = Infinity;
               let minY = Infinity;
               let maxX = -Infinity;
               let maxY = -Infinity;
               for (const n of members) {
-                minX = Math.min(minX, n.position.x);
-                minY = Math.min(minY, n.position.y);
-                maxX = Math.max(maxX, n.position.x + NODE_WIDTH);
-                maxY = Math.max(maxY, n.position.y + NODE_H);
+                // Follow the node live while dragging (so the box moves WITH
+                // the nodes, not after release), else its committed position.
+                const p = (live && live.get(n.id)) || n.position;
+                const h = nodeHeights.get(n.id) ?? 120;
+                minX = Math.min(minX, p.x);
+                minY = Math.min(minY, p.y);
+                maxX = Math.max(maxX, p.x + NODE_WIDTH);
+                maxY = Math.max(maxY, p.y + h);
               }
               const allSelected = members.every((n) => selectedIds.has(n.id));
               return (
                 <div
                   key={gr.id}
+                  data-group-box={gr.id}
                   onPointerDown={(e) => {
                     // Let pan gestures (middle/alt/space) pass through to the
                     // canvas instead of selecting the group.

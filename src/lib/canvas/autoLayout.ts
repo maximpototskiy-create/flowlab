@@ -8,13 +8,25 @@ import type { GraphNode, GraphEdge } from "@/lib/canvas/types";
 export function autoLayout(
   nodes: GraphNode[],
   edges: GraphEdge[],
-  opts?: { gapX?: number; gapY?: number; nodeH?: number; originX?: number; originY?: number },
+  opts?: {
+    gapX?: number;
+    gapY?: number;
+    nodeH?: number;
+    originX?: number;
+    originY?: number;
+    /** Real measured node heights (px) keyed by id. When provided, each
+     *  node reserves its actual height in its column so tall nodes (big
+     *  textareas, previews) don't overlap their neighbours below. */
+    heights?: Map<string, number>;
+  },
 ): Map<string, { x: number; y: number }> {
   const GAP_X = opts?.gapX ?? 360; // ~NODE_WIDTH(280) + breathing room
-  const GAP_Y = opts?.gapY ?? 60;
-  const NODE_H = opts?.nodeH ?? 120; // representative node height
+  const GAP_Y = opts?.gapY ?? 48;
+  const NODE_H = opts?.nodeH ?? 120; // fallback height when unmeasured
   const ORIGIN_X = opts?.originX ?? 120;
   const ORIGIN_Y = opts?.originY ?? 120;
+  const heights = opts?.heights;
+  const heightOf = (id: string) => heights?.get(id) ?? NODE_H;
 
   const ids = new Set(nodes.map((n) => n.id));
   const incoming = new Map<string, string[]>();
@@ -54,15 +66,18 @@ export function autoLayout(
     byLayer.get(l)!.push(n.id);
   }
 
-  // Assign positions. Each column is centered vertically around 0, then the
+  // Assign positions. Each column stacks its nodes with their REAL heights
+  // (so tall nodes don't overlap), centered vertically around 0; then the
   // whole layout is shifted so its top-left sits at (ORIGIN_X, ORIGIN_Y).
   const pos = new Map<string, { x: number; y: number }>();
   for (const [l, colIds] of byLayer) {
-    const colHeight = colIds.length * NODE_H + (colIds.length - 1) * GAP_Y;
-    const startY = -colHeight / 2;
-    colIds.forEach((id, i) => {
-      pos.set(id, { x: l * GAP_X, y: startY + i * (NODE_H + GAP_Y) });
-    });
+    const colHeight =
+      colIds.reduce((sum, id) => sum + heightOf(id), 0) + (colIds.length - 1) * GAP_Y;
+    let cursorY = -colHeight / 2;
+    for (const id of colIds) {
+      pos.set(id, { x: l * GAP_X, y: cursorY });
+      cursorY += heightOf(id) + GAP_Y;
+    }
   }
 
   let minX = Infinity;
