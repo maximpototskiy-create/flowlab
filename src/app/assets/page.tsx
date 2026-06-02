@@ -27,16 +27,19 @@ export default async function AssetsPage({
   const source = pick("source");
   const q = pick("q")?.trim();
 
+  // NOTE: we deliberately do NOT filter by `kind` in the DB query. The kind
+  // column is unreliable for older rows (images saved as "text" by the old
+  // inferKind bug). Instead we over-fetch, re-derive the real kind from the
+  // URL, de-duplicate, then filter by kind in memory — so the Images tab
+  // shows every image regardless of the stored column, with no manual SQL.
   const where: {
     projectId?: string;
     brandId?: string;
-    kind?: string;
     source?: string;
     OR?: { prompt?: { contains: string; mode: "insensitive" }; model?: { contains: string; mode: "insensitive" } }[];
   } = {};
   if (project) where.projectId = project;
   if (brand) where.brandId = brand;
-  if (kind) where.kind = kind;
   if (source) where.source = source;
   if (q) {
     where.OR = [
@@ -45,11 +48,12 @@ export default async function AssetsPage({
     ];
   }
 
-  const [assetsRaw, projects, brands, total] = await Promise.all([
+  const FETCH = 1000; // over-fetch before in-memory dedupe + kind filter
+  const [assetsRaw, projects, brands] = await Promise.all([
     prisma.asset.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: PAGE_SIZE,
+      take: FETCH,
       include: {
         project: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true, slug: true } },
@@ -65,11 +69,22 @@ export default async function AssetsPage({
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
-    prisma.asset.count({ where }),
   ]);
 
-  // Strip BigInt (sizeBytes, seed) → number/string so the data can cross into
-  // the client component (BigInt isn't JSON-serializable).
+  // Re-derive the real kind from the URL (storedKind is unreliable for old
+  // rows). Mirrors the client effectiveKind so filter chips and previews agree.
+  function kindFromUrl(url: string, stored: string): string {
+    const u = (url ?? "").split("?")[0].toLowerCase();
+    if (/\.(mp4|webm|mov|m4v)$/.test(u)) return "video";
+    if (/\.(mp3|wav|m4a|ogg|aac|flac)$/.test(u)) return "audio";
+    if (/\.(jpg|jpeg|png|webp|gif|avif)$/.test(u)) return "image";
+    if (stored === "video" || stored === "audio" || stored === "image") return stored;
+    return (url ?? "").startsWith("http") ? "image" : "text";
+  }
+
+  // Strip BigInt (sizeBytes) → number, de-duplicate by URL (the same generated
+  // URL can be written more than once), and overwrite kind with the derived
+  // value so the data crossing into the client is clean.
   type RawAsset = {
     id: string;
     cdnUrl: string;
@@ -86,22 +101,30 @@ export default async function AssetsPage({
     project: { id: string; name: string } | null;
     brand: { id: string; name: string; slug: string } | null;
   };
-  const assets: AssetItem[] = (assetsRaw as RawAsset[]).map((a) => ({
-    id: a.id,
-    cdnUrl: a.cdnUrl,
-    kind: a.kind,
-    mimeType: a.mimeType ?? null,
-    sizeBytes: a.sizeBytes != null ? Number(a.sizeBytes) : null,
-    width: a.width ?? null,
-    height: a.height ?? null,
-    durationSec: a.durationSec ?? null,
-    source: a.source,
-    model: a.model ?? null,
-    prompt: a.prompt ?? null,
-    createdAt: a.createdAt.toISOString(),
-    projectName: a.project?.name ?? null,
-    brandName: a.brand?.name ?? null,
-  }));
+  const seenUrls = new Set<string>();
+  const deduped: AssetItem[] = [];
+  for (const a of assetsRaw as RawAsset[]) {
+    if (!a.cdnUrl || seenUrls.has(a.cdnUrl)) continue; // drop duplicates by URL
+    seenUrls.add(a.cdnUrl);
+    deduped.push({
+      id: a.id,
+      cdnUrl: a.cdnUrl,
+      kind: kindFromUrl(a.cdnUrl, a.kind),
+      mimeType: a.mimeType ?? null,
+      sizeBytes: a.sizeBytes != null ? Number(a.sizeBytes) : null,
+      width: a.width ?? null,
+      height: a.height ?? null,
+      durationSec: a.durationSec ?? null,
+      source: a.source,
+      model: a.model ?? null,
+      prompt: a.prompt ?? null,
+      createdAt: a.createdAt.toISOString(),
+      projectName: a.project?.name ?? null,
+      brandName: a.brand?.name ?? null,
+    });
+  }
+  // Apply the kind filter in memory against the DERIVED kind, then page.
+  const assets: AssetItem[] = (kind ? deduped.filter((a) => a.kind === kind) : deduped).slice(0, PAGE_SIZE);
 
   const projectOpts: FilterOption[] = (projects as { id: string; name: string }[]).map((p) => ({ value: p.id, label: p.name }));
   const brandOpts: FilterOption[] = (brands as { id: string; name: string }[]).map((b) => ({ value: b.id, label: b.name }));
@@ -124,6 +147,8 @@ export default async function AssetsPage({
         .map((s) => s.trim())
         .filter((u) => u.startsWith("http"));
       urls.forEach((url, i) => {
+        if (seenUrls.has(url)) return; // already shown as a real asset
+        seenUrls.add(url);
         brandKitAssets.push({
           id: `bk-${k.brand?.id ?? "x"}-${i}`,
           cdnUrl: url,
@@ -147,7 +172,7 @@ export default async function AssetsPage({
   // When the source filter is exactly "brand_kit", show only those (there are
   // no Asset rows with that source); otherwise prepend them to the real ones.
   const combined: AssetItem[] = source === "brand_kit" ? brandKitAssets : [...assets, ...brandKitAssets];
-  const shownTotal = source === "brand_kit" ? brandKitAssets.length : total + brandKitAssets.length;
+  const shownTotal = combined.length;
 
   return (
     <div className="grain min-h-screen">
@@ -164,9 +189,7 @@ export default async function AssetsPage({
           <p className="text-fg-muted text-sm mt-2">
             {shownTotal === 0
               ? "No assets match these filters yet."
-              : `${shownTotal} asset${shownTotal === 1 ? "" : "s"}${
-                  total > PAGE_SIZE ? ` — showing latest ${PAGE_SIZE}` : ""
-                }.`}
+              : `${shownTotal} asset${shownTotal === 1 ? "" : "s"}.`}
           </p>
         </div>
 
