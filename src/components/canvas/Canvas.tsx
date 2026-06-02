@@ -13,6 +13,8 @@ import NodePalette from "./NodePalette";
 import ContextMenu from "./ContextMenu";
 import ActionMenu, { type ActionItem } from "./ActionMenu";
 import HelpHints from "./HelpHints";
+import AssetDrawer from "./AssetDrawer";
+import type { AssetItem } from "@/lib/assetsQuery";
 import ConnectionPicker from "./ConnectionPicker";
 import NodeExpandedModal from "./NodeExpandedModal";
 import CanvasToolbar from "./CanvasToolbar";
@@ -20,7 +22,7 @@ import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { autoLayout } from "@/lib/canvas/autoLayout";
-import { Minus, Plus, Maximize, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2 } from "lucide-react";
+import { Minus, Plus, Maximize, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2, Images } from "lucide-react";
 
 type Drag = {
   nodeId: string;
@@ -227,6 +229,17 @@ export default function Canvas({
   // node-picker `ctxMenu`.
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number; kind: "node" | "group"; id: string } | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [showAssets, setShowAssets] = useState(false);
+
+  // Create an upload node pre-filled with a library asset's URL, at canvas
+  // coords. kind → node type. The upload runners read config.cdnUrl.
+  const addAssetNode = useCallback((cdnUrl: string, kind: string, canvasX: number, canvasY: number) => {
+    const type = kind === "video" ? "uploadVideo" : kind === "audio" ? "uploadAudio" : "uploadImage";
+    const newNode = makeNode(type, { x: canvasX - NODE_WIDTH / 2, y: canvasY - 30 });
+    newNode.config = { ...newNode.config, cdnUrl };
+    setGraph((g) => ({ ...g, nodes: [...g.nodes, newNode] }));
+    setSelected(newNode.id);
+  }, []);
   const [connPicker, setConnPicker] = useState<{
     screenX: number; screenY: number; canvasX: number; canvasY: number;
     fromNode: string; fromPort: string; fromKind: PortKind;
@@ -1610,6 +1623,24 @@ export default function Canvas({
           className="flex-1 relative overflow-hidden canvas-grid canvas-viewport"
           onPointerDown={onCanvasPointerDown}
           onContextMenu={onCanvasContextMenu}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes("application/x-flowlab-asset")) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }
+          }}
+          onDrop={(e) => {
+            const raw = e.dataTransfer.getData("application/x-flowlab-asset");
+            if (!raw) return;
+            e.preventDefault();
+            try {
+              const { cdnUrl, kind } = JSON.parse(raw) as { cdnUrl: string; kind: string };
+              const pt = screenToCanvas(e.clientX, e.clientY);
+              addAssetNode(cdnUrl, kind, pt.x, pt.y);
+            } catch {
+              /* ignore malformed drop */
+            }
+          }}
           style={{
             cursor: isPanning
               ? "grabbing"
@@ -1820,9 +1851,31 @@ export default function Canvas({
             >
               <HelpCircle size={12} />
             </button>
+            <button
+              onClick={() => setShowAssets((v) => !v)}
+              className={`w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover ${
+                showAssets ? "text-brand" : "text-fg-muted"
+              }`}
+              title="Asset library"
+            >
+              <Images size={12} />
+            </button>
           </div>
 
           {showHelp && <HelpHints onClose={() => setShowHelp(false)} />}
+
+          {showAssets && (
+            <AssetDrawer
+              onClose={() => setShowAssets(false)}
+              onPick={(a: AssetItem) => {
+                // Click = drop at viewport center in canvas coords.
+                const rect = canvasRef.current?.getBoundingClientRect();
+                const cx = rect ? (rect.width / 2 - pan.x) / zoom : 400;
+                const cy = rect ? (rect.height / 2 - pan.y) / zoom : 300;
+                addAssetNode(a.cdnUrl, a.kind, cx, cy);
+              }}
+            />
+          )}
 
           {/* Minimap — overview + click-to-navigate. Hidden when empty. */}
           {graph.nodes.length > 0 && (

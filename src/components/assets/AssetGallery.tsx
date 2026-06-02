@@ -3,24 +3,9 @@
 import { useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Download, X, Image as ImageIcon, Video, Music, FileText } from "lucide-react";
+import type { AssetItem, FilterOption } from "@/lib/assetsQuery";
 
-export type AssetItem = {
-  id: string;
-  cdnUrl: string;
-  kind: string;
-  mimeType: string | null;
-  sizeBytes: number | null;
-  width: number | null;
-  height: number | null;
-  durationSec: number | null;
-  source: string;
-  model: string | null;
-  prompt: string | null;
-  createdAt: string;
-  projectName: string | null;
-  brandName: string | null;
-};
-export type FilterOption = { value: string; label: string };
+export type { AssetItem, FilterOption };
 
 const KINDS = [
   { value: "image", label: "Images", icon: ImageIcon },
