@@ -8,6 +8,7 @@ import {
 import CanvasNode, { NODE_WIDTH } from "./CanvasNode";
 import CanvasEdges from "./CanvasEdges";
 import Minimap from "./Minimap";
+import GroupBox from "./GroupBox";
 import NodePalette from "./NodePalette";
 import ContextMenu from "./ContextMenu";
 import ConnectionPicker from "./ConnectionPicker";
@@ -37,6 +38,22 @@ type EdgeDraft = {
 };
 
 const STORAGE_AREA = { width: 5000, height: 4000 };
+
+// Group accent colours. Keys are stored in Group.color; values drive the
+// box border/background/label. Plain hex so they work in inline styles
+// regardless of Tailwind's purge.
+const GROUP_COLORS: Record<string, string> = {
+  brand: "16 185 129", // emerald (default)
+  blue: "59 130 246",
+  violet: "139 92 246",
+  amber: "245 158 11",
+  rose: "244 63 94",
+  slate: "100 116 139",
+};
+const GROUP_COLOR_KEYS = Object.keys(GROUP_COLORS);
+function groupRGB(color?: string): string {
+  return GROUP_COLORS[color ?? "brand"] ?? GROUP_COLORS.brand;
+}
 
 // Drop deleted nodes from groups and discard groups that fall below 2
 // members. `remaining` is the surviving node list.
@@ -421,6 +438,88 @@ export default function Canvas({
       const next = additive ? new Set(prev) : new Set<string>();
       for (const id of gr.nodeIds) next.add(id);
       return next;
+    });
+  }
+
+  // ── Per-group operations (used by the group box header controls) ──
+  const renameGroup = useCallback((groupId: string, label: string) => {
+    setGraph((g) => ({
+      ...g,
+      groups: (g.groups ?? []).map((gr) => (gr.id === groupId ? { ...gr, label } : gr)),
+    }));
+  }, []);
+
+  const setGroupColor = useCallback((groupId: string, color: string) => {
+    setGraph((g) => ({
+      ...g,
+      groups: (g.groups ?? []).map((gr) => (gr.id === groupId ? { ...gr, color } : gr)),
+    }));
+  }, []);
+
+  // Ungroup a specific group (remove the box; nodes stay).
+  const ungroupGroup = useCallback((groupId: string) => {
+    setGraph((g) => ({ ...g, groups: (g.groups ?? []).filter((gr) => gr.id !== groupId) }));
+  }, []);
+
+  // Delete a group AND its member nodes (and their edges).
+  const deleteGroup = useCallback((groupId: string) => {
+    setGraph((g) => {
+      const gr = (g.groups ?? []).find((x) => x.id === groupId);
+      if (!gr) return g;
+      const ids = new Set(gr.nodeIds);
+      const nodes = g.nodes.filter((n) => !ids.has(n.id));
+      return {
+        nodes,
+        edges: g.edges.filter((e) => !ids.has(e.from.nodeId) && !ids.has(e.to.nodeId)),
+        groups: (g.groups ?? []).filter((x) => x.id !== groupId),
+      };
+    });
+    setSelectedIds(new Set());
+  }, []);
+
+  // Auto-organize only the nodes inside one group, in place (anchored at the
+  // group's current top-left so it doesn't jump across the canvas).
+  const organizeGroup = useCallback((groupId: string) => {
+    const heights = measureNodeHeights();
+    setGraph((g) => {
+      const gr = (g.groups ?? []).find((x) => x.id === groupId);
+      if (!gr) return g;
+      const ids = new Set(gr.nodeIds);
+      const members = g.nodes.filter((n) => ids.has(n.id));
+      if (members.length === 0) return g;
+      const originX = Math.min(...members.map((n) => n.position.x));
+      const originY = Math.min(...members.map((n) => n.position.y));
+      const memberEdges = g.edges.filter((e) => ids.has(e.from.nodeId) && ids.has(e.to.nodeId));
+      const pos = autoLayout(members, memberEdges, { heights, originX, originY });
+      return {
+        ...g,
+        nodes: g.nodes.map((n) => {
+          const p = pos.get(n.id);
+          return p ? { ...n, position: p } : n;
+        }),
+      };
+    });
+  }, []);
+
+  // Start dragging an entire group by its box — moves all member nodes.
+  function startGroupDrag(groupId: string, e: React.PointerEvent) {
+    const gr = (graph.groups ?? []).find((x) => x.id === groupId);
+    if (!gr) return;
+    const group = gr.nodeIds
+      .map((id) => {
+        const n = graph.nodes.find((x) => x.id === id);
+        return n ? { nodeId: id, startX: n.position.x, startY: n.position.y } : null;
+      })
+      .filter((x): x is { nodeId: string; startX: number; startY: number } => x !== null);
+    if (group.length === 0) return;
+    selectGroup(groupId, e.shiftKey || e.metaKey || e.ctrlKey);
+    setDrag({
+      nodeId: group[0].nodeId,
+      startX: group[0].startX,
+      startY: group[0].startY,
+      pointerX: e.clientX,
+      pointerY: e.clientY,
+      group,
     });
   }
 
@@ -1279,15 +1378,13 @@ export default function Canvas({
                 .filter((n): n is GraphNode => !!n);
               if (members.length === 0) return null;
               const PAD = 24;
-              const LABEL_H = 20;
+              const LABEL_H = 26;
               const live = liveDragPositions.current;
               let minX = Infinity;
               let minY = Infinity;
               let maxX = -Infinity;
               let maxY = -Infinity;
               for (const n of members) {
-                // Follow the node live while dragging (so the box moves WITH
-                // the nodes, not after release), else its committed position.
                 const p = (live && live.get(n.id)) || n.position;
                 const h = nodeHeights.get(n.id) ?? 120;
                 minX = Math.min(minX, p.x);
@@ -1297,30 +1394,27 @@ export default function Canvas({
               }
               const allSelected = members.every((n) => selectedIds.has(n.id));
               return (
-                <div
+                <GroupBox
                   key={gr.id}
-                  data-group-box={gr.id}
-                  onPointerDown={(e) => {
-                    // Let pan gestures (middle/alt/space) pass through to the
-                    // canvas instead of selecting the group.
-                    if (e.button !== 0 || e.altKey || spaceHeld) return;
-                    e.stopPropagation();
-                    selectGroup(gr.id, e.shiftKey || e.metaKey || e.ctrlKey);
-                  }}
-                  className={`absolute rounded-xl border border-dashed cursor-pointer ${
-                    allSelected ? "border-brand bg-brand/10" : "border-brand/40 bg-brand/5"
-                  }`}
-                  style={{
+                  group={gr}
+                  rgb={groupRGB(gr.color)}
+                  colorKeys={GROUP_COLOR_KEYS}
+                  colorMap={GROUP_COLORS}
+                  allSelected={allSelected}
+                  spaceHeld={spaceHeld}
+                  rect={{
                     left: minX - PAD,
                     top: minY - PAD - LABEL_H,
                     width: maxX - minX + PAD * 2,
                     height: maxY - minY + PAD * 2 + LABEL_H,
                   }}
-                >
-                  <div className="text-[10px] font-medium text-brand px-2 py-0.5 select-none">
-                    {gr.label ?? "Group"}
-                  </div>
-                </div>
+                  onBoxPointerDown={(e) => startGroupDrag(gr.id, e)}
+                  onRename={(label) => renameGroup(gr.id, label)}
+                  onColor={(c) => setGroupColor(gr.id, c)}
+                  onOrganize={() => organizeGroup(gr.id)}
+                  onUngroup={() => ungroupGroup(gr.id)}
+                  onDelete={() => deleteGroup(gr.id)}
+                />
               );
             })}
 

@@ -1467,6 +1467,8 @@ export type Group = {
   id: string;
   nodeIds: string[];
   label?: string;
+  /** Accent colour key (see GROUP_COLORS in Canvas). Defaults to brand. */
+  color?: string;
 };
 
 export type Graph = { nodes: GraphNode[]; edges: GraphEdge[]; groups?: Group[] };
