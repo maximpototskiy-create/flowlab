@@ -17,13 +17,15 @@ const KINDS = [
 export default function AssetDrawer({
   onClose,
   onPick,
+  brandId,
 }: {
   onClose: () => void;
   onPick: (asset: AssetItem) => void;
+  brandId?: string | null;
 }) {
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [source, setSource] = useState<"flowlab" | "fal">("flowlab");
+  const [source, setSource] = useState<"flowlab" | "ui" | "fal">("flowlab");
   const [kind, setKind] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -51,6 +53,11 @@ export default function AssetDrawer({
       if (source === "fal" && similar) {
         p.set(similar.kind === "video" ? "search_video_url" : "search_image_url", similar.url);
       }
+      // UI = brand-kit screenshots for the current brand.
+      if (source === "ui") {
+        p.set("source", "brand_kit");
+        if (brandId) p.set("brand", brandId);
+      }
       const endpoint = source === "fal" ? "/api/fal-assets" : "/api/assets";
       const res = await fetch(`${endpoint}?${p.toString()}`);
       const data = await res.json();
@@ -63,7 +70,7 @@ export default function AssetDrawer({
     } finally {
       if (append) setLoadingMore(false); else setLoading(false);
     }
-  }, [debouncedQ, source, similar]);
+  }, [debouncedQ, source, similar, brandId]);
 
   // Initial load + reload on filter change (resets to first page).
   useEffect(() => {
@@ -119,6 +126,14 @@ export default function AssetDrawer({
             FlowLab
           </button>
           <button
+            onClick={() => setSource("ui")}
+            className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
+              source === "ui" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+            }`}
+          >
+            UI
+          </button>
+          <button
             onClick={() => setSource("fal")}
             className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
               source === "fal" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
@@ -136,19 +151,21 @@ export default function AssetDrawer({
             className="w-full bg-bg border border-border rounded-md pl-7 pr-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand"
           />
         </div>
-        <div className="flex gap-1">
-          {KINDS.map((k) => (
-            <button
-              key={k.value}
-              onClick={() => setKind(k.value)}
-              className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
-                kind === k.value ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
-              }`}
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
+        {source !== "ui" && (
+          <div className="flex gap-1">
+            {KINDS.map((k) => (
+              <button
+                key={k.value}
+                onClick={() => setKind(k.value)}
+                className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
+                  kind === k.value ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+                }`}
+              >
+                {k.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Similar-search banner */}

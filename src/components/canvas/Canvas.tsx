@@ -1867,6 +1867,7 @@ export default function Canvas({
           {showAssets && (
             <AssetDrawer
               onClose={() => setShowAssets(false)}
+              brandId={workflowMeta.brandId}
               onPick={(a: AssetItem) => {
                 // Click = drop at viewport center in canvas coords.
                 const rect = canvasRef.current?.getBoundingClientRect();
