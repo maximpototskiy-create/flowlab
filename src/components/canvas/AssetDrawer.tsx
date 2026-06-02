@@ -135,7 +135,12 @@ export default function AssetDrawer({
       {/* Similar-search banner */}
       {source === "fal" && similar && (
         <div className="px-3 py-2 border-b border-border flex items-center gap-2 bg-brand/10">
-          <img src={similar.url} alt="" className="w-7 h-7 rounded object-cover" />
+          {similar.kind === "video" ? (
+            <video src={similar.url} className="w-7 h-7 rounded object-cover" muted preload="metadata" />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={similar.url} alt="" className="w-7 h-7 rounded object-cover" />
+          )}
           <span className="text-[10px] text-fg-muted flex-1">Similar to this {similar.kind}</span>
           <button onClick={() => setSimilar(null)} className="text-fg-subtle hover:text-fg">
             <X size={13} />
