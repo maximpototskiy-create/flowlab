@@ -1,0 +1,306 @@
+"use client";
+
+import { useState, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Search, Download, X, Image as ImageIcon, Video, Music, FileText } from "lucide-react";
+
+export type AssetItem = {
+  id: string;
+  cdnUrl: string;
+  kind: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  width: number | null;
+  height: number | null;
+  durationSec: number | null;
+  source: string;
+  model: string | null;
+  prompt: string | null;
+  createdAt: string;
+  projectName: string | null;
+  brandName: string | null;
+};
+export type FilterOption = { value: string; label: string };
+
+const KINDS = [
+  { value: "image", label: "Images", icon: ImageIcon },
+  { value: "video", label: "Video", icon: Video },
+  { value: "audio", label: "Audio", icon: Music },
+  { value: "text", label: "Text", icon: FileText },
+];
+const SOURCES = [
+  { value: "generated", label: "Generated" },
+  { value: "upload", label: "Uploads" },
+  { value: "brand_kit", label: "Brand kit" },
+];
+
+function fmtSize(b: number | null) {
+  if (!b) return null;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+function fmtDur(s: number | null) {
+  if (!s) return null;
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return m > 0 ? `${m}:${sec.toString().padStart(2, "0")}` : `${sec}s`;
+}
+
+export default function AssetGallery({
+  assets,
+  projects,
+  brands,
+  active,
+}: {
+  assets: AssetItem[];
+  projects: FilterOption[];
+  brands: FilterOption[];
+  active: { project?: string; brand?: string; kind?: string; source?: string; q?: string };
+}) {
+  const router = useRouter();
+  const params = useSearchParams();
+  const [lightbox, setLightbox] = useState<AssetItem | null>(null);
+  const [search, setSearch] = useState(active.q ?? "");
+
+  // Update one filter key in the URL (null clears it). Keeps the rest.
+  const setFilter = useCallback(
+    (key: string, value: string | null) => {
+      const next = new URLSearchParams(params.toString());
+      if (value) next.set(key, value);
+      else next.delete(key);
+      router.push(`/assets?${next.toString()}`);
+    },
+    [params, router],
+  );
+
+  // Toggle a chip filter (click active one again to clear).
+  const toggle = (key: string, value: string) =>
+    setFilter(key, active[key as keyof typeof active] === value ? null : value);
+
+  const hasFilters = active.project || active.brand || active.kind || active.source || active.q;
+
+  return (
+    <div>
+      {/* ── Filter bar ── */}
+      <div className="flex flex-wrap items-center gap-2 mb-6">
+        {/* Search */}
+        <div className="relative">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") setFilter("q", search.trim() || null); }}
+            placeholder="Search by prompt…"
+            className="bg-bg-card border border-border rounded-md pl-8 pr-3 py-1.5 text-[12px] text-fg w-56 outline-none focus:border-brand"
+          />
+        </div>
+
+        {/* Kind chips */}
+        <div className="flex items-center gap-1">
+          {KINDS.map((k) => {
+            const on = active.kind === k.value;
+            const Icon = k.icon;
+            return (
+              <button
+                key={k.value}
+                onClick={() => toggle("kind", k.value)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] border transition ${
+                  on ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg hover:border-border-strong"
+                }`}
+              >
+                <Icon size={12} /> {k.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Source chips */}
+        <div className="flex items-center gap-1">
+          {SOURCES.map((s) => {
+            const on = active.source === s.value;
+            return (
+              <button
+                key={s.value}
+                onClick={() => toggle("source", s.value)}
+                className={`px-2.5 py-1.5 rounded-md text-[11px] border transition ${
+                  on ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg hover:border-border-strong"
+                }`}
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Project / brand selects */}
+        <select
+          value={active.project ?? ""}
+          onChange={(e) => setFilter("project", e.target.value || null)}
+          className="bg-bg-card border border-border rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
+        >
+          <option value="">All projects</option>
+          {projects.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+        </select>
+        <select
+          value={active.brand ?? ""}
+          onChange={(e) => setFilter("brand", e.target.value || null)}
+          className="bg-bg-card border border-border rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
+        >
+          <option value="">All brands</option>
+          {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
+        </select>
+
+        {hasFilters && (
+          <button
+            onClick={() => router.push("/assets")}
+            className="px-2.5 py-1.5 rounded-md text-[11px] text-fg-subtle hover:text-fg"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* ── Grid ── */}
+      {assets.length === 0 ? (
+        <div className="bg-bg border border-dashed border-border-strong rounded-sm py-20 text-center">
+          <h3 className="font-display text-3xl mb-2">Nothing here yet.</h3>
+          <p className="text-fg-muted text-sm">Generate or upload assets and they'll show up here.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+          {assets.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => setLightbox(a)}
+              className="group relative aspect-square rounded-lg overflow-hidden bg-bg-card border border-border hover:border-brand transition text-left"
+            >
+              <AssetThumb asset={a} />
+              {/* hover meta */}
+              <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition">
+                <div className="text-[9px] text-white/90 truncate">{a.model ?? a.source}</div>
+              </div>
+              <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/50 text-[8px] uppercase tracking-wide text-white/80">
+                {a.kind}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Lightbox ── */}
+      {lightbox && <Lightbox asset={lightbox} onClose={() => setLightbox(null)} />}
+    </div>
+  );
+}
+
+function AssetThumb({ asset }: { asset: AssetItem }) {
+  if (asset.kind === "image") {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={asset.cdnUrl} alt="" className="w-full h-full object-cover" loading="lazy" />;
+  }
+  if (asset.kind === "video") {
+    return (
+      <video
+        src={asset.cdnUrl}
+        className="w-full h-full object-cover"
+        muted
+        playsInline
+        preload="metadata"
+        onMouseEnter={(e) => { (e.currentTarget as HTMLVideoElement).play().catch(() => {}); }}
+        onMouseLeave={(e) => { const v = e.currentTarget as HTMLVideoElement; v.pause(); v.currentTime = 0; }}
+      />
+    );
+  }
+  if (asset.kind === "audio") {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-fg-subtle">
+        <Music size={28} />
+      </div>
+    );
+  }
+  return (
+    <div className="w-full h-full flex items-center justify-center p-3 text-fg-muted text-[10px] leading-snug overflow-hidden">
+      {asset.prompt ? asset.prompt.slice(0, 140) : <FileText size={28} />}
+    </div>
+  );
+}
+
+function Lightbox({ asset, onClose }: { asset: AssetItem; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-[800] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
+      onClick={onClose}
+    >
+      <div
+        className="bg-bg-card border border-border rounded-xl overflow-hidden max-w-4xl w-full max-h-[88vh] flex flex-col md:flex-row"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Preview */}
+        <div className="flex-1 bg-black flex items-center justify-center min-h-[300px] max-h-[88vh] overflow-hidden">
+          {asset.kind === "image" && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={asset.cdnUrl} alt="" className="max-w-full max-h-[88vh] object-contain" />
+          )}
+          {asset.kind === "video" && (
+            <video src={asset.cdnUrl} className="max-w-full max-h-[88vh]" controls autoPlay loop />
+          )}
+          {asset.kind === "audio" && (
+            <div className="p-8 w-full">
+              <Music size={48} className="mx-auto mb-4 text-fg-subtle" />
+              <audio src={asset.cdnUrl} controls className="w-full" />
+            </div>
+          )}
+          {asset.kind === "text" && (
+            <div className="p-6 text-fg text-sm leading-relaxed overflow-auto max-h-[88vh]">{asset.prompt}</div>
+          )}
+        </div>
+
+        {/* Meta panel */}
+        <div className="w-full md:w-72 p-4 flex flex-col gap-3 border-t md:border-t-0 md:border-l border-border">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-brand">{asset.kind} · {asset.source}</span>
+            <button onClick={onClose} className="text-fg-subtle hover:text-fg"><X size={16} /></button>
+          </div>
+
+          {asset.prompt && (
+            <div>
+              <div className="text-[9px] uppercase tracking-wider text-fg-subtle mb-1">Prompt</div>
+              <p className="text-[12px] text-fg-muted leading-snug max-h-40 overflow-auto">{asset.prompt}</p>
+            </div>
+          )}
+
+          <div className="space-y-1.5 text-[11px]">
+            <Meta label="Model" value={asset.model} />
+            <Meta label="Project" value={asset.projectName} />
+            <Meta label="Brand" value={asset.brandName} />
+            <Meta label="Size" value={fmtSize(asset.sizeBytes)} />
+            <Meta label="Dimensions" value={asset.width && asset.height ? `${asset.width}×${asset.height}` : null} />
+            <Meta label="Duration" value={fmtDur(asset.durationSec)} />
+            <Meta label="Created" value={new Date(asset.createdAt).toLocaleString()} />
+          </div>
+
+          <a
+            href={asset.cdnUrl}
+            download
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-auto flex items-center justify-center gap-2 bg-brand text-black font-medium text-[12px] py-2 rounded-md hover:bg-emerald-400 transition"
+          >
+            <Download size={13} /> Download
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Meta({ label, value }: { label: string; value: string | null }) {
+  if (!value) return null;
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-fg-subtle">{label}</span>
+      <span className="text-fg-muted text-right truncate">{value}</span>
+    </div>
+  );
+}

@@ -12,7 +12,7 @@ export default async function TopNav({
   activeNav,
 }: {
   crumbs?: Crumb[];
-  activeNav?: "dashboard" | "brands" | "projects" | "templates";
+  activeNav?: "dashboard" | "brands" | "projects" | "assets" | "templates";
 } = {}) {
   const user = await requireUser();
 
@@ -32,6 +32,9 @@ export default async function TopNav({
             </NavLink>
             <NavLink href="/projects" active={activeNav === "projects"}>
               Projects
+            </NavLink>
+            <NavLink href="/assets" active={activeNav === "assets"}>
+              Assets
             </NavLink>
             <span className="text-fg-subtle cursor-not-allowed" title="Coming soon">
               Templates
