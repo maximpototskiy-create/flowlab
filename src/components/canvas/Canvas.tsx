@@ -12,6 +12,7 @@ import GroupBox from "./GroupBox";
 import NodePalette from "./NodePalette";
 import ContextMenu from "./ContextMenu";
 import ActionMenu, { type ActionItem } from "./ActionMenu";
+import HelpHints from "./HelpHints";
 import ConnectionPicker from "./ConnectionPicker";
 import NodeExpandedModal from "./NodeExpandedModal";
 import CanvasToolbar from "./CanvasToolbar";
@@ -19,7 +20,7 @@ import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { autoLayout } from "@/lib/canvas/autoLayout";
-import { Minus, Plus, Maximize, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil } from "lucide-react";
+import { Minus, Plus, Maximize, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle } from "lucide-react";
 
 type Drag = {
   nodeId: string;
@@ -220,6 +221,7 @@ export default function Canvas({
   // Action context menu (right-click on a node or group) — distinct from the
   // node-picker `ctxMenu`.
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number; kind: "node" | "group"; id: string } | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
   const [connPicker, setConnPicker] = useState<{
     screenX: number; screenY: number; canvasX: number; canvasY: number;
     fromNode: string; fromPort: string; fromKind: PortKind;
@@ -1649,7 +1651,16 @@ export default function Canvas({
             >
               <Network size={12} />
             </button>
+            <button
+              onClick={() => setShowHelp((v) => !v)}
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              title="Keyboard shortcuts & gestures"
+            >
+              <HelpCircle size={12} />
+            </button>
           </div>
+
+          {showHelp && <HelpHints onClose={() => setShowHelp(false)} />}
 
           {/* Minimap — overview + click-to-navigate. Hidden when empty. */}
           {graph.nodes.length > 0 && (
