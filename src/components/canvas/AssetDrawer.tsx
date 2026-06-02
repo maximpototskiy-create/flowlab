@@ -32,18 +32,22 @@ export default function AssetDrawer({
   const [similar, setSimilar] = useState<{ url: string; kind: string; label: string } | null>(null);
   const [limit, setLimit] = useState(60);
   const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
     return () => clearTimeout(t);
   }, [q]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // Fetch up to `targetLimit` items. When append=true we keep the already
+  // rendered items and only add the new tail — so React reuses existing DOM
+  // (by key) and the scroll position is preserved.
+  const loadPage = useCallback(async (targetLimit: number, append: boolean) => {
+    if (append) setLoadingMore(true); else setLoading(true);
     try {
       const p = new URLSearchParams();
       if (debouncedQ) p.set("q", debouncedQ);
-      p.set("limit", String(limit));
+      p.set("limit", String(targetLimit));
       if (source === "fal" && similar) {
         p.set(similar.kind === "video" ? "search_video_url" : "search_image_url", similar.url);
       }
@@ -51,21 +55,27 @@ export default function AssetDrawer({
       const res = await fetch(`${endpoint}?${p.toString()}`);
       const data = await res.json();
       const list: AssetItem[] = data.assets ?? [];
-      setAssets(list);
-      // fal returns has_more; FlowLab: assume more if we filled the page.
-      setHasMore(source === "fal" ? !!data.has_more : list.length >= limit);
+      setAssets((prev) => (append ? [...prev, ...list.slice(prev.length)] : list));
+      setHasMore(source === "fal" ? !!data.has_more : list.length >= targetLimit);
     } catch {
-      setAssets([]);
+      if (!append) setAssets([]);
       setHasMore(false);
     } finally {
-      setLoading(false);
+      if (append) setLoadingMore(false); else setLoading(false);
     }
-  }, [debouncedQ, source, similar, limit]);
+  }, [debouncedQ, source, similar]);
 
-  useEffect(() => { load(); }, [load]);
+  // Initial load + reload on filter change (resets to first page).
+  useEffect(() => {
+    setLimit(60);
+    loadPage(60, false);
+  }, [loadPage]);
 
-  // Reset the page size whenever the query scope changes.
-  useEffect(() => { setLimit(60); }, [source, debouncedQ, similar]);
+  const loadMore = useCallback(() => {
+    const next = limit + 60;
+    setLimit(next);
+    loadPage(next, true);
+  }, [limit, loadPage]);
 
   // Tab filter is purely local now → instant switching, no refetch.
   const visible = kind ? assets.filter((a) => a.kind === kind) : assets;
@@ -208,10 +218,11 @@ export default function AssetDrawer({
         {/* Load more — only when not filtering tabs locally to a subset */}
         {!loading && hasMore && (!kind || visible.length >= 4) && (
           <button
-            onClick={() => setLimit((n) => n + 60)}
-            className="w-full mt-3 py-2 rounded-md border border-border text-fg-muted hover:text-fg hover:border-border-strong text-[11px] transition"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="w-full mt-3 py-2 rounded-md border border-border text-fg-muted hover:text-fg hover:border-border-strong text-[11px] transition disabled:opacity-50"
           >
-            Load more
+            {loadingMore ? "Loading…" : "Load more"}
           </button>
         )}
       </div>
