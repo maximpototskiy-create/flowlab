@@ -16,6 +16,8 @@ const SHORTCUTS: { keys: string; desc: string }[] = [
   { keys: `Shift / ${MOD} + click`, desc: "Add node to selection" },
   { keys: "Drag empty area", desc: "Marquee select" },
   { keys: `${MOD} A`, desc: "Select all" },
+  { keys: `${MOD} Z`, desc: "Undo" },
+  { keys: `${MOD} Shift Z`, desc: "Redo" },
   { keys: "Delete / Backspace", desc: "Delete selected" },
   { keys: `${MOD} G`, desc: "Group selection" },
   { keys: `${MOD} Shift G`, desc: "Ungroup" },

@@ -20,7 +20,7 @@ import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { autoLayout } from "@/lib/canvas/autoLayout";
-import { Minus, Plus, Maximize, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle } from "lucide-react";
+import { Minus, Plus, Maximize, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2 } from "lucide-react";
 
 type Drag = {
   nodeId: string;
@@ -824,6 +824,62 @@ export default function Canvas({
   const graphRef = useRef(graph);
   useEffect(() => { graphRef.current = graph; }, [graph]);
 
+  // ─────────────────────────────── Undo / redo
+  // History of full graph snapshots. We only record STRUCTURAL changes
+  // (node id/type/position/config, edges, groups) — volatile run state
+  // (status spinners, outputs/results) is ignored so running a node doesn't
+  // flood the undo stack. Undo/redo restore the full snapshot.
+  const undoStack = useRef<Graph[]>([]);
+  const redoStack = useRef<Graph[]>([]);
+  const isUndoRedo = useRef(false);
+  const prevGraphRef = useRef<Graph>(graph);
+  const prevSnapRef = useRef<string>("");
+  function structuralSnapshot(g: Graph): string {
+    return JSON.stringify({
+      nodes: g.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, config: n.config })),
+      edges: g.edges,
+      groups: g.groups ?? [],
+    });
+  }
+  useEffect(() => {
+    // initialize on first run
+    if (prevSnapRef.current === "") {
+      prevSnapRef.current = structuralSnapshot(graph);
+      prevGraphRef.current = graph;
+      return;
+    }
+    const snap = structuralSnapshot(graph);
+    if (isUndoRedo.current) {
+      // change came from undo/redo itself — don't record it
+      isUndoRedo.current = false;
+      prevSnapRef.current = snap;
+      prevGraphRef.current = graph;
+      return;
+    }
+    if (snap !== prevSnapRef.current) {
+      undoStack.current.push(prevGraphRef.current);
+      if (undoStack.current.length > 60) undoStack.current.shift();
+      redoStack.current = []; // a fresh edit invalidates the redo chain
+      prevSnapRef.current = snap;
+      prevGraphRef.current = graph;
+    }
+  }, [graph]);
+
+  const undo = useCallback(() => {
+    if (undoStack.current.length === 0) return;
+    const prev = undoStack.current.pop()!;
+    redoStack.current.push(graphRef.current);
+    isUndoRedo.current = true;
+    setGraph(prev);
+  }, []);
+  const redo = useCallback(() => {
+    if (redoStack.current.length === 0) return;
+    const next = redoStack.current.pop()!;
+    undoStack.current.push(graphRef.current);
+    isUndoRedo.current = true;
+    setGraph(next);
+  }, []);
+
   // Refresh measured node heights after the graph changes (add/remove/config
   // can change a node's rendered height). Done on the next frame so the DOM
   // has painted. Feeds group-box bounds + auto-organize.
@@ -1042,6 +1098,19 @@ export default function Canvas({
 
       const meta = e.metaKey || e.ctrlKey;
 
+      // Undo / Redo. ⌘/Ctrl+Z = undo, ⌘/Ctrl+Shift+Z or Ctrl+Y = redo.
+      if (meta && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (meta && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
       // Delete / Backspace → delete ALL selected nodes
       if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.size > 0 && !expandedNodeId) {
         e.preventDefault();
@@ -1124,7 +1193,7 @@ export default function Canvas({
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, groupSelected, ungroupSelected, duplicateGroup, duplicateSelection, graph.nodes, graph.groups, ]);
+  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, groupSelected, ungroupSelected, duplicateGroup, duplicateSelection, undo, redo, graph.nodes, graph.groups, ]);
 
   // ─────────────────────────────── Pan & background interaction
   function onCanvasPointerDown(e: React.PointerEvent) {
@@ -1713,6 +1782,21 @@ export default function Canvas({
               title="Zoom in"
             >
               <Plus size={12} />
+            </button>
+            <div className="w-px h-4 bg-border mx-1" />
+            <button
+              onClick={undo}
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              title="Undo (⌘/Ctrl+Z)"
+            >
+              <Undo2 size={12} />
+            </button>
+            <button
+              onClick={redo}
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              title="Redo (⌘/Ctrl+Shift+Z)"
+            >
+              <Redo2 size={12} />
             </button>
             <div className="w-px h-4 bg-border mx-1" />
             <button
