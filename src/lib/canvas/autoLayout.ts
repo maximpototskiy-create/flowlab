@@ -18,15 +18,22 @@ export function autoLayout(
      *  node reserves its actual height in its column so tall nodes (big
      *  textareas, previews) don't overlap their neighbours below. */
     heights?: Map<string, number>;
+    /** Real widths (px) keyed by id. When provided, each column is as wide
+     *  as its widest unit — lets wide units (e.g. a whole group treated as
+     *  one block) sit in the layout without overlapping the next column. */
+    widths?: Map<string, number>;
   },
 ): Map<string, { x: number; y: number }> {
-  const GAP_X = opts?.gapX ?? 360; // ~NODE_WIDTH(280) + breathing room
+  const GAP_X = opts?.gapX ?? 80; // gap BETWEEN columns
   const GAP_Y = opts?.gapY ?? 48;
   const NODE_H = opts?.nodeH ?? 120; // fallback height when unmeasured
+  const NODE_W = 280; // fallback width (NODE_WIDTH)
   const ORIGIN_X = opts?.originX ?? 120;
   const ORIGIN_Y = opts?.originY ?? 120;
   const heights = opts?.heights;
+  const widths = opts?.widths;
   const heightOf = (id: string) => heights?.get(id) ?? NODE_H;
+  const widthOf = (id: string) => widths?.get(id) ?? NODE_W;
 
   const ids = new Set(nodes.map((n) => n.id));
   const incoming = new Map<string, string[]>();
@@ -66,16 +73,28 @@ export function autoLayout(
     byLayer.get(l)!.push(n.id);
   }
 
-  // Assign positions. Each column stacks its nodes with their REAL heights
-  // (so tall nodes don't overlap), centered vertically around 0; then the
+  // X of each column = cumulative width of all previous columns + gaps.
+  // Column width = widest unit in that column.
+  const sortedLayers = [...byLayer.keys()].sort((a, b) => a - b);
+  const colX = new Map<number, number>();
+  let xCursor = 0;
+  for (const l of sortedLayers) {
+    colX.set(l, xCursor);
+    const colW = Math.max(...byLayer.get(l)!.map((id) => widthOf(id)), NODE_W);
+    xCursor += colW + GAP_X;
+  }
+
+  // Assign positions. Each column stacks its units with their REAL heights
+  // (so tall units don't overlap), centered vertically around 0; then the
   // whole layout is shifted so its top-left sits at (ORIGIN_X, ORIGIN_Y).
   const pos = new Map<string, { x: number; y: number }>();
   for (const [l, colIds] of byLayer) {
     const colHeight =
       colIds.reduce((sum, id) => sum + heightOf(id), 0) + (colIds.length - 1) * GAP_Y;
     let cursorY = -colHeight / 2;
+    const x = colX.get(l) ?? 0;
     for (const id of colIds) {
-      pos.set(id, { x: l * GAP_X, y: cursorY });
+      pos.set(id, { x, y: cursorY });
       cursorY += heightOf(id) + GAP_Y;
     }
   }

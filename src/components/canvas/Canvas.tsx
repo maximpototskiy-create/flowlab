@@ -11,6 +11,7 @@ import Minimap from "./Minimap";
 import GroupBox from "./GroupBox";
 import NodePalette from "./NodePalette";
 import ContextMenu from "./ContextMenu";
+import ActionMenu, { type ActionItem } from "./ActionMenu";
 import ConnectionPicker from "./ConnectionPicker";
 import NodeExpandedModal from "./NodeExpandedModal";
 import CanvasToolbar from "./CanvasToolbar";
@@ -18,7 +19,7 @@ import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { autoLayout } from "@/lib/canvas/autoLayout";
-import { Minus, Plus, Maximize, Grid3X3, Network } from "lucide-react";
+import { Minus, Plus, Maximize, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil } from "lucide-react";
 
 type Drag = {
   nodeId: string;
@@ -216,6 +217,9 @@ export default function Canvas({
 
   // ─────────────────────────────── Context menu & pickers
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null);
+  // Action context menu (right-click on a node or group) — distinct from the
+  // node-picker `ctxMenu`.
+  const [actionMenu, setActionMenu] = useState<{ x: number; y: number; kind: "node" | "group"; id: string } | null>(null);
   const [connPicker, setConnPicker] = useState<{
     screenX: number; screenY: number; canvasX: number; canvasY: number;
     fromNode: string; fromPort: string; fromKind: PortKind;
@@ -523,23 +527,107 @@ export default function Canvas({
     });
   }
 
-  // Auto-organize: re-position all nodes into a left-to-right layered
-  // layout following the data-flow edges. Pure layout in autoLayout();
-  // here we just apply the new positions and recenter the view.
+  // Auto-organize: re-position nodes into a left-to-right layered layout
+  // following the data-flow edges. Groups are treated as RIGID BLOCKS — a
+  // group's internal layout is preserved (its nodes keep their relative
+  // positions) and the whole block is placed as one unit, so organizing the
+  // whole project no longer scrambles a group you've arranged by hand.
   const organizeNodes = useCallback(() => {
     const heights = measureNodeHeights();
+    const PAD = 24;
+    const LABEL_H = 26;
     setGraph((g) => {
       if (g.nodes.length === 0) return g;
-      const pos = autoLayout(g.nodes, g.edges, { heights });
+      const groups = g.groups ?? [];
+
+      // node id → group id
+      const nodeToGroup = new Map<string, string>();
+      for (const gr of groups) for (const id of gr.nodeIds) nodeToGroup.set(id, gr.id);
+
+      // Build units: one per (non-empty) group + one per ungrouped node.
+      type Unit = { id: string; nodeIds: string[]; w: number; h: number };
+      const units: Unit[] = [];
+      for (const gr of groups) {
+        const members = gr.nodeIds
+          .map((id) => g.nodes.find((n) => n.id === id))
+          .filter((n): n is GraphNode => !!n);
+        if (members.length === 0) continue;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const n of members) {
+          const h = heights.get(n.id) ?? 120;
+          minX = Math.min(minX, n.position.x);
+          minY = Math.min(minY, n.position.y);
+          maxX = Math.max(maxX, n.position.x + NODE_WIDTH);
+          maxY = Math.max(maxY, n.position.y + h);
+        }
+        units.push({
+          id: `grp:${gr.id}`,
+          nodeIds: members.map((n) => n.id),
+          w: maxX - minX + PAD * 2,
+          h: maxY - minY + PAD * 2 + LABEL_H,
+        });
+      }
+      for (const n of g.nodes) {
+        if (!nodeToGroup.has(n.id)) {
+          units.push({ id: n.id, nodeIds: [n.id], w: NODE_WIDTH, h: heights.get(n.id) ?? 120 });
+        }
+      }
+      if (units.length === 0) return g;
+
+      // node id → unit id, for projecting edges to the unit graph.
+      const unitOf = new Map<string, string>();
+      for (const u of units) for (const nid of u.nodeIds) unitOf.set(nid, u.id);
+
+      // Pseudo-nodes + de-duplicated inter-unit edges for the layout pass.
+      const unitNodes = units.map((u) => ({ id: u.id } as unknown as GraphNode));
+      const seen = new Set<string>();
+      const unitEdges = [] as { id: string; from: { nodeId: string; port: string }; to: { nodeId: string; port: string } }[];
+      for (const e of g.edges) {
+        const uf = unitOf.get(e.from.nodeId);
+        const ut = unitOf.get(e.to.nodeId);
+        if (uf && ut && uf !== ut) {
+          const k = `${uf}->${ut}`;
+          if (!seen.has(k)) {
+            seen.add(k);
+            unitEdges.push({ id: k, from: { nodeId: uf, port: "" }, to: { nodeId: ut, port: "" } });
+          }
+        }
+      }
+
+      const uWidths = new Map(units.map((u) => [u.id, u.w]));
+      const uHeights = new Map(units.map((u) => [u.id, u.h]));
+      const unitPos = autoLayout(unitNodes, unitEdges, { widths: uWidths, heights: uHeights });
+
+      // Expand units back to node positions.
+      const newPos = new Map<string, { x: number; y: number }>();
+      for (const u of units) {
+        const up = unitPos.get(u.id);
+        if (!up) continue;
+        if (u.nodeIds.length === 1 && !nodeToGroup.has(u.nodeIds[0])) {
+          newPos.set(u.nodeIds[0], up);
+        } else {
+          // Group block: shift members preserving their relative layout.
+          const members = u.nodeIds
+            .map((id) => g.nodes.find((n) => n.id === id))
+            .filter((n): n is GraphNode => !!n);
+          const minX = Math.min(...members.map((n) => n.position.x));
+          const minY = Math.min(...members.map((n) => n.position.y));
+          const dx = up.x + PAD - minX;
+          const dy = up.y + PAD + LABEL_H - minY;
+          for (const n of members) {
+            newPos.set(n.id, { x: n.position.x + dx, y: n.position.y + dy });
+          }
+        }
+      }
+
       return {
         ...g,
         nodes: g.nodes.map((n) => {
-          const p = pos.get(n.id);
+          const p = newPos.get(n.id);
           return p ? { ...n, position: p } : n;
         }),
       };
     });
-    // Recenter so the freshly-laid-out graph is visible from the top-left.
     setZoom(1);
     setPan({ x: 80, y: 80 });
   }, []);
@@ -990,7 +1078,34 @@ export default function Canvas({
   }
 
   function onCanvasContextMenu(e: React.MouseEvent) {
+    const t = e.target as HTMLElement;
+    // Input fields → let the browser's native menu (copy/paste/etc.) show.
+    // Do NOT preventDefault here. (#10)
+    if (t.closest("input, textarea, select, [contenteditable]")) {
+      return;
+    }
     e.preventDefault();
+    // Right-click on a node → node action menu.
+    const nodeEl = t.closest("[data-node-id]") as HTMLElement | null;
+    if (nodeEl) {
+      const nodeId = nodeEl.getAttribute("data-node-id");
+      if (nodeId) {
+        // If right-clicking an unselected node, select it first.
+        if (!selectedIds.has(nodeId)) setSelected(nodeId);
+        setActionMenu({ x: e.clientX, y: e.clientY, kind: "node", id: nodeId });
+        return;
+      }
+    }
+    // Right-click on a group box → group action menu.
+    const groupEl = t.closest("[data-group-box]") as HTMLElement | null;
+    if (groupEl) {
+      const groupId = groupEl.getAttribute("data-group-box");
+      if (groupId) {
+        setActionMenu({ x: e.clientX, y: e.clientY, kind: "group", id: groupId });
+        return;
+      }
+    }
+    // Empty canvas → node picker (add a node here).
     const pt = screenToCanvas(e.clientX, e.clientY);
     setCtxMenu({ x: e.clientX, y: e.clientY, canvasX: pt.x, canvasY: pt.y });
   }
@@ -1569,6 +1684,64 @@ export default function Canvas({
             }}
           />
         );
+      })()}
+
+      {/* Action menu (right-click on node / group) */}
+      {actionMenu && (() => {
+        const close = () => setActionMenu(null);
+        let items: ActionItem[] = [];
+        if (actionMenu.kind === "node") {
+          const nodeId = actionMenu.id;
+          const multi = selectedIds.size > 1 && selectedIds.has(nodeId);
+          items = [
+            { label: "Run", icon: <Play size={13} />, onClick: () => startRun(nodeId) },
+            {
+              label: "Duplicate",
+              icon: <Copy size={13} />,
+              onClick: () => {
+                const src = graph.nodes.find((x) => x.id === nodeId);
+                if (!src) return;
+                const newNode = makeNode(src.type, { x: src.position.x + 30, y: src.position.y + 30 });
+                newNode.config = JSON.parse(JSON.stringify(src.config));
+                setGraph((g) => ({ ...g, nodes: [...g.nodes, newNode] }));
+                setSelected(newNode.id);
+              },
+            },
+          ];
+          if (multi) {
+            items.push({
+              label: `Group ${selectedIds.size} nodes`,
+              icon: <GroupIcon size={13} />,
+              onClick: () => groupSelected(),
+              separator: true,
+            });
+          }
+          items.push({
+            label: multi ? "Delete selected" : "Delete",
+            icon: <Trash2 size={13} />,
+            onClick: () => (multi ? deleteSelected() : deleteNode(nodeId)),
+            danger: true,
+            separator: true,
+          });
+        } else {
+          const groupId = actionMenu.id;
+          items = [
+            {
+              label: "Rename",
+              icon: <Pencil size={13} />,
+              onClick: () => {
+                const gr = (graph.groups ?? []).find((x) => x.id === groupId);
+                const name = window.prompt("Group name", gr?.label ?? "Group");
+                if (name !== null) renameGroup(groupId, name.trim() || "Group");
+              },
+            },
+            { label: "Organize nodes", icon: <Network size={13} />, onClick: () => organizeGroup(groupId) },
+            { label: "Select nodes", icon: <GroupIcon size={13} />, onClick: () => selectGroup(groupId) },
+            { label: "Ungroup", icon: <Ungroup size={13} />, onClick: () => ungroupGroup(groupId), separator: true },
+            { label: "Delete group + nodes", icon: <Trash2 size={13} />, onClick: () => deleteGroup(groupId), danger: true },
+          ];
+        }
+        return <ActionMenu x={actionMenu.x} y={actionMenu.y} items={items} onClose={close} />;
       })()}
 
       {/* Connection picker */}
