@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, memo } from "react";
+import { useState, useEffect, useRef, memo } from "react";
 import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand } from "lucide-react";
 import Lightbox from "./Lightbox";
 import { NODE_TYPES, getActiveInputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
@@ -85,6 +85,24 @@ function CanvasNodeImpl({
   const [inlineExpanded, setInlineExpanded] = useState(false);
   // Info popover (the "i" button) — shows what the node does + its ports.
   const [showInfo, setShowInfo] = useState(false);
+  const infoRef = useRef<HTMLDivElement>(null);
+  // Close the info popover on click outside or Esc.
+  useEffect(() => {
+    if (!showInfo) return;
+    function onDown(e: MouseEvent) {
+      if (!infoRef.current?.contains(e.target as Node)) setShowInfo(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setShowInfo(false);
+    }
+    const t = setTimeout(() => document.addEventListener("mousedown", onDown), 50);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [showInfo]);
   // Lightbox state — when set, renders fullscreen viewer for image/video.
   // `list` and `idx` enable ←/→ navigation through a multi-result carousel.
   const [lightbox, setLightbox] = useState<{
@@ -145,6 +163,7 @@ function CanvasNodeImpl({
         </button>
         {showInfo && (
           <div
+            ref={infoRef}
             className="absolute top-9 right-2 z-30 w-60 rounded-lg bg-bg-card border border-border shadow-panel p-3 text-left nodrag"
             onMouseDown={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}

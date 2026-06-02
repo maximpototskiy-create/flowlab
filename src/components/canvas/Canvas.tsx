@@ -469,6 +469,70 @@ export default function Canvas({
     setGraph((g) => ({ ...g, groups: (g.groups ?? []).filter((gr) => gr.id !== groupId) }));
   }, []);
 
+  // Duplicate a whole group: clone its nodes (new ids, offset), re-wire the
+  // internal edges between the clones, and create a new group around them.
+  const duplicateGroup = useCallback((groupId: string) => {
+    const OFFSET = 48;
+    setGraph((g) => {
+      const gr = (g.groups ?? []).find((x) => x.id === groupId);
+      if (!gr) return g;
+      const idMap = new Map<string, string>();
+      const newNodes: GraphNode[] = [];
+      for (const nid of gr.nodeIds) {
+        const src = g.nodes.find((n) => n.id === nid);
+        if (!src) continue;
+        const nn = makeNode(src.type, { x: src.position.x + OFFSET, y: src.position.y + OFFSET });
+        nn.config = JSON.parse(JSON.stringify(src.config));
+        idMap.set(src.id, nn.id);
+        newNodes.push(nn);
+      }
+      if (newNodes.length === 0) return g;
+      const newEdges = g.edges
+        .filter((e) => idMap.has(e.from.nodeId) && idMap.has(e.to.nodeId))
+        .map((e) => makeEdge(idMap.get(e.from.nodeId)!, e.from.port, idMap.get(e.to.nodeId)!, e.to.port));
+      const newGroup: Group = {
+        id: `grp-${Date.now().toString(36)}`,
+        nodeIds: newNodes.map((n) => n.id),
+        label: gr.label ? `${gr.label} copy` : "Group copy",
+        color: gr.color,
+      };
+      // Select the new clones.
+      requestAnimationFrame(() => setSelectedIds(new Set(newNodes.map((n) => n.id))));
+      return {
+        ...g,
+        nodes: [...g.nodes, ...newNodes],
+        edges: [...g.edges, ...newEdges],
+        groups: [...(g.groups ?? []), newGroup],
+      };
+    });
+  }, []);
+
+  // Duplicate the current multi-selection (nodes + the edges among them),
+  // without forming a group.
+  const duplicateSelection = useCallback(() => {
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
+    const OFFSET = 40;
+    setGraph((g) => {
+      const idMap = new Map<string, string>();
+      const newNodes: GraphNode[] = [];
+      for (const nid of sel) {
+        const src = g.nodes.find((n) => n.id === nid);
+        if (!src) continue;
+        const nn = makeNode(src.type, { x: src.position.x + OFFSET, y: src.position.y + OFFSET });
+        nn.config = JSON.parse(JSON.stringify(src.config));
+        idMap.set(src.id, nn.id);
+        newNodes.push(nn);
+      }
+      if (newNodes.length === 0) return g;
+      const newEdges = g.edges
+        .filter((e) => idMap.has(e.from.nodeId) && idMap.has(e.to.nodeId))
+        .map((e) => makeEdge(idMap.get(e.from.nodeId)!, e.from.port, idMap.get(e.to.nodeId)!, e.to.port));
+      requestAnimationFrame(() => setSelectedIds(new Set(newNodes.map((n) => n.id))));
+      return { ...g, nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] };
+    });
+  }, []);
+
   // Delete a group AND its member nodes (and their edges).
   const deleteGroup = useCallback((groupId: string) => {
     setGraph((g) => {
@@ -1019,15 +1083,26 @@ export default function Canvas({
         return;
       }
 
-      // Cmd/Ctrl+D → duplicate selected (copy+paste in one shot)
-      if (meta && e.key.toLowerCase() === "d" && selected) {
+      // Cmd/Ctrl+D → duplicate. Group (if the selection exactly matches a
+      // group) → duplicate the whole group; multi-selection → duplicate all;
+      // single node → duplicate it.
+      if (meta && e.key.toLowerCase() === "d" && selectedIds.size > 0) {
         e.preventDefault();
-        const src = graph.nodes.find((x) => x.id === selected);
-        if (src) {
-          const newNode = makeNode(src.type, { x: src.position.x + 30, y: src.position.y + 30 });
-          newNode.config = JSON.parse(JSON.stringify(src.config));
-          setGraph((g) => ({ ...g, nodes: [...g.nodes, newNode] }));
-          setSelected(newNode.id);
+        const grp = (graph.groups ?? []).find(
+          (gr) => gr.nodeIds.length === selectedIds.size && gr.nodeIds.every((id) => selectedIds.has(id)),
+        );
+        if (grp) {
+          duplicateGroup(grp.id);
+        } else if (selectedIds.size > 1) {
+          duplicateSelection();
+        } else if (selected) {
+          const src = graph.nodes.find((x) => x.id === selected);
+          if (src) {
+            const newNode = makeNode(src.type, { x: src.position.x + 30, y: src.position.y + 30 });
+            newNode.config = JSON.parse(JSON.stringify(src.config));
+            setGraph((g) => ({ ...g, nodes: [...g.nodes, newNode] }));
+            setSelected(newNode.id);
+          }
         }
         return;
       }
@@ -1049,7 +1124,7 @@ export default function Canvas({
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, groupSelected, ungroupSelected, graph.nodes, ]);
+  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, groupSelected, ungroupSelected, duplicateGroup, duplicateSelection, graph.nodes, graph.groups, ]);
 
   // ─────────────────────────────── Pan & background interaction
   function onCanvasPointerDown(e: React.PointerEvent) {
@@ -1750,6 +1825,7 @@ export default function Canvas({
               },
             },
             { label: "Organize nodes", icon: <Network size={13} />, onClick: () => organizeGroup(groupId) },
+            { label: "Duplicate group", icon: <Copy size={13} />, onClick: () => duplicateGroup(groupId) },
             { label: "Select nodes", icon: <GroupIcon size={13} />, onClick: () => selectGroup(groupId) },
             { label: "Ungroup", icon: <Ungroup size={13} />, onClick: () => ungroupGroup(groupId), separator: true },
             { label: "Delete group + nodes", icon: <Trash2 size={13} />, onClick: () => deleteGroup(groupId), danger: true },

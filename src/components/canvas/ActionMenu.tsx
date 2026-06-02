@@ -58,7 +58,13 @@ export default function ActionMenu({
         <div key={i}>
           {it.separator && <div className="h-px bg-border my-1" />}
           <button
-            onClick={() => {
+            // Stop the mousedown from bubbling to the document outside-click
+            // handler, which would otherwise close the menu BEFORE the click
+            // fires — making every item look dead until a page refresh.
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
               it.onClick();
               onClose();
             }}
