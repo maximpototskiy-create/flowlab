@@ -32,18 +32,13 @@ export default async function AssetsPage({
     brandId?: string;
     kind?: string;
     source?: string;
-    OR?: { prompt?: { contains: string; mode: "insensitive" }; model?: { contains: string; mode: "insensitive" } }[];
+    prompt?: { contains: string; mode: "insensitive" };
   } = {};
   if (project) where.projectId = project;
   if (brand) where.brandId = brand;
   if (kind) where.kind = kind;
   if (source) where.source = source;
-  if (q) {
-    where.OR = [
-      { prompt: { contains: q, mode: "insensitive" } },
-      { model: { contains: q, mode: "insensitive" } },
-    ];
-  }
+  if (q) where.prompt = { contains: q, mode: "insensitive" };
 
   const [assetsRaw, projects, brands, total] = await Promise.all([
     prisma.asset.findMany({
@@ -106,49 +101,6 @@ export default async function AssetsPage({
   const projectOpts: FilterOption[] = (projects as { id: string; name: string }[]).map((p) => ({ value: p.id, label: p.name }));
   const brandOpts: FilterOption[] = (brands as { id: string; name: string }[]).map((b) => ({ value: b.id, label: b.name }));
 
-  // Brand-kit UI screenshots aren't Asset rows — they live in
-  // BrandKit.uiScreenshots (newline-separated URLs). Surface them as virtual
-  // assets so the "Brand kit" filter isn't empty. Only when the active
-  // filters could include them (image kind, no project/search constraint).
-  let brandKitAssets: AssetItem[] = [];
-  const wantBrandKit = !source || source === "brand_kit";
-  const wantImageKind = !kind || kind === "image";
-  if (wantBrandKit && wantImageKind && !project && !q) {
-    const kits = (await prisma.brandKit.findMany({
-      where: brand ? { brandId: brand } : {},
-      select: { uiScreenshots: true, brand: { select: { id: true, name: true } } },
-    })) as { uiScreenshots: string | null; brand: { id: string; name: string } | null }[];
-    for (const k of kits) {
-      const urls = (k.uiScreenshots ?? "")
-        .split("\n")
-        .map((s) => s.trim())
-        .filter((u) => u.startsWith("http"));
-      urls.forEach((url, i) => {
-        brandKitAssets.push({
-          id: `bk-${k.brand?.id ?? "x"}-${i}`,
-          cdnUrl: url,
-          kind: "image",
-          mimeType: null,
-          sizeBytes: null,
-          width: null,
-          height: null,
-          durationSec: null,
-          source: "brand_kit",
-          model: null,
-          prompt: null,
-          createdAt: new Date(0).toISOString(),
-          projectName: null,
-          brandName: k.brand?.name ?? null,
-        });
-      });
-    }
-  }
-
-  // When the source filter is exactly "brand_kit", show only those (there are
-  // no Asset rows with that source); otherwise prepend them to the real ones.
-  const combined: AssetItem[] = source === "brand_kit" ? brandKitAssets : [...assets, ...brandKitAssets];
-  const shownTotal = source === "brand_kit" ? brandKitAssets.length : total + brandKitAssets.length;
-
   return (
     <div className="grain min-h-screen">
       <TopNav
@@ -162,16 +114,16 @@ export default async function AssetsPage({
           </div>
           <h1 className="font-display text-5xl leading-tight">Assets</h1>
           <p className="text-fg-muted text-sm mt-2">
-            {shownTotal === 0
+            {total === 0
               ? "No assets match these filters yet."
-              : `${shownTotal} asset${shownTotal === 1 ? "" : "s"}${
+              : `${total} asset${total === 1 ? "" : "s"}${
                   total > PAGE_SIZE ? ` — showing latest ${PAGE_SIZE}` : ""
                 }.`}
           </p>
         </div>
 
         <AssetGallery
-          assets={combined}
+          assets={assets}
           projects={projectOpts}
           brands={brandOpts}
           active={{ project, brand, kind, source, q }}
