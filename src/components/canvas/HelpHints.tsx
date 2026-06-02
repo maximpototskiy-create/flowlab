@@ -4,21 +4,29 @@ import { useEffect, useRef } from "react";
 
 // Floating help panel listing canvas shortcuts & gestures. Opened from the
 // "?" button in the toolbar. Purely informational.
+
+// Detect platform so we show Ctrl on Windows/Linux and ⌘ on macOS — most of
+// the team is on Windows.
+const IS_MAC =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+const MOD = IS_MAC ? "⌘" : "Ctrl";
+const ALT = IS_MAC ? "⌥" : "Alt";
+
 const SHORTCUTS: { keys: string; desc: string }[] = [
-  { keys: "Shift / ⌘ + click", desc: "Add node to selection" },
+  { keys: `Shift / ${MOD} + click`, desc: "Add node to selection" },
   { keys: "Drag empty area", desc: "Marquee select" },
-  { keys: "⌘ A", desc: "Select all" },
-  { keys: "Delete / ⌫", desc: "Delete selected" },
-  { keys: "⌘ G", desc: "Group selection" },
-  { keys: "⌘ ⇧ G", desc: "Ungroup" },
-  { keys: "⌘ C / ⌘ V", desc: "Copy / paste node" },
-  { keys: "⌘ D", desc: "Duplicate node" },
-  { keys: "⌘ Enter", desc: "Run selected node" },
+  { keys: `${MOD} A`, desc: "Select all" },
+  { keys: "Delete / Backspace", desc: "Delete selected" },
+  { keys: `${MOD} G`, desc: "Group selection" },
+  { keys: `${MOD} Shift G`, desc: "Ungroup" },
+  { keys: `${MOD} C / ${MOD} V`, desc: "Copy / paste node" },
+  { keys: `${MOD} D`, desc: "Duplicate node" },
+  { keys: `${MOD} Enter`, desc: "Run selected node" },
   { keys: "Esc", desc: "Clear selection / close menus" },
 ];
 const GESTURES: { keys: string; desc: string }[] = [
-  { keys: "Space / middle-drag", desc: "Pan canvas" },
-  { keys: "⌘ / Ctrl + scroll", desc: "Zoom" },
+  { keys: `Space / ${ALT} / middle-drag`, desc: "Pan canvas" },
+  { keys: `${MOD} + scroll`, desc: "Zoom" },
   { keys: "Right-click node", desc: "Node actions menu" },
   { keys: "Right-click group", desc: "Group actions menu" },
   { keys: "Right-click field", desc: "Native copy / paste" },
@@ -62,7 +70,7 @@ export default function HelpHints({ onClose }: { onClose: () => void }) {
   return (
     <div
       ref={ref}
-      className="absolute bottom-16 left-1/2 -translate-x-1/2 z-30 w-[340px] rounded-xl bg-bg-card border border-border shadow-panel p-4 animate-fade-up"
+      className="absolute bottom-16 left-1/2 z-30 w-[340px] -ml-[170px] rounded-xl bg-bg-card border border-border shadow-panel p-4"
     >
       <div className="flex items-center justify-between mb-3">
         <span className="text-[13px] font-semibold text-fg">Canvas shortcuts</span>

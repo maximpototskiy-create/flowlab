@@ -123,6 +123,11 @@ export default function Canvas({
   // make sense for one node (copy/duplicate/run/expand).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const selected = selectedIds.size === 1 ? [...selectedIds][0] : null;
+  // Ref mirror so group ops can read the current selection without nesting
+  // setGraph inside a setSelectedIds updater (that double-fires in strict
+  // mode → duplicate side effects, which caused flaky right-click grouping).
+  const selectedIdsRef = useRef(selectedIds);
+  useEffect(() => { selectedIdsRef.current = selectedIds; }, [selectedIds]);
   function setSelected(id: string | null) {
     setSelectedIds(id ? new Set([id]) : new Set());
   }
@@ -328,6 +333,8 @@ export default function Canvas({
             results: n.results,
           })),
           edges: graph.edges,
+          // Persist groups too — without this they vanish on every reload.
+          groups: graph.groups,
         };
         await saveWorkflowGraph(workflowId, cleaned);
         setSaveState("saved");
@@ -377,18 +384,17 @@ export default function Canvas({
 
   // Delete every selected node (and their edges) in one shot.
   const deleteSelected = useCallback(() => {
-    setSelectedIds((sel) => {
-      if (sel.size === 0) return sel;
-      setGraph((g) => {
-        const nodes = g.nodes.filter((n) => !sel.has(n.id));
-        return {
-          nodes,
-          edges: g.edges.filter((e) => !sel.has(e.from.nodeId) && !sel.has(e.to.nodeId)),
-          groups: cleanGroups(g.groups, nodes),
-        };
-      });
-      return new Set();
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
+    setGraph((g) => {
+      const nodes = g.nodes.filter((n) => !sel.has(n.id));
+      return {
+        nodes,
+        edges: g.edges.filter((e) => !sel.has(e.from.nodeId) && !sel.has(e.to.nodeId)),
+        groups: cleanGroups(g.groups, nodes),
+      };
     });
+    setSelectedIds(new Set());
   }, []);
 
   const deleteEdge = useCallback((edgeId: string) => {
@@ -415,25 +421,21 @@ export default function Canvas({
   // ids — their on-screen box is computed live from member positions, so it
   // follows drags and auto-organize automatically.
   const groupSelected = useCallback(() => {
-    setSelectedIds((sel) => {
-      if (sel.size < 2) return sel; // need ≥2 to form a group
-      const ids = [...sel];
-      const group: Group = { id: `grp-${Date.now().toString(36)}`, nodeIds: ids };
-      setGraph((g) => ({ ...g, groups: [...(g.groups ?? []), group] }));
-      return sel;
-    });
+    const sel = selectedIdsRef.current;
+    if (sel.size < 2) return; // need ≥2 to form a group
+    const ids = [...sel];
+    const group: Group = { id: `grp-${Date.now().toString(36)}`, nodeIds: ids };
+    setGraph((g) => ({ ...g, groups: [...(g.groups ?? []), group] }));
   }, []);
 
   // Ungroup: drop any group that contains a currently-selected node.
   const ungroupSelected = useCallback(() => {
-    setSelectedIds((sel) => {
-      if (sel.size === 0) return sel;
-      setGraph((g) => ({
-        ...g,
-        groups: (g.groups ?? []).filter((gr) => !gr.nodeIds.some((id) => sel.has(id))),
-      }));
-      return sel;
-    });
+    const sel = selectedIdsRef.current;
+    if (sel.size === 0) return;
+    setGraph((g) => ({
+      ...g,
+      groups: (g.groups ?? []).filter((gr) => !gr.nodeIds.some((id) => sel.has(id))),
+    }));
   }, []);
 
   // Select every node belonging to a group (used when its box is clicked).
@@ -1092,8 +1094,9 @@ export default function Canvas({
     if (nodeEl) {
       const nodeId = nodeEl.getAttribute("data-node-id");
       if (nodeId) {
-        // If right-clicking an unselected node, select it first.
-        if (!selectedIds.has(nodeId)) setSelected(nodeId);
+        // If right-clicking a node that's not in a multi-selection, select
+        // it; but keep an existing multi-selection so "Group" stays available.
+        if (!selectedIds.has(nodeId) && selectedIds.size <= 1) setSelected(nodeId);
         setActionMenu({ x: e.clientX, y: e.clientY, kind: "node", id: nodeId });
         return;
       }
@@ -1703,7 +1706,7 @@ export default function Canvas({
         let items: ActionItem[] = [];
         if (actionMenu.kind === "node") {
           const nodeId = actionMenu.id;
-          const multi = selectedIds.size > 1 && selectedIds.has(nodeId);
+          const multi = selectedIds.size > 1;
           items = [
             { label: "Run", icon: <Play size={13} />, onClick: () => startRun(nodeId) },
             {
