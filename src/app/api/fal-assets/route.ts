@@ -7,7 +7,7 @@
 // enabled in the fal dashboard Assets settings.
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
-import { nextFalKey } from "@/lib/fal/client";
+import { getFalKeys } from "@/lib/fal/client";
 import type { AssetItem } from "@/lib/assetsQuery";
 
 export const dynamic = "force-dynamic";
@@ -58,30 +58,20 @@ export async function GET(req: Request): Promise<NextResponse> {
   const section = searchParams.get("section"); // all-media | uploads | favorites
   if (section) upstream.set("section", section);
 
-  let key: string;
-  try {
-    key = nextFalKey();
-  } catch {
+  const keys = getFalKeys();
+  if (keys.length === 0) {
     return NextResponse.json(
       { assets: [], next_cursor: null, has_more: false, error: "No fal key configured" },
       { status: 500 },
     );
   }
 
-  try {
-    const res = await fetch(`https://api.fal.ai/v1/assets?${upstream.toString()}`, {
-      headers: { Authorization: `Key ${key}` },
-      cache: "no-store",
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      return NextResponse.json(
-        { assets: [], next_cursor: null, has_more: false, error: `fal ${res.status}: ${text.slice(0, 200)}` },
-        { status: res.status },
-      );
-    }
-    const data = (await res.json()) as FalBrowseResponse;
-    const assets: AssetItem[] = (data.assets ?? [])
+  // fal Assets is scoped to the account behind each key. With two keys
+  // (two accounts/projects), each has its OWN library — so we query ALL
+  // keys and merge the results, de-duplicating by URL. has_more is true if
+  // any account still has more pages.
+  function mapAssets(list: FalAsset[]): AssetItem[] {
+    return (list ?? [])
       .filter((a) => a.url)
       .map((a) => ({
         id: `fal-${a.vector_id}`,
@@ -99,7 +89,43 @@ export async function GET(req: Request): Promise<NextResponse> {
         projectName: null,
         brandName: null,
       }));
-    return NextResponse.json({ assets, next_cursor: data.next_cursor ?? null, has_more: !!data.has_more });
+  }
+
+  try {
+    const results = await Promise.all(
+      keys.map(async (key) => {
+        try {
+          const res = await fetch(`https://api.fal.ai/v1/assets?${upstream.toString()}`, {
+            headers: { Authorization: `Key ${key}` },
+            cache: "no-store",
+          });
+          if (!res.ok) return { assets: [] as AssetItem[], has_more: false };
+          const data = (await res.json()) as FalBrowseResponse;
+          return { assets: mapAssets(data.assets), has_more: !!data.has_more };
+        } catch {
+          return { assets: [] as AssetItem[], has_more: false };
+        }
+      }),
+    );
+
+    // Merge + dedupe by URL, keep order (newest-ish across accounts).
+    const seen = new Set<string>();
+    const merged: AssetItem[] = [];
+    for (const r of results) {
+      for (const a of r.assets) {
+        if (seen.has(a.cdnUrl)) continue;
+        seen.add(a.cdnUrl);
+        merged.push(a);
+      }
+    }
+    merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const hasMore = results.some((r) => r.has_more);
+
+    if (merged.length === 0 && results.every((r) => r.assets.length === 0)) {
+      // All keys returned nothing — surface a soft hint, not an error.
+      return NextResponse.json({ assets: [], next_cursor: null, has_more: false });
+    }
+    return NextResponse.json({ assets: merged, next_cursor: null, has_more: hasMore });
   } catch (err) {
     console.error("[api/fal-assets] failed:", err);
     return NextResponse.json(

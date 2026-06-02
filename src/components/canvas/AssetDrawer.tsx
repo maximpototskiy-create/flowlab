@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Search, X, Image as ImageIcon, Video, Music, Loader2 } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
 
@@ -57,8 +57,23 @@ export default function AssetDrawer({
   // Tab filter is purely local now → instant switching, no refetch.
   const visible = kind ? assets.filter((a) => a.kind === kind) : assets;
 
+  // Stop wheel from reaching the canvas. The canvas binds a NATIVE wheel
+  // listener on its own element, which fires on bubble BEFORE React's
+  // delegated onWheel — so React stopPropagation doesn't help. We bind a
+  // native listener on the drawer root and stop propagation there, before
+  // the event bubbles up to the canvas element.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const stop = (e: WheelEvent) => e.stopPropagation();
+    el.addEventListener("wheel", stop, { passive: true });
+    return () => el.removeEventListener("wheel", stop);
+  }, []);
+
   return (
     <div
+      ref={rootRef}
       className="absolute top-0 right-0 h-full w-[340px] z-30 bg-bg-card border-l border-border shadow-panel flex flex-col"
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -114,7 +129,7 @@ export default function AssetDrawer({
       </div>
 
       {/* Grid */}
-      <div className="flex-1 overflow-auto p-3" onWheel={(e) => e.stopPropagation()}>
+      <div className="flex-1 overflow-auto p-3">
         {loading ? (
           <div className="flex items-center justify-center py-12 text-fg-subtle">
             <Loader2 size={18} className="animate-spin" />
