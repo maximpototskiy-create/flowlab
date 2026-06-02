@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles } from "lucide-react";
+import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Upload } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
 
 const KINDS = [
@@ -123,6 +123,28 @@ export default function AssetDrawer({
   // native listener on the drawer root and stop propagation there, before
   // the event bubbles up to the canvas element.
   const rootRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingSearch, setUploadingSearch] = useState(false);
+
+  // Upload a user image to fal, then use its fal-hosted URL as the
+  // "similar to" reference for semantic image search.
+  const onSearchImagePicked = useCallback(async (file: File) => {
+    setUploadingSearch(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/fal-upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.url) {
+        setQ("");
+        setSimilar({ url: data.url, kind: "image", label: "uploaded image" });
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setUploadingSearch(false);
+    }
+  }, []);
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
@@ -172,14 +194,39 @@ export default function AssetDrawer({
             fal
           </button>
         </div>
-        <div className="relative">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder={source === "fal" ? "Semantic search…" : "Search…"}
-            className="w-full bg-bg border border-border rounded-md pl-7 pr-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand"
-          />
+        <div className="flex gap-1.5">
+          <div className="relative flex-1">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder={source === "fal" ? "Semantic search…" : "Search…"}
+              className="w-full bg-bg border border-border rounded-md pl-7 pr-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand"
+            />
+          </div>
+          {source === "fal" && (
+            <>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingSearch}
+                title="Search by your image"
+                className="flex-shrink-0 px-2 rounded-md border border-border text-fg-muted hover:text-fg hover:border-border-strong transition disabled:opacity-50"
+              >
+                {uploadingSearch ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onSearchImagePicked(f);
+                  e.target.value = "";
+                }}
+              />
+            </>
+          )}
         </div>
         {source !== "ui" && (
           <div className="flex gap-1">
