@@ -83,6 +83,8 @@ function CanvasNodeImpl({
   // NODE_WIDTH so output-port X positions (computed from NODE_WIDTH in
   // CanvasEdges) don't drift and edges keep landing correctly.
   const [inlineExpanded, setInlineExpanded] = useState(false);
+  // Info popover (the "i" button) — shows what the node does + its ports.
+  const [showInfo, setShowInfo] = useState(false);
   // Lightbox state — when set, renders fullscreen viewer for image/video.
   // `list` and `idx` enable ←/→ navigation through a multi-result carousel.
   const [lightbox, setLightbox] = useState<{
@@ -130,13 +132,64 @@ function CanvasNodeImpl({
         <StatusDot status={status} />
 
         <button
-          className="w-5 h-5 rounded flex items-center justify-center text-fg-subtle hover:text-fg hover:bg-bg-hover"
-          title={def.description}
+          className="w-5 h-5 rounded flex items-center justify-center text-fg-subtle hover:text-fg hover:bg-bg-hover relative"
+          title="About this node"
           onMouseDown={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowInfo((v) => !v);
+          }}
         >
           <Info size={11} strokeWidth={1.5} />
         </button>
+        {showInfo && (
+          <div
+            className="absolute top-9 right-2 z-30 w-60 rounded-lg bg-bg-card border border-border shadow-panel p-3 text-left nodrag"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[12px] font-semibold text-fg">{def.name}</span>
+              <button
+                className="text-fg-subtle hover:text-fg"
+                onClick={(e) => { e.stopPropagation(); setShowInfo(false); }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+            {def.description && (
+              <p className="text-[11px] text-fg-muted leading-snug mb-2">{def.description}</p>
+            )}
+            {(() => {
+              const ins = getActiveInputs(def, node.config);
+              return (
+                <div className="space-y-1.5">
+                  {ins.length > 0 && (
+                    <div>
+                      <div className="text-[9px] uppercase tracking-wider text-fg-subtle font-medium">Inputs</div>
+                      <div className="text-[10px] text-fg-muted">
+                        {ins.map((p) => p.label ?? p.name).join(", ")}
+                      </div>
+                    </div>
+                  )}
+                  {def.outputs.length > 0 && (
+                    <div>
+                      <div className="text-[9px] uppercase tracking-wider text-fg-subtle font-medium">Outputs</div>
+                      <div className="text-[10px] text-fg-muted">
+                        {def.outputs.map((p) => p.label ?? p.name).join(", ")}
+                      </div>
+                    </div>
+                  )}
+                  <div className="text-[10px] text-fg-subtle pt-1 border-t border-border">
+                    Drag a port to connect · ⤢ to expand · ▶ to run
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
 
         {/* Inline-expand toggle — middle size between compact and modal.
             Grows the textarea + preview in place without opening the
