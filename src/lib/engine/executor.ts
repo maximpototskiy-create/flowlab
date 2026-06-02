@@ -241,7 +241,7 @@ async function executeOne(
       // Multi-result node — create one Asset row per URL.
       for (const r of result.results) {
         if (typeof r.value === "string" && r.value.startsWith("http")) {
-          const kind = inferKindFromUrl(r.value, "result");
+          const kind = inferKindFromUrl(r.value, "result", node.type);
           await prisma.asset.create({
             data: {
               brandId: state.ctx.brandId ?? null,
@@ -262,7 +262,7 @@ async function executeOne(
       // Single-output node — fall back to result.outputs.
       for (const [port, value] of Object.entries(result.outputs)) {
         if (typeof value === "string" && value.startsWith("http")) {
-          const kind = inferKindFromUrl(value, port);
+          const kind = inferKindFromUrl(value, port, node.type);
           await prisma.asset.create({
             data: {
               brandId: state.ctx.brandId ?? null,
@@ -388,15 +388,23 @@ async function executeOne(
   }
 }
 
-function inferKindFromUrl(url: string, port: string): "image" | "video" | "audio" | "text" {
+function inferKindFromUrl(url: string, port: string, nodeType?: string): "image" | "video" | "audio" | "text" {
+  // 1. By node category — the most reliable signal (a videoGen node always
+  //    produces video, regardless of the URL shape).
+  const cat = nodeType ? NODE_TYPES[nodeType]?.category : undefined;
+  if (cat === "image" || cat === "video" || cat === "audio") return cat;
+  // 2. By port hint
   if (port.toLowerCase().includes("image") || port === "character" || port === "composed") return "image";
   if (port.toLowerCase().includes("video") || port === "section") return "video";
   if (port.toLowerCase().includes("audio")) return "audio";
-  // Fallback: extension
-  const ext = url.split(".").pop()?.toLowerCase().split("?")[0] ?? "";
-  if (["mp4", "webm", "mov"].includes(ext)) return "video";
-  if (["mp3", "wav", "m4a", "ogg"].includes(ext)) return "audio";
-  if (["jpg", "jpeg", "png", "webp", "gif"].includes(ext)) return "image";
+  // 3. By extension (strip query string first)
+  const ext = url.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+  if (["mp4", "webm", "mov", "m4v"].includes(ext)) return "video";
+  if (["mp3", "wav", "m4a", "ogg", "aac", "flac"].includes(ext)) return "audio";
+  if (["jpg", "jpeg", "png", "webp", "gif", "avif"].includes(ext)) return "image";
+  // 4. An http(s) asset with no other hint is media, NOT text — text outputs
+  //    are plain strings and never reach here. Default to image.
+  if (url.startsWith("http")) return "image";
   return "text";
 }
 
