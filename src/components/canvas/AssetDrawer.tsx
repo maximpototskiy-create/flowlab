@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download } from "lucide-react";
+import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
 
 const KINDS = [
@@ -28,6 +28,8 @@ export default function AssetDrawer({
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [preview, setPreview] = useState<AssetItem | null>(null);
+  // "Find similar" mode: search fal by a reference media URL.
+  const [similar, setSimilar] = useState<{ url: string; kind: string; label: string } | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
@@ -37,11 +39,12 @@ export default function AssetDrawer({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Don't filter by kind on the server — load once and filter tabs
-      // locally so switching tabs is instant and fal's own `type` is the
-      // source of truth (the server media_type filter was returning empty).
       const p = new URLSearchParams();
       if (debouncedQ) p.set("q", debouncedQ);
+      // Image/video similarity search (fal only).
+      if (source === "fal" && similar) {
+        p.set(similar.kind === "video" ? "search_video_url" : "search_image_url", similar.url);
+      }
       const endpoint = source === "fal" ? "/api/fal-assets" : "/api/assets";
       const res = await fetch(`${endpoint}?${p.toString()}`);
       const data = await res.json();
@@ -51,7 +54,7 @@ export default function AssetDrawer({
     } finally {
       setLoading(false);
     }
-  }, [debouncedQ, source]);
+  }, [debouncedQ, source, similar]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -128,6 +131,17 @@ export default function AssetDrawer({
           ))}
         </div>
       </div>
+
+      {/* Similar-search banner */}
+      {source === "fal" && similar && (
+        <div className="px-3 py-2 border-b border-border flex items-center gap-2 bg-brand/10">
+          <img src={similar.url} alt="" className="w-7 h-7 rounded object-cover" />
+          <span className="text-[10px] text-fg-muted flex-1">Similar to this {similar.kind}</span>
+          <button onClick={() => setSimilar(null)} className="text-fg-subtle hover:text-fg">
+            <X size={13} />
+          </button>
+        </div>
+      )}
 
       {/* Grid */}
       <div className="flex-1 overflow-auto p-3">
@@ -260,6 +274,19 @@ export default function AssetDrawer({
             >
               <Plus size={13} /> Add to canvas
             </button>
+            {preview.source === "fal" && (preview.kind === "image" || preview.kind === "video") && (
+              <button
+                onClick={() => {
+                  setSimilar({ url: preview.cdnUrl, kind: preview.kind, label: preview.prompt || preview.kind });
+                  setQ("");
+                  setPreview(null);
+                }}
+                title="Find visually similar"
+                className="flex items-center justify-center gap-1.5 border border-border text-fg-muted hover:text-fg text-[12px] px-3 py-2 rounded-md transition"
+              >
+                <Sparkles size={13} />
+              </button>
+            )}
             <a
               href={preview.cdnUrl}
               download

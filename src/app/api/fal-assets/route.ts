@@ -57,6 +57,11 @@ export async function GET(req: Request): Promise<NextResponse> {
   if (mediaType) upstream.set("media_type", mediaType);
   const section = searchParams.get("section"); // all-media | uploads | favorites
   if (section) upstream.set("section", section);
+  // Semantic image/video search — fal-hosted URL of the reference media.
+  const searchImage = searchParams.get("search_image_url");
+  if (searchImage) upstream.set("search_image_url", searchImage);
+  const searchVideo = searchParams.get("search_video_url");
+  if (searchVideo) upstream.set("search_video_url", searchVideo);
 
   const keys = getFalKeys();
   if (keys.length === 0) {
@@ -118,7 +123,9 @@ export async function GET(req: Request): Promise<NextResponse> {
         merged.push(a);
       }
     }
-    merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    // Keep fal's relevance order when searching; otherwise newest-first.
+    const isSearch = !!(q || searchImage || searchVideo);
+    if (!isSearch) merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     const hasMore = results.some((r) => r.has_more);
 
     if (merged.length === 0 && results.every((r) => r.assets.length === 0)) {
