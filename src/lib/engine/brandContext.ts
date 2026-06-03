@@ -75,14 +75,18 @@ export async function buildBrandContext(brandId: string | null): Promise<string 
 
 /** Parse the newline-separated UI screenshot URLs from a brand's kit.
  *  Used by the "Brand Assets" node and elsewhere that needs the asset list. */
-export async function getBrandUiScreenshots(brandId: string | null): Promise<string[]> {
+// Returns brand image asset URLs (from brand_assets — the single source).
+// Optionally filter by category; default returns all visual (image) assets,
+// which is what the Brand Assets canvas node and ctx injection use.
+export async function getBrandUiScreenshots(
+  brandId: string | null,
+  category?: string,
+): Promise<string[]> {
   if (!brandId) return [];
-  const kit = await prisma.brandKit.findUnique({ where: { brandId } });
-  // Cast — Prisma client may be stale before next generate; runtime is string.
-  const raw = (kit as { uiScreenshots?: string | null } | null)?.uiScreenshots;
-  if (!raw) return [];
-  return raw
-    .split("\n")
-    .map((u: string) => u.trim())
-    .filter((u: string) => u.startsWith("http"));
+  const rows = (await prisma.brandAsset.findMany({
+    where: { brandId, kind: "image", ...(category ? { category } : {}) },
+    orderBy: { createdAt: "desc" },
+    select: { url: true },
+  })) as { url: string }[];
+  return rows.map((r) => r.url).filter((u) => u.startsWith("http"));
 }

@@ -119,36 +119,35 @@ export async function queryAssets(f: AssetFilters): Promise<{
   }
   const filteredByKind = f.kind ? deduped.filter((a) => a.kind === f.kind) : deduped;
 
-  // Brand-kit UI screenshots (stored in BrandKit.uiScreenshots, not Asset rows).
+  // Brand assets (brand_assets — the single source). Surfaced under the
+  // "brand_kit" source in the drawer so they're pickable in workflows.
   let brandKit: AssetItem[] = [];
   const wantBrandKit = !f.source || f.source === "brand_kit";
   const wantImageKind = !f.kind || f.kind === "image";
   if (wantBrandKit && wantImageKind && !f.project && !f.q) {
-    const kits = (await prisma.brandKit.findMany({
-      where: f.brand ? { brandId: f.brand } : {},
-      select: { uiScreenshots: true, brand: { select: { id: true, name: true } } },
-    })) as { uiScreenshots: string | null; brand: { id: string; name: string } | null }[];
-    for (const k of kits) {
-      const urls = (k.uiScreenshots ?? "").split("\n").map((s) => s.trim()).filter((u) => u.startsWith("http"));
-      urls.forEach((url, i) => {
-        if (seenUrls.has(url)) return;
-        seenUrls.add(url);
-        brandKit.push({
-          id: `bk-${k.brand?.id ?? "x"}-${i}`,
-          cdnUrl: url,
-          kind: "image",
-          mimeType: null,
-          sizeBytes: null,
-          width: null,
-          height: null,
-          durationSec: null,
-          source: "brand_kit",
-          model: null,
-          prompt: null,
-          createdAt: new Date(0).toISOString(),
-          projectName: null,
-          brandName: k.brand?.name ?? null,
-        });
+    const rows = (await prisma.brandAsset.findMany({
+      where: { kind: "image", ...(f.brand ? { brandId: f.brand } : {}) },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, url: true, category: true, brand: { select: { id: true, name: true } } },
+    })) as { id: string; url: string; category: string; brand: { id: string; name: string } | null }[];
+    for (const r of rows) {
+      if (!r.url.startsWith("http") || seenUrls.has(r.url)) continue;
+      seenUrls.add(r.url);
+      brandKit.push({
+        id: `ba-${r.id}`,
+        cdnUrl: r.url,
+        kind: "image",
+        mimeType: null,
+        sizeBytes: null,
+        width: null,
+        height: null,
+        durationSec: null,
+        source: "brand_kit",
+        model: null,
+        prompt: null,
+        createdAt: new Date(0).toISOString(),
+        projectName: null,
+        brandName: r.brand?.name ?? null,
       });
     }
   }

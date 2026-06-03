@@ -1,23 +1,37 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, Package } from "lucide-react";
+import { useEffect, useState, useMemo } from "react";
+import { Check, Package, Music, Video as VideoIcon } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BrandAssetsPicker — UI for the Brand Assets canvas node.
 //
-// Loads the brand's UI screenshots from /api/brand-assets/[brandId] and
-// renders them as a grid of checkboxes. The user picks which screenshots
-// will flow downstream when this node runs. Selection is persisted in
-// node.config.selected (array of CDN URLs).
+// Loads the brand's assets from /api/brand-assets/[brandId] (brand_assets —
+// the single source) and renders them as a category-filterable grid of
+// checkboxes. The user picks which assets flow downstream when the node runs.
+// Selection is persisted in node.config.selected (array of URLs).
 //
-// Behaviour:
-//   • Empty kit → shows a helpful empty state with a link hint.
-//   • Nothing selected → runner will use ALL screenshots ("select all"
-//     implicit). Shows a banner explaining this.
-//   • Selection auto-saves via onConfigChange — same path as every other
-//     node setting, so it survives refresh through the autosave loop.
+//   • Filter chips by category (logo / ui / store / hook / music / …).
+//   • Nothing selected → runner forwards ALL (implicit "everything").
+//   • Selection auto-saves via onChange.
 // ─────────────────────────────────────────────────────────────────────────────
+
+type Asset = { url: string; kind: string; category: string; label: string | null };
+
+const CAT_LABEL: Record<string, string> = {
+  logo: "Logo",
+  ui: "UI",
+  store: "Store",
+  graphic: "Graphic",
+  overlay: "Overlay",
+  music: "Music",
+  sound: "Sound",
+  reference: "Reference",
+  hook: "Hook",
+  body: "Body",
+  packshot: "Packshot",
+  other: "Other",
+};
 
 export default function BrandAssetsPicker({
   brandId,
@@ -30,83 +44,71 @@ export default function BrandAssetsPicker({
   selected: string[];
   onChange: (next: string[]) => void;
 }) {
-  const [urls, setUrls] = useState<string[] | null>(null);
+  const [assets, setAssets] = useState<Asset[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // Collapsed vs expanded picker. The full picker is bulky when a brand
-  // has 50+ screenshots; once the user has picked their subset we shrink
-  // the node down to just the selected thumbnails + an Edit button.
-  // Initial state: collapsed when there's already a selection (returning
-  // user opens the workflow and doesn't need to browse 100 screenshots),
-  // expanded when nothing's chosen yet (first-time use).
-  const [expanded, setExpanded] = useState(() => selected.length === 0);
+  const [filter, setFilter] = useState<string>("all");
 
   useEffect(() => {
     if (!brandId) {
-      setUrls([]);
+      setAssets([]);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/brand-assets/${brandId}`, {
-          cache: "no-store",
-        });
+        const res = await fetch(`/api/brand-assets/${brandId}`, { cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { urls?: string[] };
-        if (!cancelled) setUrls(data.urls ?? []);
+        const data = (await res.json()) as { assets?: Asset[] };
+        if (!cancelled) setAssets(data.assets ?? []);
       } catch (err) {
         if (!cancelled) {
           setLoadError(err instanceof Error ? err.message : String(err));
-          setUrls([]);
+          setAssets([]);
         }
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [brandId]);
 
-  // Sanitize selected against current urls — drops stale URLs from selection
-  // so we don't ship deleted screenshots downstream.
+  const allUrls = useMemo(() => (assets ?? []).map((a) => a.url), [assets]);
+
+  // Drop stale URLs from selection.
   useEffect(() => {
-    if (!urls) return;
-    const filtered = selected.filter((u) => urls.includes(u));
-    if (filtered.length !== selected.length) {
-      onChange(filtered);
-    }
+    if (!assets) return;
+    const filtered = selected.filter((u) => allUrls.includes(u));
+    if (filtered.length !== selected.length) onChange(filtered);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urls]);
+  }, [assets]);
+
+  const categories = useMemo(() => {
+    const set = new Set((assets ?? []).map((a) => a.category));
+    return ["all", ...Array.from(set)];
+  }, [assets]);
+
+  const visible = useMemo(
+    () => (filter === "all" ? assets ?? [] : (assets ?? []).filter((a) => a.category === filter)),
+    [assets, filter],
+  );
 
   function toggle(u: string) {
     if (selected.includes(u)) onChange(selected.filter((v) => v !== u));
     else onChange([...selected, u]);
   }
 
-  function selectAll() {
-    onChange(urls ?? []);
-  }
-
-  function clearAll() {
-    onChange([]);
-  }
-
   if (!brandId) {
     return (
       <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle border border-border rounded-md">
-        This workflow isn&apos;t inside a brand, so there&apos;s no Brand Kit
-        to read from.
+        This workflow isn&apos;t inside a brand, so there&apos;s no Brand Kit to read from.
       </div>
     );
   }
-
-  if (urls === null) {
+  if (assets === null) {
     return (
       <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle border border-border rounded-md">
-        Loading brand screenshots…
+        Loading brand assets…
       </div>
     );
   }
-
   if (loadError) {
     return (
       <div className="text-[11px] text-red-500 p-3 bg-bg-subtle border border-border rounded-md">
@@ -114,15 +116,14 @@ export default function BrandAssetsPicker({
       </div>
     );
   }
-
-  if (urls.length === 0) {
+  if (assets.length === 0) {
     return (
       <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle border border-border rounded-md">
         <div className="flex items-center gap-1.5 mb-1.5 text-fg">
           <Package size={11} />
-          <span className="font-medium">No screenshots in Brand Kit</span>
+          <span className="font-medium">No brand assets yet</span>
         </div>
-        Add UI screenshots on the{" "}
+        Add assets on the{" "}
         {brandSlug ? (
           <a
             href={`/brands/${brandSlug}/brand-kit`}
@@ -141,139 +142,69 @@ export default function BrandAssetsPicker({
     );
   }
 
-  const allSelected = selected.length === urls.length;
   const noneSelected = selected.length === 0;
-  const effectiveCount = noneSelected ? urls.length : selected.length;
-
-  // Compact (collapsed) view — shows current selection as a small strip
-  // with an Edit button. Used after user has finalised their picks so the
-  // node doesn't dominate the canvas.
-  if (!expanded) {
-    const previewUrls = noneSelected ? urls.slice(0, 4) : selected.slice(0, 4);
-    const extraCount = (noneSelected ? urls.length : selected.length) - previewUrls.length;
-    return (
-      <div
-        className="space-y-2 nodrag"
-        onMouseDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between text-[10px] text-fg-muted">
-          <span>
-            {noneSelected
-              ? `All ${urls.length} will be used`
-              : `${selected.length} selected`}
-          </span>
-          <button
-            type="button"
-            onClick={() => setExpanded(true)}
-            className="text-brand hover:underline"
-          >
-            Edit
-          </button>
-        </div>
-        <div className="flex gap-1">
-          {previewUrls.map((u) => (
-            <div
-              key={u}
-              className="relative w-12 aspect-[9/16] rounded-md overflow-hidden border border-border bg-bg-card flex-shrink-0"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={u}
-                alt=""
-                className="w-full h-full object-cover"
-                loading="lazy"
-                draggable={false}
-              />
-            </div>
-          ))}
-          {extraCount > 0 && (
-            <div className="w-12 aspect-[9/16] rounded-md border border-dashed border-border flex items-center justify-center text-[10px] text-fg-muted flex-shrink-0">
-              +{extraCount}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
+  const effectiveCount = noneSelected ? allUrls.length : selected.length;
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 nodrag" onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+      {/* Category filter chips */}
+      <div className="flex flex-wrap gap-1">
+        {categories.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => setFilter(c)}
+            className={`px-2 py-0.5 rounded-full text-[10px] border transition ${
+              filter === c ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+            }`}
+          >
+            {c === "all" ? "All" : CAT_LABEL[c] ?? c}
+          </button>
+        ))}
+      </div>
+
       <div className="flex items-center justify-between text-[10px] text-fg-muted">
-        <span>
-          {noneSelected
-            ? `All ${urls.length} will be used`
-            : `${selected.length} of ${urls.length} selected`}
-        </span>
+        <span>{noneSelected ? `All ${allUrls.length} will be used` : `${selected.length} selected`}</span>
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={selectAll}
-            onMouseDown={(e) => e.stopPropagation()}
-            disabled={allSelected}
-            className="text-fg-muted hover:text-fg disabled:opacity-40"
-          >
-            All
-          </button>
-          <button
-            type="button"
-            onClick={clearAll}
-            onMouseDown={(e) => e.stopPropagation()}
-            disabled={noneSelected}
-            className="text-fg-muted hover:text-fg disabled:opacity-40"
-          >
-            None
-          </button>
-          {/* Collapse — only shows when user has made some kind of decision.
-              Lets them shrink the node back down once they're happy. */}
-          {!noneSelected && (
-            <button
-              type="button"
-              onClick={() => setExpanded(false)}
-              onMouseDown={(e) => e.stopPropagation()}
-              className="text-brand hover:underline"
-            >
-              Done
-            </button>
-          )}
+          <button type="button" onClick={() => onChange(allUrls)} className="text-fg-muted hover:text-fg">All</button>
+          <button type="button" onClick={() => onChange([])} disabled={noneSelected} className="text-fg-muted hover:text-fg disabled:opacity-40">None</button>
         </div>
       </div>
 
-      {/* Scrollable container — caps at ~240px height so a 100-screenshot
-          brand kit doesn't make the node 6000px tall. */}
+      {/* Grid */}
       <div
-        className="grid grid-cols-3 gap-1.5 nodrag max-h-[240px] overflow-y-auto pr-1"
-        onMouseDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
+        className="grid grid-cols-3 gap-1.5 max-h-[240px] overflow-y-auto pr-1"
         onWheel={(e) => e.stopPropagation()}
       >
-        {urls.map((u) => {
-          const isOn = selected.includes(u);
-          // If nothing is selected, all are "implicitly active" — visually
-          // dim/lift the same way so users understand the rule.
+        {visible.map((a) => {
+          const isOn = selected.includes(a.url);
           const visuallyActive = isOn || noneSelected;
           return (
             <button
-              key={u}
+              key={a.url}
               type="button"
-              onClick={() => toggle(u)}
+              onClick={() => toggle(a.url)}
               className={`relative aspect-[9/16] rounded-md overflow-hidden border transition ${
-                isOn
-                  ? "border-brand ring-1 ring-brand"
-                  : visuallyActive
-                    ? "border-border"
-                    : "border-border opacity-40"
+                isOn ? "border-brand ring-1 ring-brand" : visuallyActive ? "border-border" : "border-border opacity-40"
               }`}
-              title={u}
+              title={a.label ?? a.url}
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={u}
-                alt=""
-                className="w-full h-full object-cover"
-                loading="lazy"
-                draggable={false}
-              />
+              {a.kind === "image" && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={a.url} alt="" className="w-full h-full object-cover" loading="lazy" draggable={false} />
+              )}
+              {a.kind === "video" && (
+                <div className="w-full h-full flex items-center justify-center bg-black">
+                  <video src={a.url} className="w-full h-full object-cover" muted preload="metadata" />
+                  <VideoIcon size={14} className="absolute text-white/80" />
+                </div>
+              )}
+              {a.kind === "audio" && (
+                <div className="w-full h-full flex items-center justify-center"><Music size={16} className="text-fg-subtle" /></div>
+              )}
+              <span className="absolute top-1 left-1 px-1 rounded bg-black/55 text-[7px] uppercase text-white/85">
+                {CAT_LABEL[a.category] ?? a.category}
+              </span>
               {isOn && (
                 <div className="absolute top-1 right-1 w-4 h-4 bg-brand rounded-full flex items-center justify-center">
                   <Check size={9} className="text-white" />
@@ -285,8 +216,7 @@ export default function BrandAssetsPicker({
       </div>
 
       <p className="text-[10px] text-fg-muted">
-        {effectiveCount} screenshot{effectiveCount === 1 ? "" : "s"} will flow
-        into the next node when this runs.
+        {effectiveCount} asset{effectiveCount === 1 ? "" : "s"} will flow into the next node when this runs.
       </p>
     </div>
   );
