@@ -112,6 +112,13 @@ model BrandKit {
   appStoreUrl    String? @map("app_store_url")
   googlePlayUrl  String? @map("google_play_url")
   productPitch   String? @map("product_pitch")   // 1-3 sentence "what is this app"
+
+  // Social & links
+  website         String?
+  socialInstagram String? @map("social_instagram")
+  socialTiktok    String? @map("social_tiktok")
+  socialYoutube   String? @map("social_youtube")
+  socialX         String? @map("social_x")
   uiScreenshots  String? @map("ui_screenshots")  // newline-separated CDN URLs — referenced by Brand Assets node
   storeScreenshots String? @map("store_screenshots") // auto-found store/web screenshots (separate from manual UI ones)
 

@@ -89,6 +89,28 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
               </Section>
             </div>
 
+            <Section title="Website & socials" description="Auto-filled by the magic button; or paste links.">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {([
+                  ["website", "Website", "https://…"],
+                  ["socialInstagram", "Instagram", "https://instagram.com/…"],
+                  ["socialTiktok", "TikTok", "https://tiktok.com/@…"],
+                  ["socialYoutube", "YouTube", "https://youtube.com/@…"],
+                  ["socialX", "X / Twitter", "https://x.com/…"],
+                ] as const).map(([name, label, ph]) => (
+                  <div key={name}>
+                    <label className="block text-[10px] text-fg-muted mb-0.5">{label}</label>
+                    <input
+                      name={name}
+                      defaultValue={(kit as Record<string, string | null> | null)?.[name] ?? ""}
+                      placeholder={ph}
+                      className="w-full bg-bg border border-border rounded-md p-2 text-[11.5px] font-mono text-fg outline-none focus:border-brand"
+                    />
+                  </div>
+                ))}
+              </div>
+            </Section>
+
             <Section
               title="App icon"
               description="Brand icon (auto-filled from the store). Paste a URL to override."

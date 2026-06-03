@@ -152,7 +152,8 @@ ${genre ? `Category: ${genre}` : ""}
 
 Cover: positioning & one-line pitch; tone of voice; target audience; 3-6 real competitors;
 brand keywords/phrases to use; words/themes to avoid; likely brand colors (hex if known);
-sensitive themes to never touch. Base it on real search results.`,
+sensitive themes to never touch; official website and social profile URLs (Instagram, TikTok,
+YouTube, X/Twitter). Base it on real search results.`,
     });
     steps.push("Ресёрч в сети: готово");
 
@@ -171,6 +172,11 @@ sensitive themes to never touch. Base it on real search results.`,
   "bannedThemes": "comma-separated sensitive themes to never mention",
   "colors": "space-separated hex codes if identifiable, else empty string",
   "fonts": "headline and body font names if identifiable (e.g. 'Inter (body), Source Serif Pro (headline)'), else empty string",
+  "website": "official website URL or empty string",
+  "instagram": "Instagram profile URL or empty string",
+  "tiktok": "TikTok profile URL or empty string",
+  "youtube": "YouTube channel URL or empty string",
+  "x": "X/Twitter profile URL or empty string",
   "competitors": ["competitor names"],
   "summary": "2-3 sentence brand summary"
 }
@@ -191,6 +197,11 @@ ${research.text}`,
       bannedThemes?: string;
       colors?: string;
       fonts?: string;
+      website?: string;
+      instagram?: string;
+      tiktok?: string;
+      youtube?: string;
+      x?: string;
       competitors?: string[];
       summary?: string;
     } = {};
@@ -215,6 +226,11 @@ ${research.text}`,
     if (p.bannedThemes && !kit?.bannedThemes) data.bannedThemes = p.bannedThemes;
     if (p.colors && !kit?.colors) data.colors = p.colors;
     if (p.fonts && !kit?.fonts) data.fonts = p.fonts;
+    if (p.website && !kit?.website) data.website = p.website;
+    if (p.instagram && !kit?.socialInstagram) data.socialInstagram = p.instagram;
+    if (p.tiktok && !kit?.socialTiktok) data.socialTiktok = p.tiktok;
+    if (p.youtube && !kit?.socialYoutube) data.socialYoutube = p.youtube;
+    if (p.x && !kit?.socialX) data.socialX = p.x;
 
     await prisma.brandKit.upsert({
       where: { brandId },

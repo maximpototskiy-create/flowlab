@@ -304,6 +304,11 @@ export async function saveBrandKit(formData: FormData): Promise<void> {
     appStoreUrl: (formData.get("appStoreUrl") as string) || null,
     googlePlayUrl: (formData.get("googlePlayUrl") as string) || null,
     productPitch: (formData.get("productPitch") as string) || null,
+    website: (formData.get("website") as string) || null,
+    socialInstagram: (formData.get("socialInstagram") as string) || null,
+    socialTiktok: (formData.get("socialTiktok") as string) || null,
+    socialYoutube: (formData.get("socialYoutube") as string) || null,
+    socialX: (formData.get("socialX") as string) || null,
     // Screenshots/assets now live in brand_assets (single source), not here.
   };
 
