@@ -100,6 +100,22 @@ export async function POST(req: Request): Promise<NextResponse> {
       ...((app?.screenshotUrls as string[]) || []),
       ...((app?.ipadScreenshotUrls as string[]) || []),
     ].filter((u) => typeof u === "string" && u.startsWith("http"));
+
+    // Fallback: if lookup gave no screenshots, try a name search result
+    // (sometimes search returns screenshots when lookup doesn't).
+    if (screenshotUrls.length === 0 && brand.name) {
+      const alt = await itunesSearchByName(brand.name);
+      const altShots = [
+        ...((alt?.screenshotUrls as string[]) || []),
+        ...((alt?.ipadScreenshotUrls as string[]) || []),
+      ].filter((u) => typeof u === "string" && u.startsWith("http"));
+      if (altShots.length) {
+        screenshotUrls.push(...altShots);
+        steps.push("Скриншоты: взяты из поиска");
+      } else {
+        steps.push("Скриншоты: App Store их не отдаёт для этого приложения");
+      }
+    }
     const icon = app?.artworkUrl512 || app?.artworkUrl100 || null;
     const storeDescription = app?.description || "";
     const developer = app?.sellerName || "";

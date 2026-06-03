@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { saveBrandKit } from "@/lib/actions";
 import AppStoreAutofillButton from "@/components/AppStoreAutofillButton";
 import BrandMagicButton from "@/components/BrandMagicButton";
+import SaveBrandKitButton from "@/components/SaveBrandKitButton";
 import TopNav from "@/components/TopNav";
 import BrandKitScreenshots from "@/components/BrandKitScreenshots";
 import { ChevronLeft } from "lucide-react";
@@ -250,12 +251,7 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
           </div>
 
           <div className="flex justify-end pt-2">
-            <button
-              type="submit"
-              className="px-5 py-2 bg-fg text-bg rounded-md text-[12px] font-medium hover:opacity-90"
-            >
-              Save Brand Kit
-            </button>
+            <SaveBrandKitButton />
           </div>
         </form>
       </main>
