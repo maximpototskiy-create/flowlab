@@ -32,9 +32,8 @@ export type AgentResult = {
   sources?: { title?: string; url: string }[];
 };
 
-const OPENAI_MODEL = "gpt-4o";
-const OPENAI_MODEL_CHEAP = "gpt-4o-mini";
-const GEMINI_MODEL = "gemini-2.0-flash";
+const OPENAI_MODEL = "gpt-5.5";
+const GEMINI_MODEL = "gemini-3.5-flash";
 
 function pickProvider(task: AgentTask): Provider {
   if (task === "generate") return "openai";
@@ -51,15 +50,15 @@ export async function callAgent(call: AgentCall): Promise<AgentResult> {
 async function callOpenAI(call: AgentCall): Promise<AgentResult> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY not set");
-  const model = call.task === "chat" ? OPENAI_MODEL_CHEAP : OPENAI_MODEL;
+  const model = OPENAI_MODEL;
 
+  // gpt-5.x are reasoning models — don't send temperature (not supported).
   const body: Record<string, unknown> = {
     model,
     messages: [
       ...(call.system ? [{ role: "system", content: call.system }] : []),
       { role: "user", content: call.user },
     ],
-    temperature: call.temperature ?? (call.json ? 0.2 : 0.7),
   };
   if (call.json) body.response_format = { type: "json_object" };
 
@@ -85,12 +84,10 @@ async function callGemini(call: AgentCall): Promise<AgentResult> {
   const model = GEMINI_MODEL;
   const useSearch = call.webSearch ?? call.task === "research";
 
+  // Gemini 3.x reasoning — keep default sampling (don't set temperature).
   const body: Record<string, unknown> = {
     contents: [{ role: "user", parts: [{ text: call.user }] }],
-    generationConfig: {
-      temperature: call.temperature ?? (call.json ? 0.2 : 0.7),
-      ...(call.json ? { responseMimeType: "application/json" } : {}),
-    },
+    ...(call.json ? { generationConfig: { responseMimeType: "application/json" } } : {}),
   };
   if (call.system) {
     body.systemInstruction = { parts: [{ text: call.system }] };
