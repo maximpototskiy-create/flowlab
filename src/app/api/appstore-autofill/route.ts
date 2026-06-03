@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { scrapeAppStoreScreenshots } from "@/lib/appstore";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,11 @@ export async function POST(req: Request): Promise<NextResponse> {
       ...((app.screenshotUrls as string[]) || []),
       ...((app.ipadScreenshotUrls as string[]) || []),
     ].filter((u) => typeof u === "string" && u.startsWith("http"));
+    // If the API has no screenshots, scrape the exact store page.
+    if (screenshotUrls.length === 0) {
+      const scraped = await scrapeAppStoreScreenshots(appStoreUrl);
+      screenshotUrls.push(...scraped);
+    }
     const icon = (app.artworkUrl512 as string) || (app.artworkUrl100 as string) || null;
     const description = (app.description as string) || "";
     const trackName = (app.trackName as string) || "";

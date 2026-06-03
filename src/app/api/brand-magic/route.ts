@@ -12,6 +12,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { callAgent } from "@/lib/agent/router";
 import { revalidatePath } from "next/cache";
+import { scrapeAppStoreScreenshots } from "@/lib/appstore";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -101,19 +102,15 @@ export async function POST(req: Request): Promise<NextResponse> {
       ...((app?.ipadScreenshotUrls as string[]) || []),
     ].filter((u) => typeof u === "string" && u.startsWith("http"));
 
-    // Fallback: if lookup gave no screenshots, try a name search result
-    // (sometimes search returns screenshots when lookup doesn't).
-    if (screenshotUrls.length === 0 && brand.name) {
-      const alt = await itunesSearchByName(brand.name);
-      const altShots = [
-        ...((alt?.screenshotUrls as string[]) || []),
-        ...((alt?.ipadScreenshotUrls as string[]) || []),
-      ].filter((u) => typeof u === "string" && u.startsWith("http"));
-      if (altShots.length) {
-        screenshotUrls.push(...altShots);
-        steps.push("Скриншоты: взяты из поиска");
+    // Fallback: if the API gave no screenshots, scrape the exact store page
+    // (the app the user linked) — never a different app from a name search.
+    if (screenshotUrls.length === 0 && appStoreUrl) {
+      const scraped = await scrapeAppStoreScreenshots(appStoreUrl);
+      if (scraped.length) {
+        screenshotUrls.push(...scraped);
+        steps.push(`Скриншоты: со страницы стора (${scraped.length})`);
       } else {
-        steps.push("Скриншоты: App Store их не отдаёт для этого приложения");
+        steps.push("Скриншоты: не удалось получить со страницы");
       }
     }
     const icon = app?.artworkUrl512 || app?.artworkUrl100 || null;
