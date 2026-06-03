@@ -72,6 +72,14 @@ export default async function ProjectDetailPage({
                   {project.brand.name}
                 </a>
               )}
+              {project.brand && (
+                <a
+                  href={`/brands/${project.brand.slug}/brand-kit`}
+                  className="font-mono text-xs tracking-[0.2em] uppercase text-fg-muted hover:text-fg border border-border hover:border-fg-subtle px-2 py-1 rounded-sm transition"
+                >
+                  Brand Kit
+                </a>
+              )}
             </div>
             <h1 className="font-display text-5xl md:text-6xl leading-tight mb-3">
               {project.name}

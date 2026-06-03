@@ -3,7 +3,6 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { saveBrandKit } from "@/lib/actions";
-import AppStoreAutofillButton from "@/components/AppStoreAutofillButton";
 import BrandMagicButton from "@/components/BrandMagicButton";
 import SaveBrandKitButton from "@/components/SaveBrandKitButton";
 import TopNav from "@/components/TopNav";
@@ -72,14 +71,13 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
             </Section>
 
             <div className="grid md:grid-cols-2 gap-4">
-              <Section title="App Store URL" description="Вставь ссылку и нажми «Подтянуть» — заполнит описание, скриншоты и иконку.">
+              <Section title="App Store URL" description="Auto-filled by the magic button; or paste a link.">
                 <input
                   name="appStoreUrl"
                   defaultValue={kit?.appStoreUrl ?? ""}
                   placeholder="https://apps.apple.com/app/id…"
                   className="w-full bg-bg border border-border rounded-md p-2.5 text-[12px] font-mono text-fg outline-none focus:border-brand"
                 />
-                <AppStoreAutofillButton brandId={brand.id} />
               </Section>
               <Section title="Google Play URL" description="Optional, just a link.">
                 <input

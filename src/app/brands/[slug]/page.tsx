@@ -58,6 +58,12 @@ export default async function BrandDetailPage({
               <div className="font-mono text-xs tracking-[0.2em] uppercase text-fg-muted">
                 Brand · {brand.slug}
               </div>
+              <a
+                href={`/brands/${brand.slug}/brand-kit`}
+                className="font-mono text-xs tracking-[0.2em] uppercase text-brand hover:text-emerald-300 border border-emerald-500/30 hover:border-emerald-500/60 px-2 py-1 rounded-sm transition"
+              >
+                Brand Kit
+              </a>
             </div>
             <h1 className="font-display text-5xl md:text-6xl leading-tight mb-3">
               {brand.name}
