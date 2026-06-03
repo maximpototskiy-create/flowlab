@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
-import { saveBrandKit, autofillBrandKitFromAppStore } from "@/lib/actions";
+import { saveBrandKit } from "@/lib/actions";
 import AppStoreAutofillButton from "@/components/AppStoreAutofillButton";
 import TopNav from "@/components/TopNav";
 import BrandKitScreenshots from "@/components/BrandKitScreenshots";
@@ -73,7 +73,7 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
                   placeholder="https://apps.apple.com/app/id…"
                   className="w-full bg-bg border border-border rounded-md p-2.5 text-[12px] font-mono text-fg outline-none focus:border-brand"
                 />
-                <AppStoreAutofillButton formAction={autofillBrandKitFromAppStore} />
+                <AppStoreAutofillButton brandId={brand.id} />
               </Section>
               <Section title="Google Play URL" description="Optional, just a link.">
                 <input
