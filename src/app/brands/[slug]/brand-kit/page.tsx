@@ -3,6 +3,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { saveBrandKit, autofillBrandKitFromAppStore } from "@/lib/actions";
+import AppStoreAutofillButton from "@/components/AppStoreAutofillButton";
 import TopNav from "@/components/TopNav";
 import BrandKitScreenshots from "@/components/BrandKitScreenshots";
 import { ChevronLeft } from "lucide-react";
@@ -72,13 +73,7 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
                   placeholder="https://apps.apple.com/app/id…"
                   className="w-full bg-bg border border-border rounded-md p-2.5 text-[12px] font-mono text-fg outline-none focus:border-brand"
                 />
-                <button
-                  type="submit"
-                  formAction={autofillBrandKitFromAppStore}
-                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-brand text-brand text-[11px] hover:bg-brand/10 transition"
-                >
-                  ↓ Подтянуть из App Store
-                </button>
+                <AppStoreAutofillButton formAction={autofillBrandKitFromAppStore} />
               </Section>
               <Section title="Google Play URL" description="Optional, just a link.">
                 <input
@@ -94,7 +89,7 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
               title="UI screenshots"
               description="Upload app screenshots / store hero images / icon. Available as references in any workflow under this brand."
             >
-              <BrandKitScreenshots initialValue={kit?.uiScreenshots ?? ""} />
+              <BrandKitScreenshots key={kit?.uiScreenshots ?? "empty"} initialValue={kit?.uiScreenshots ?? ""} />
             </Section>
           </div>
 

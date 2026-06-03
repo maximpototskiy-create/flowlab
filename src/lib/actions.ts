@@ -370,9 +370,9 @@ export async function autofillBrandKitFromAppStore(formData: FormData): Promise<
     update: data,
   });
 
-  // Set the brand icon only if it isn't set yet.
+  // Update the brand icon from the store artwork.
   const brand = await prisma.brand.findUnique({ where: { id: brandId } });
-  if (icon && brand && !brand.iconUrl) {
+  if (icon && brand) {
     await prisma.brand.update({ where: { id: brandId }, data: { iconUrl: icon } }).catch(() => {});
   }
   if (brand) revalidatePath(`/brands/${brand.slug}/brand-kit`);
