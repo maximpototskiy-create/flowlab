@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
-import { saveBrandKit } from "@/lib/actions";
+import { saveBrandKit, autofillBrandKitFromAppStore } from "@/lib/actions";
 import TopNav from "@/components/TopNav";
 import BrandKitScreenshots from "@/components/BrandKitScreenshots";
 import { ChevronLeft } from "lucide-react";
@@ -65,13 +65,20 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
             </Section>
 
             <div className="grid md:grid-cols-2 gap-4">
-              <Section title="App Store URL" description="Optional, just a link.">
+              <Section title="App Store URL" description="Вставь ссылку и нажми «Подтянуть» — заполнит описание, скриншоты и иконку.">
                 <input
                   name="appStoreUrl"
                   defaultValue={kit?.appStoreUrl ?? ""}
                   placeholder="https://apps.apple.com/app/id…"
                   className="w-full bg-bg border border-border rounded-md p-2.5 text-[12px] font-mono text-fg outline-none focus:border-brand"
                 />
+                <button
+                  type="submit"
+                  formAction={autofillBrandKitFromAppStore}
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-brand text-brand text-[11px] hover:bg-brand/10 transition"
+                >
+                  ↓ Подтянуть из App Store
+                </button>
               </Section>
               <Section title="Google Play URL" description="Optional, just a link.">
                 <input

@@ -316,3 +316,64 @@ export async function saveBrandKit(formData: FormData): Promise<void> {
   const brand = await prisma.brand.findUnique({ where: { id: brandId } });
   if (brand) revalidatePath(`/brands/${brand.slug}/brand-kit`);
 }
+
+// Auto-fill the brand kit from an App Store listing via the free iTunes
+// Lookup API (no key needed). Pulls description → productPitch, screenshots →
+// uiScreenshots, and app icon → brand.iconUrl. Non-destructive: keeps an
+// existing pitch, merges screenshots, only sets the icon if missing.
+export async function autofillBrandKitFromAppStore(formData: FormData): Promise<void> {
+  await requireUser();
+  const brandId = formData.get("brandId") as string;
+  const appStoreUrl = ((formData.get("appStoreUrl") as string) || "").trim();
+  if (!brandId) throw new Error("brandId required");
+  if (!appStoreUrl) throw new Error("appStoreUrl required");
+
+  // App Store URLs look like https://apps.apple.com/us/app/name/id123456789
+  const m = appStoreUrl.match(/id(\d+)/);
+  if (!m) throw new Error("Could not find an app id in that App Store URL");
+  const appId = m[1];
+  // Optional country code from the URL (…/us/app/…) improves localization.
+  const countryMatch = appStoreUrl.match(/apps\.apple\.com\/([a-z]{2})\//i);
+  const country = countryMatch ? countryMatch[1].toLowerCase() : "us";
+
+  const res = await fetch(`https://itunes.apple.com/lookup?id=${appId}&country=${country}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("App Store lookup failed");
+  const json = (await res.json()) as { results?: Array<Record<string, unknown>> };
+  const app = json.results?.[0];
+  if (!app) throw new Error("App not found in the App Store");
+
+  const screenshotUrls = [
+    ...((app.screenshotUrls as string[]) || []),
+    ...((app.ipadScreenshotUrls as string[]) || []),
+  ].filter((u) => typeof u === "string" && u.startsWith("http"));
+  const icon = (app.artworkUrl512 as string) || (app.artworkUrl100 as string) || null;
+  const description = (app.description as string) || "";
+
+  const existing = await prisma.brandKit.findUnique({ where: { brandId } });
+  const existingShots = (existing?.uiScreenshots || "")
+    .split("\n")
+    .map((s: string) => s.trim())
+    .filter(Boolean);
+  const mergedShots = [...new Set([...existingShots, ...screenshotUrls])];
+
+  const data = {
+    appStoreUrl,
+    // Keep a pitch the user already wrote; otherwise seed from the description.
+    productPitch: existing?.productPitch || description.slice(0, 800) || null,
+    uiScreenshots: mergedShots.join("\n") || null,
+  };
+  await prisma.brandKit.upsert({
+    where: { brandId },
+    create: { brandId, ...data },
+    update: data,
+  });
+
+  // Set the brand icon only if it isn't set yet.
+  const brand = await prisma.brand.findUnique({ where: { id: brandId } });
+  if (icon && brand && !brand.iconUrl) {
+    await prisma.brand.update({ where: { id: brandId }, data: { iconUrl: icon } }).catch(() => {});
+  }
+  if (brand) revalidatePath(`/brands/${brand.slug}/brand-kit`);
+}
