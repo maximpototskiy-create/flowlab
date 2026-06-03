@@ -21,68 +21,115 @@ function fmt(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// HLS player modal — loads hls.js from CDN for Chrome; native HLS on Safari.
+// HLS player modal — robust: loads hls.js once, waits for manifest before
+// seeking, surfaces errors, and offers a direct link fallback.
 function ClipModal({ clip, onClose }: { clip: TLClip; onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !clip.hlsUrl) return;
+    if (!video || !clip.hlsUrl) {
+      setStatus("error");
+      return;
+    }
     const url = clip.hlsUrl;
+    let hls: HlsLike | null = null;
+    let cancelled = false;
+
+    function seekStart() {
+      try { if (video && clip.start > 0) video.currentTime = clip.start; } catch { /* ignore */ }
+      setStatus("ready");
+    }
+
     // Native HLS (Safari)
     if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = url;
-      video.currentTime = clip.start;
-      return;
+      video.addEventListener("loadedmetadata", seekStart, { once: true });
+      video.addEventListener("error", () => setStatus("error"), { once: true });
+      return () => { video.removeEventListener("loadedmetadata", seekStart); };
     }
-    // hls.js for everyone else
-    let hls: { destroy: () => void } | null = null;
-    const w = window as unknown as { Hls?: new () => HlsLike };
+
+    // hls.js path — load the library once, reuse window.Hls afterwards.
     function attach() {
-      if (w.Hls) {
-        const h = new w.Hls();
-        h.loadSource(url);
-        h.attachMedia(video!);
-        h.on("hlsManifestParsed", () => { video!.currentTime = clip.start; });
-        hls = h;
-      }
+      const w = window as unknown as { Hls?: HlsCtor };
+      if (cancelled || !w.Hls || !video) return;
+      if (!w.Hls.isSupported()) { setStatus("error"); return; }
+      const h = new w.Hls({ maxBufferLength: 30 });
+      h.on("hlsError", (...args: unknown[]) => {
+        const data = args[1] as { fatal?: boolean } | undefined;
+        if (data?.fatal) setStatus("error");
+      });
+      h.on("hlsManifestParsed", seekStart);
+      h.loadSource(url);
+      h.attachMedia(video);
+      hls = h;
     }
+
+    const w = window as unknown as { Hls?: HlsCtor };
     if (w.Hls) {
       attach();
     } else {
-      const s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js";
-      s.onload = attach;
-      document.body.appendChild(s);
+      const existing = document.getElementById("hlsjs-cdn") as HTMLScriptElement | null;
+      if (existing) {
+        existing.addEventListener("load", attach, { once: true });
+      } else {
+        const s = document.createElement("script");
+        s.id = "hlsjs-cdn";
+        s.src = "https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js";
+        s.onload = attach;
+        s.onerror = () => setStatus("error");
+        document.body.appendChild(s);
+      }
     }
-    return () => { if (hls) hls.destroy(); };
+    return () => { cancelled = true; if (hls) hls.destroy(); };
   }, [clip]);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-bg-card rounded-lg overflow-hidden max-w-2xl w-full" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-3 border-b border-border">
+        <div className="flex items-center justify-between p-3 border-b border-border gap-3">
           <div className="text-[12px] text-fg truncate">{clip.filename || clip.videoId}</div>
-          <button onClick={onClose} className="text-fg-subtle hover:text-fg"><X size={16} /></button>
+          <button onClick={onClose} className="text-fg-subtle hover:text-fg flex-shrink-0"><X size={16} /></button>
         </div>
-        {clip.hlsUrl ? (
-          // eslint-disable-next-line jsx-a11y/media-has-caption
-          <video ref={videoRef} controls autoPlay className="w-full max-h-[60vh] bg-black" poster={clip.thumbnailUrl ?? undefined} />
-        ) : (
-          <div className="p-8 text-center text-[12px] text-fg-subtle">No playable stream for this video.</div>
-        )}
-        <div className="p-3 text-[11px] text-fg-muted flex items-center justify-between">
+        <div className="relative bg-black">
+          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+          <video ref={videoRef} controls playsInline className="w-full max-h-[60vh]" poster={clip.thumbnailUrl ?? undefined} />
+          {status === "loading" && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <Loader2 size={20} className="animate-spin text-white/80" />
+            </div>
+          )}
+          {status === "error" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/80 text-[12px] p-4 text-center">
+              <span>Stream didn&apos;t load.</span>
+              {clip.hlsUrl && (
+                <a href={clip.hlsUrl} target="_blank" rel="noopener noreferrer" className="text-brand underline" onClick={(e) => e.stopPropagation()}>
+                  Open stream in new tab
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="p-3 text-[11px] text-fg-muted flex items-center justify-between gap-3">
           <span>Clip {fmt(clip.start)}–{fmt(clip.end)} · rank #{clip.rank}</span>
+          {clip.hlsUrl && (
+            <a href={clip.hlsUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+              Open in new tab
+            </a>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
+type HlsCtor = { new (cfg?: Record<string, unknown>): HlsLike; isSupported: () => boolean };
+
 type HlsLike = {
   loadSource: (u: string) => void;
   attachMedia: (v: HTMLVideoElement) => void;
-  on: (e: string, cb: () => void) => void;
+  on: (e: string, cb: (...args: unknown[]) => void) => void;
   destroy: () => void;
 };
 
