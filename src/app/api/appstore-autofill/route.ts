@@ -36,10 +36,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       return NextResponse.json({ ok: false, error: "Приложение не найдено в этой стране. Проверь ссылку." }, { status: 404 });
     }
 
-    const screenshotUrls = [
-      ...((app.screenshotUrls as string[]) || []),
-      ...((app.ipadScreenshotUrls as string[]) || []),
-    ].filter((u) => typeof u === "string" && u.startsWith("http"));
+    const iphoneShots = ((app.screenshotUrls as string[]) || []).filter((u) => typeof u === "string" && u.startsWith("http"));
+    const ipadShots = ((app.ipadScreenshotUrls as string[]) || []).filter((u) => typeof u === "string" && u.startsWith("http"));
+    const screenshotUrls = iphoneShots.length ? iphoneShots : ipadShots;
     // If the API has no screenshots, scrape the exact store page.
     if (screenshotUrls.length === 0) {
       const scraped = await scrapeAppStoreScreenshots(appStoreUrl);

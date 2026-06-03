@@ -97,10 +97,10 @@ export async function POST(req: Request): Promise<NextResponse> {
       steps.push(app ? `App Store: найдено по названию (${app.trackName})` : "App Store: не найдено по названию");
     }
 
-    const screenshotUrls = [
-      ...((app?.screenshotUrls as string[]) || []),
-      ...((app?.ipadScreenshotUrls as string[]) || []),
-    ].filter((u) => typeof u === "string" && u.startsWith("http"));
+    // Prefer iPhone screenshots; fall back to iPad only if there are none.
+    const iphoneShots = ((app?.screenshotUrls as string[]) || []).filter((u) => typeof u === "string" && u.startsWith("http"));
+    const ipadShots = ((app?.ipadScreenshotUrls as string[]) || []).filter((u) => typeof u === "string" && u.startsWith("http"));
+    const screenshotUrls = iphoneShots.length ? iphoneShots : ipadShots;
 
     // Fallback: if the API gave no screenshots, scrape the exact store page
     // (the app the user linked) — never a different app from a name search.

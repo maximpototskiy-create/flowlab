@@ -387,6 +387,7 @@ function CanvasNodeImpl({
           <BrandAssetsPicker
             brandId={workflowMeta.brandId}
             brandSlug={workflowMeta.brandSlug ?? null}
+            expanded={inlineExpanded}
             selected={
               Array.isArray(node.config.selected)
                 ? (node.config.selected as string[])

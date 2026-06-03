@@ -38,11 +38,13 @@ export default function BrandAssetsPicker({
   brandSlug,
   selected,
   onChange,
+  expanded = false,
 }: {
   brandId: string | null;
   brandSlug: string | null;
   selected: string[];
   onChange: (next: string[]) => void;
+  expanded?: boolean;
 }) {
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -153,7 +155,12 @@ export default function BrandAssetsPicker({
           <button
             key={c}
             type="button"
-            onClick={() => setFilter(c)}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              setFilter(c);
+            }}
             className={`px-2 py-0.5 rounded-full text-[10px] border transition ${
               filter === c ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
             }`}
@@ -166,14 +173,31 @@ export default function BrandAssetsPicker({
       <div className="flex items-center justify-between text-[10px] text-fg-muted">
         <span>{noneSelected ? `All ${allUrls.length} will be used` : `${selected.length} selected`}</span>
         <div className="flex gap-2">
-          <button type="button" onClick={() => onChange(allUrls)} className="text-fg-muted hover:text-fg">All</button>
-          <button type="button" onClick={() => onChange([])} disabled={noneSelected} className="text-fg-muted hover:text-fg disabled:opacity-40">None</button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onChange(allUrls); }}
+            className="text-fg-muted hover:text-fg"
+          >
+            All
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onChange([]); }}
+            disabled={noneSelected}
+            className="text-fg-muted hover:text-fg disabled:opacity-40"
+          >
+            None
+          </button>
         </div>
       </div>
 
       {/* Grid */}
       <div
-        className="grid grid-cols-3 gap-1.5 max-h-[240px] overflow-y-auto pr-1"
+        className={`grid gap-1.5 overflow-y-auto pr-1 ${expanded ? "grid-cols-4 max-h-[480px]" : "grid-cols-3 max-h-[240px]"}`}
         onWheel={(e) => e.stopPropagation()}
       >
         {visible.map((a) => {
@@ -183,7 +207,9 @@ export default function BrandAssetsPicker({
             <button
               key={a.url}
               type="button"
-              onClick={() => toggle(a.url)}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); toggle(a.url); }}
               className={`relative aspect-[9/16] rounded-md overflow-hidden border transition ${
                 isOn ? "border-brand ring-1 ring-brand" : visuallyActive ? "border-border" : "border-border opacity-40"
               }`}
