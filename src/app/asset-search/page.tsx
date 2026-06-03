@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Loader2, Search } from "lucide-react";
+import { useEffect, useState, useRef } from "react";
+import { Loader2, Search, X } from "lucide-react";
 
 type TLIndex = { id: string; name: string };
 type TLClip = {
   indexId: string;
   videoId: string;
-  score: number;
+  rank: number;
   start: number;
   end: number;
   thumbnailUrl: string | null;
-  confidence: string | null;
+  hlsUrl: string | null;
+  filename: string | null;
 };
 
 function fmt(sec: number): string {
@@ -20,16 +21,80 @@ function fmt(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// Semantic search across TwelveLabs indexes (Marengo 3.0). Type a query →
-// searches all (or selected) indexes → ranked video clips.
+// HLS player modal — loads hls.js from CDN for Chrome; native HLS on Safari.
+function ClipModal({ clip, onClose }: { clip: TLClip; onClose: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !clip.hlsUrl) return;
+    const url = clip.hlsUrl;
+    // Native HLS (Safari)
+    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = url;
+      video.currentTime = clip.start;
+      return;
+    }
+    // hls.js for everyone else
+    let hls: { destroy: () => void } | null = null;
+    const w = window as unknown as { Hls?: new () => HlsLike };
+    function attach() {
+      if (w.Hls) {
+        const h = new w.Hls();
+        h.loadSource(url);
+        h.attachMedia(video!);
+        h.on("hlsManifestParsed", () => { video!.currentTime = clip.start; });
+        hls = h;
+      }
+    }
+    if (w.Hls) {
+      attach();
+    } else {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js";
+      s.onload = attach;
+      document.body.appendChild(s);
+    }
+    return () => { if (hls) hls.destroy(); };
+  }, [clip]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-bg-card rounded-lg overflow-hidden max-w-2xl w-full" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-3 border-b border-border">
+          <div className="text-[12px] text-fg truncate">{clip.filename || clip.videoId}</div>
+          <button onClick={onClose} className="text-fg-subtle hover:text-fg"><X size={16} /></button>
+        </div>
+        {clip.hlsUrl ? (
+          // eslint-disable-next-line jsx-a11y/media-has-caption
+          <video ref={videoRef} controls autoPlay className="w-full max-h-[60vh] bg-black" poster={clip.thumbnailUrl ?? undefined} />
+        ) : (
+          <div className="p-8 text-center text-[12px] text-fg-subtle">No playable stream for this video.</div>
+        )}
+        <div className="p-3 text-[11px] text-fg-muted flex items-center justify-between">
+          <span>Clip {fmt(clip.start)}–{fmt(clip.end)} · rank #{clip.rank}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type HlsLike = {
+  loadSource: (u: string) => void;
+  attachMedia: (v: HTMLVideoElement) => void;
+  on: (e: string, cb: () => void) => void;
+  destroy: () => void;
+};
+
 export default function AssetSearchPage() {
   const [indexes, setIndexes] = useState<TLIndex[]>([]);
-  const [selected, setSelected] = useState<string[]>([]); // empty = all
+  const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [clips, setClips] = useState<TLClip[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchedCount, setSearchedCount] = useState(0);
+  const [open, setOpen] = useState<TLClip | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -38,9 +103,7 @@ export default function AssetSearchPage() {
         const data = await res.json();
         setIndexes(data.indexes ?? []);
         if (data.error) setError(data.error);
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
     })();
   }, []);
 
@@ -56,9 +119,8 @@ export default function AssetSearchPage() {
         body: JSON.stringify({ query, indexIds: selected }),
       });
       const data = await res.json();
-      if (data.error) {
-        setError(data.error);
-      } else {
+      if (data.error) setError(data.error);
+      else {
         setClips(data.clips ?? []);
         setSearchedCount(data.searchedIndexes ?? 0);
       }
@@ -82,7 +144,6 @@ export default function AssetSearchPage() {
         </p>
       </div>
 
-      {/* Index selector */}
       {indexes.length > 0 && (
         <div className="space-y-1.5">
           <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
@@ -113,7 +174,6 @@ export default function AssetSearchPage() {
         </div>
       )}
 
-      {/* Query */}
       <div className="flex gap-2">
         <input
           value={query}
@@ -147,7 +207,11 @@ export default function AssetSearchPage() {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
               {clips.map((c, i) => (
-                <div key={`${c.videoId}-${i}`} className="rounded-md overflow-hidden border border-border bg-bg-card">
+                <button
+                  key={`${c.videoId}-${i}`}
+                  onClick={() => setOpen(c)}
+                  className="text-left rounded-md overflow-hidden border border-border bg-bg-card hover:border-brand transition"
+                >
                   <div className="aspect-video bg-black flex items-center justify-center">
                     {c.thumbnailUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -158,17 +222,21 @@ export default function AssetSearchPage() {
                   </div>
                   <div className="p-2 space-y-0.5">
                     <div className="flex items-center justify-between text-[10px]">
-                      <span className="text-brand font-medium">{(c.score).toFixed(1)}</span>
+                      <span className="text-brand font-medium">#{c.rank}</span>
                       <span className="text-fg-subtle">{fmt(c.start)}–{fmt(c.end)}</span>
                     </div>
-                    <div className="text-[9px] text-fg-subtle truncate" title={c.videoId}>{c.videoId}</div>
+                    <div className="text-[10px] text-fg-muted truncate" title={c.filename ?? c.videoId}>
+                      {c.filename ?? c.videoId}
+                    </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           )}
         </div>
       )}
+
+      {open && <ClipModal clip={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }

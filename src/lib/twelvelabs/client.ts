@@ -18,11 +18,12 @@ export type TLIndex = { id: string; name: string };
 export type TLClip = {
   indexId: string;
   videoId: string;
-  score: number;
+  rank: number; // 1 = most relevant (Marengo 3.0)
   start: number;
   end: number;
   thumbnailUrl: string | null;
-  confidence: string | null;
+  hlsUrl: string | null;
+  filename: string | null;
 };
 
 // List all indexes in the account (paginated; we pull up to ~150).
@@ -46,7 +47,7 @@ export async function listIndexes(): Promise<TLIndex[]> {
   return out;
 }
 
-// Search a single index by text. Returns clips sorted by score (desc).
+// Search a single index by text. Marengo 3.0 returns `rank` (1 = best).
 export async function searchIndex(indexId: string, queryText: string, limit = 10): Promise<TLClip[]> {
   const form = new FormData();
   form.append("index_id", indexId);
@@ -69,15 +70,16 @@ export async function searchIndex(indexId: string, queryText: string, limit = 10
   return (json.data ?? []).map((c) => ({
     indexId,
     videoId: (c.video_id as string) || "",
-    score: typeof c.score === "number" ? c.score : 0,
+    rank: typeof c.rank === "number" ? c.rank : 9999,
     start: typeof c.start === "number" ? c.start : 0,
     end: typeof c.end === "number" ? c.end : 0,
     thumbnailUrl: (c.thumbnail_url as string) || null,
-    confidence: (c.confidence as string) || null,
+    hlsUrl: null,
+    filename: null,
   }));
 }
 
-// Search across multiple indexes (or all) and merge by score.
+// Search across multiple indexes (or all) and merge by rank (ascending).
 export async function searchMany(
   queryText: string,
   indexIds: string[],
@@ -88,5 +90,44 @@ export async function searchMany(
   for (const r of results) {
     if (r.status === "fulfilled") clips.push(...r.value);
   }
-  return clips.sort((a, b) => b.score - a.score);
+  return clips.sort((a, b) => a.rank - b.rank);
+}
+
+// Retrieve a video's HLS stream URL, thumbnail and filename.
+export async function getVideoInfo(
+  indexId: string,
+  videoId: string,
+): Promise<{ hlsUrl: string | null; thumbnailUrl: string | null; filename: string | null }> {
+  const res = await fetch(`${BASE}/indexes/${indexId}/videos/${videoId}`, {
+    headers: { "x-api-key": key() },
+    cache: "no-store",
+  });
+  if (!res.ok) return { hlsUrl: null, thumbnailUrl: null, filename: null };
+  const j = (await res.json()) as {
+    hls?: { video_url?: string; thumbnail_urls?: string[] };
+    system_metadata?: { filename?: string; video_title?: string };
+  };
+  return {
+    hlsUrl: j.hls?.video_url ?? null,
+    thumbnailUrl: j.hls?.thumbnail_urls?.[0] ?? null,
+    filename: j.system_metadata?.filename ?? j.system_metadata?.video_title ?? null,
+  };
+}
+
+// Enrich clips with video info (filename, thumbnail, HLS) — deduped by video.
+export async function enrichClips(clips: TLClip[], maxVideos = 30): Promise<TLClip[]> {
+  const byVideo = new Map<string, { indexId: string; videoId: string }>();
+  for (const c of clips) {
+    if (c.videoId && !byVideo.has(c.videoId)) byVideo.set(c.videoId, { indexId: c.indexId, videoId: c.videoId });
+    if (byVideo.size >= maxVideos) break;
+  }
+  const infos = await Promise.allSettled(
+    [...byVideo.values()].map(async (v) => ({ id: v.videoId, info: await getVideoInfo(v.indexId, v.videoId) })),
+  );
+  const map = new Map<string, { hlsUrl: string | null; thumbnailUrl: string | null; filename: string | null }>();
+  for (const r of infos) if (r.status === "fulfilled") map.set(r.value.id, r.value.info);
+  return clips.map((c) => {
+    const info = map.get(c.videoId);
+    return info ? { ...c, hlsUrl: info.hlsUrl, thumbnailUrl: c.thumbnailUrl ?? info.thumbnailUrl, filename: info.filename } : c;
+  });
 }

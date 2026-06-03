@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
-import { listIndexes, searchMany } from "@/lib/twelvelabs/client";
+import { listIndexes, searchMany, enrichClips } from "@/lib/twelvelabs/client";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -28,7 +28,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       return NextResponse.json({ clips: [], note: "No indexes found in the account." });
     }
     const clips = await searchMany(query, indexIds);
-    return NextResponse.json({ clips: clips.slice(0, 60), searchedIndexes: indexIds.length });
+    const top = clips.slice(0, 48);
+    const enriched = await enrichClips(top);
+    return NextResponse.json({ clips: enriched, searchedIndexes: indexIds.length });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Search failed";
     return NextResponse.json({ error: msg }, { status: 500 });
