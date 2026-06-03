@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Loader2, Upload, X, Music, Video as VideoIcon } from "lucide-react";
 
-type BrandAsset = { id: string; url: string; kind: string; category: string; label: string | null };
+type BrandAsset = { id: string; url: string; kind: string; category: string; label: string | null; embedStatus?: string | null };
 
 const CATEGORIES: { value: string; label: string }[] = [
   { value: "logo", label: "Logo" },
@@ -48,6 +48,15 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
   }, [brandId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // While any video embed is still processing, re-poll so the badge flips to
+  // "searchable" without a manual refresh (GET finishes embeds server-side).
+  useEffect(() => {
+    const stillEmbedding = assets.some((a) => a.kind === "video" && a.embedStatus === "processing");
+    if (!stillEmbedding) return;
+    const t = setInterval(() => { load(); }, 12000);
+    return () => clearInterval(t);
+  }, [assets, load]);
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -159,6 +168,20 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
               <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/55 text-[7px] uppercase text-white/85">
                 {a.category}
               </span>
+              {a.embedStatus && a.kind !== "audio" && (
+                <span
+                  className={`absolute bottom-1 left-1 px-1 py-0.5 rounded text-[7px] uppercase ${
+                    a.embedStatus === "ready"
+                      ? "bg-emerald-600/80 text-white"
+                      : a.embedStatus === "failed"
+                        ? "bg-red-600/80 text-white"
+                        : "bg-amber-500/80 text-black"
+                  }`}
+                  title="Semantic search index"
+                >
+                  {a.embedStatus === "ready" ? "searchable" : a.embedStatus === "failed" ? "index failed" : "indexing…"}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => remove(a.id)}

@@ -77,6 +77,10 @@ model BrandAsset {
   label     String?
   createdAt DateTime @default(now()) @map("created_at")
 
+  // Semantic embedding status (videos use an async Marengo embed task).
+  embedTaskId String? @map("embed_task_id")
+  embedStatus String? @map("embed_status") // processing | ready | failed
+
   brand     Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
 
   @@index([brandId])
