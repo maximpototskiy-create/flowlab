@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { saveBrandKit } from "@/lib/actions";
 import AppStoreAutofillButton from "@/components/AppStoreAutofillButton";
-import BrandResearchButton from "@/components/BrandResearchButton";
+import BrandMagicButton from "@/components/BrandMagicButton";
 import TopNav from "@/components/TopNav";
 import BrandKitScreenshots from "@/components/BrandKitScreenshots";
 import { ChevronLeft } from "lucide-react";
@@ -40,6 +40,10 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
           </p>
         </div>
 
+        <div className="rounded-lg border border-brand/40 bg-brand/5 p-4 mb-5">
+          <BrandMagicButton brandId={brand.id} />
+        </div>
+
         <form action={saveBrandKit} className="space-y-6">
           <input type="hidden" name="brandId" value={brand.id} />
 
@@ -64,9 +68,6 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
                 rows={3}
                 className="w-full bg-bg border border-border rounded-md p-3 text-[12px] text-fg outline-none focus:border-brand resize-y"
               />
-              <div className="mt-2">
-                <BrandResearchButton brandId={brand.id} />
-              </div>
             </Section>
 
             <div className="grid md:grid-cols-2 gap-4">
