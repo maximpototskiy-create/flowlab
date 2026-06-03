@@ -20,8 +20,10 @@ import { Upload, X, ImageIcon } from "lucide-react";
 
 export default function BrandKitScreenshots({
   initialValue,
+  name = "uiScreenshots",
 }: {
   initialValue: string;
+  name?: string;
 }) {
   // Parse newline-separated value into array.
   const [urls, setUrls] = useState<string[]>(() =>
@@ -71,7 +73,7 @@ export default function BrandKitScreenshots({
       {/* Hidden input that submits the actual value. Lives outside the
           grid so the form picks it up regardless of which thumbnail is
           rendered above. */}
-      <input type="hidden" name="uiScreenshots" value={serialised} />
+      <input type="hidden" name={name} value={serialised} />
 
       {/* Thumbnail grid */}
       {urls.length > 0 && (

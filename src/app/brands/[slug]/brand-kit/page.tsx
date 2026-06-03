@@ -91,8 +91,41 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
             </div>
 
             <Section
+              title="App icon"
+              description="Brand icon (auto-filled from the store). Paste a URL to override."
+            >
+              <div className="flex items-center gap-3">
+                {brand.iconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={brand.iconUrl} alt="" className="w-14 h-14 rounded-xl border border-border object-cover flex-shrink-0" />
+                ) : (
+                  <div className="w-14 h-14 rounded-xl border border-dashed border-border flex items-center justify-center text-[9px] text-fg-subtle flex-shrink-0">
+                    no icon
+                  </div>
+                )}
+                <input
+                  name="iconUrl"
+                  defaultValue={brand.iconUrl ?? ""}
+                  placeholder="https://…/icon.png"
+                  className="flex-1 bg-bg border border-border rounded-md p-2.5 text-[12px] font-mono text-fg outline-none focus:border-brand"
+                />
+              </div>
+            </Section>
+
+            <Section
+              title="Store screenshots"
+              description="Auto-found from the App Store / web. Used as references in workflows."
+            >
+              <BrandKitScreenshots
+                key={kit?.storeScreenshots ?? "empty-store"}
+                name="storeScreenshots"
+                initialValue={kit?.storeScreenshots ?? ""}
+              />
+            </Section>
+
+            <Section
               title="UI screenshots"
-              description="Upload app screenshots / store hero images / icon. Available as references in any workflow under this brand."
+              description="Your own uploads — kept separate from auto-found store screenshots."
             >
               <BrandKitScreenshots key={kit?.uiScreenshots ?? "empty"} initialValue={kit?.uiScreenshots ?? ""} />
             </Section>

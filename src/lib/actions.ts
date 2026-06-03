@@ -305,6 +305,7 @@ export async function saveBrandKit(formData: FormData): Promise<void> {
     googlePlayUrl: (formData.get("googlePlayUrl") as string) || null,
     productPitch: (formData.get("productPitch") as string) || null,
     uiScreenshots: (formData.get("uiScreenshots") as string) || null,
+    storeScreenshots: (formData.get("storeScreenshots") as string) || null,
   };
 
   await prisma.brandKit.upsert({
@@ -312,6 +313,12 @@ export async function saveBrandKit(formData: FormData): Promise<void> {
     create: { brandId, ...data },
     update: data,
   });
+
+  // App icon lives on the Brand row.
+  const iconUrl = (formData.get("iconUrl") as string)?.trim();
+  if (iconUrl !== undefined) {
+    await prisma.brand.update({ where: { id: brandId }, data: { iconUrl: iconUrl || null } }).catch(() => {});
+  }
 
   const brand = await prisma.brand.findUnique({ where: { id: brandId } });
   if (brand) revalidatePath(`/brands/${brand.slug}/brand-kit`);

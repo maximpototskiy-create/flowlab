@@ -44,13 +44,13 @@ export async function POST(req: Request): Promise<NextResponse> {
     const trackName = (app.trackName as string) || "";
 
     const existing = await prisma.brandKit.findUnique({ where: { brandId } });
-    const existingShots = (existing?.uiScreenshots || "").split("\n").map((s: string) => s.trim()).filter(Boolean);
+    const existingShots = (existing?.storeScreenshots || "").split("\n").map((s: string) => s.trim()).filter(Boolean);
     const mergedShots = [...new Set([...existingShots, ...screenshotUrls])];
 
     const data = {
       appStoreUrl,
       productPitch: existing?.productPitch || description.slice(0, 800) || null,
-      uiScreenshots: mergedShots.join("\n") || null,
+      storeScreenshots: mergedShots.join("\n") || null,
     };
     await prisma.brandKit.upsert({ where: { brandId }, create: { brandId, ...data }, update: data });
 

@@ -30,7 +30,7 @@ export default function BrandMagicButton({ brandId }: { brandId: string }) {
 
   async function run() {
     setStatus("loading");
-    setMessage("Ищу приложение, тяну данные и исследую бренд… до ~40 сек");
+    setMessage("Finding the app, pulling data and researching the brand… up to ~40s");
     setSteps([]);
     setFound(null);
     setSources([]);
@@ -67,13 +67,17 @@ export default function BrandMagicButton({ brandId }: { brandId: string }) {
         type="button"
         onClick={run}
         disabled={status === "loading"}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand text-black font-semibold text-[12px] hover:bg-emerald-400 transition disabled:opacity-60"
+        className="group relative inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-[13px] font-semibold text-white overflow-hidden transition disabled:opacity-70
+          bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500
+          shadow-[0_0_0_0_rgba(16,185,129,0.5)] hover:shadow-[0_4px_24px_-2px_rgba(16,185,129,0.5)]
+          disabled:cursor-wait"
       >
-        {status === "loading" ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-        {status === "loading" ? "Магия в процессе…" : "✨ Заполнить всё автоматически"}
+        <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
+        {status === "loading" ? <Loader2 size={15} className="animate-spin" /> : <Wand2 size={15} />}
+        {status === "loading" ? "Working magic…" : "Auto-fill everything with AI"}
       </button>
       <p className="text-[10px] text-fg-subtle">
-        Найдёт приложение в App Store/Google Play, подтянет описание, скриншоты и иконку, исследует бренд в сети и заполнит поля (на английском). Поля можно править вручную.
+        Finds the app on the App Store / Google Play, pulls description, screenshots and icon, researches the brand on the web, and fills the fields (in English). All fields stay editable.
       </p>
 
       {status === "loading" && <p className="text-[10px] text-fg-muted">{message}</p>}

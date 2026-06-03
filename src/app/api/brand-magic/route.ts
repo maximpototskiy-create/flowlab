@@ -14,7 +14,7 @@ import { callAgent } from "@/lib/agent/router";
 import { revalidatePath } from "next/cache";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const ENGLISH_SYSTEM = `You are a senior brand strategist and market researcher.
 You investigate apps and brands and distill them into a precise, production-ready brand kit
@@ -157,6 +157,7 @@ sensitive themes to never touch. Base it on real search results.`,
   "lexiconAvoid": "comma-separated words/phrases to avoid",
   "bannedThemes": "comma-separated sensitive themes to never mention",
   "colors": "space-separated hex codes if identifiable, else empty string",
+  "fonts": "headline and body font names if identifiable (e.g. 'Inter (body), Source Serif Pro (headline)'), else empty string",
   "competitors": ["competitor names"],
   "summary": "2-3 sentence brand summary"
 }
@@ -176,6 +177,7 @@ ${research.text}`,
       lexiconAvoid?: string;
       bannedThemes?: string;
       colors?: string;
+      fonts?: string;
       competitors?: string[];
       summary?: string;
     } = {};
@@ -186,13 +188,14 @@ ${research.text}`,
     }
 
     // ── 6. Fill the kit ───────────────────────────────────────────────────
-    const existingShots = (kit?.uiScreenshots || "").split("\n").map((s: string) => s.trim()).filter(Boolean);
-    const mergedShots = [...new Set([...existingShots, ...screenshotUrls])];
+    // Store screenshots go to their OWN field (separate from manual UI ones).
+    const existingStore = (kit?.storeScreenshots || "").split("\n").map((s: string) => s.trim()).filter(Boolean);
+    const mergedStore = [...new Set([...existingStore, ...screenshotUrls])];
 
     const data: Record<string, string | null> = {};
     if (appStoreUrl) data.appStoreUrl = appStoreUrl;
     if (googlePlayUrl) data.googlePlayUrl = googlePlayUrl;
-    if (mergedShots.length) data.uiScreenshots = mergedShots.join("\n");
+    if (mergedStore.length) data.storeScreenshots = mergedStore.join("\n");
     // Pitch: generated English pitch replaces a command-like/empty pitch.
     if (p.productPitch) data.productPitch = p.productPitch;
     // The rest: fill only if empty (don't clobber manual edits).
@@ -201,6 +204,7 @@ ${research.text}`,
     if (p.lexiconAvoid && !kit?.lexiconAvoid) data.lexiconAvoid = p.lexiconAvoid;
     if (p.bannedThemes && !kit?.bannedThemes) data.bannedThemes = p.bannedThemes;
     if (p.colors && !kit?.colors) data.colors = p.colors;
+    if (p.fonts && !kit?.fonts) data.fonts = p.fonts;
 
     await prisma.brandKit.upsert({
       where: { brandId },
@@ -223,8 +227,8 @@ ${research.text}`,
       found: {
         appStoreUrl,
         googlePlayUrl,
-        screenshots: mergedShots.length,
-        addedScreenshots: mergedShots.length - existingShots.length,
+        screenshots: mergedStore.length,
+        addedScreenshots: mergedStore.length - existingStore.length,
         icon: !!icon,
         audience: p.audience ?? "",
         competitors: p.competitors ?? [],
