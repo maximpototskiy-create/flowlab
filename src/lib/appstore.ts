@@ -47,14 +47,18 @@ export async function scrapeAppStoreScreenshots(appStoreUrl: string): Promise<st
     if (!cur || area > cur.area) best.set(base, { url: u, area, w, h });
   }
 
-  return [...best.values()]
-    // Drop tiny images and square-ish ones (icons/badges); screenshots are
-    // clearly portrait or landscape.
-    .filter((v) => {
-      const ratio = v.w / v.h;
-      const big = Math.max(v.w, v.h) >= 300;
-      const notSquare = ratio < 0.85 || ratio > 1.18;
-      return big && notSquare;
-    })
-    .map((v) => v.url);
+  const candidates = [...best.values()].filter((v) => {
+    const ratio = v.w / v.h;
+    const big = Math.max(v.w, v.h) >= 300;
+    const notSquare = ratio < 0.85 || ratio > 1.18;
+    return big && notSquare;
+  });
+
+  // Prefer iPhone screenshots: tall, narrow portraits (ratio < ~0.62, e.g.
+  // 1290x2796 ≈ 0.46). iPad portraits are wider (~0.75). If we have any
+  // phone-shaped shots, return only those; otherwise fall back to whatever
+  // portrait shots exist.
+  const phone = candidates.filter((v) => v.w / v.h > 0 && v.w / v.h < 0.62);
+  const chosen = phone.length ? phone : candidates;
+  return chosen.map((v) => v.url);
 }
