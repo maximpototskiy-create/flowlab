@@ -58,10 +58,29 @@ model Brand {
   projects  Project[]
   brandKit  BrandKit?
   assets    Asset[]
+  brandAssets BrandAsset[]
 
   @@index([archivedAt])
   @@index([createdAt(sort: Desc)])
   @@map("brands")
+}
+
+// Brand-level reusable assets with categories: logos, UI, graphic elements,
+// overlays, music, sounds, references, and creative parts (hook/body/packshot).
+// Separate from workflow Asset rows — these are curated brand building blocks.
+model BrandAsset {
+  id        String   @id @default(uuid()) @db.Uuid
+  brandId   String   @map("brand_id") @db.Uuid
+  url       String
+  kind      String   // image | video | audio
+  category  String   // logo | ui | graphic | overlay | music | sound | reference | hook | body | packshot | other
+  label     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  brand     Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId])
+  @@map("brand_assets")
 }
 
 // ────────────────────────────────────────────────────────────

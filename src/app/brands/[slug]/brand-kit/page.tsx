@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { saveBrandKit } from "@/lib/actions";
 import BrandMagicButton from "@/components/BrandMagicButton";
+import BrandAssetsManager from "@/components/BrandAssetsManager";
 import SaveBrandKitButton from "@/components/SaveBrandKitButton";
 import TopNav from "@/components/TopNav";
 import BrandKitScreenshots from "@/components/BrandKitScreenshots";
@@ -252,6 +253,16 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
             <SaveBrandKitButton />
           </div>
         </form>
+
+        <div className="rounded-lg border border-border bg-bg-card p-5 space-y-4 mt-6">
+          <div>
+            <h2 className="text-[14px] font-medium text-fg">Brand assets</h2>
+            <p className="text-[11px] text-fg-muted mt-0.5">
+              Reusable building blocks for this brand — logos, UI, graphic elements, overlays, music, sound, references, and creative parts (hook / body / packshot). Available in workflows.
+            </p>
+          </div>
+          <BrandAssetsManager brandId={brand.id} />
+        </div>
       </main>
     </div>
   );
