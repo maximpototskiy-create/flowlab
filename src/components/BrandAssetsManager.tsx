@@ -30,6 +30,7 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
   const [assets, setAssets] = useState<BrandAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
   const [category, setCategory] = useState("logo");
   const [filter, setFilter] = useState("all");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -57,6 +58,22 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
     const t = setInterval(() => { load(); }, 12000);
     return () => clearInterval(t);
   }, [assets, load]);
+
+  async function reindexFailed() {
+    setReindexing(true);
+    try {
+      await fetch("/api/brand-assets/reembed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandId }),
+      });
+      await load();
+    } catch {
+      /* ignore */
+    } finally {
+      setReindexing(false);
+    }
+  }
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -121,6 +138,18 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
           onChange={(e) => handleFiles(e.target.files)}
         />
         <span className="text-[10px] text-fg-subtle">Images, video, audio.</span>
+        {assets.some((a) => a.embedStatus === "failed") && (
+          <button
+            type="button"
+            onClick={reindexFailed}
+            disabled={reindexing}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-border text-fg-muted text-[12px] hover:text-fg transition disabled:opacity-60"
+            title="Re-run semantic indexing for assets that failed"
+          >
+            {reindexing ? <Loader2 size={13} className="animate-spin" /> : null}
+            {reindexing ? "Re-indexing…" : "Re-index failed"}
+          </button>
+        )}
       </div>
 
       {/* Category filter */}
