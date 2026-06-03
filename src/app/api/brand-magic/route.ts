@@ -201,14 +201,11 @@ ${research.text}`,
     }
 
     // ── 6. Fill the kit ───────────────────────────────────────────────────
-    // Store screenshots go to their OWN field (separate from manual UI ones).
-    const existingStore = (kit?.storeScreenshots || "").split("\n").map((s: string) => s.trim()).filter(Boolean);
-    const mergedStore = [...new Set([...existingStore, ...screenshotUrls])];
-
+    // Store screenshots now go into brand_assets (category "store"), the
+    // single source of truth — not a BrandKit field.
     const data: Record<string, string | null> = {};
     if (appStoreUrl) data.appStoreUrl = appStoreUrl;
     if (googlePlayUrl) data.googlePlayUrl = googlePlayUrl;
-    if (mergedStore.length) data.storeScreenshots = mergedStore.join("\n");
     // Pitch: generated English pitch replaces a command-like/empty pitch.
     if (p.productPitch) data.productPitch = p.productPitch;
     // The rest: fill only if empty (don't clobber manual edits).
@@ -224,8 +221,34 @@ ${research.text}`,
       create: { brandId, ...data },
       update: data,
     });
+
+    // Store screenshots → brand_assets (category "store"), deduped against
+    // existing store rows. This is now the single home for all assets.
+    let addedScreenshots = 0;
+    if (screenshotUrls.length) {
+      const existing = await prisma.brandAsset.findMany({
+        where: { brandId, category: "store" },
+        select: { url: true },
+      });
+      const have = new Set(existing.map((a: { url: string }) => a.url));
+      const toAdd = [...new Set(screenshotUrls)].filter((u) => !have.has(u));
+      if (toAdd.length) {
+        await prisma.brandAsset.createMany({
+          data: toAdd.map((url) => ({ brandId, url, kind: "image", category: "store", label: "Store screenshot" })),
+        });
+        addedScreenshots = toAdd.length;
+      }
+    }
+
+    // App icon → brand_assets (category "logo") + brand.iconUrl for the preview.
     if (icon) {
       await prisma.brand.update({ where: { id: brandId }, data: { iconUrl: icon } }).catch(() => {});
+      const haveIcon = await prisma.brandAsset.findFirst({ where: { brandId, url: icon } });
+      if (!haveIcon) {
+        await prisma.brandAsset
+          .create({ data: { brandId, url: icon, kind: "image", category: "logo", label: "App icon" } })
+          .catch(() => {});
+      }
     }
     try {
       revalidatePath(`/brands/${brand.slug}/brand-kit`);
@@ -240,8 +263,8 @@ ${research.text}`,
       found: {
         appStoreUrl,
         googlePlayUrl,
-        screenshots: mergedStore.length,
-        addedScreenshots: mergedStore.length - existingStore.length,
+        screenshots: screenshotUrls.length,
+        addedScreenshots,
         icon: !!icon,
         audience: p.audience ?? "",
         competitors: p.competitors ?? [],

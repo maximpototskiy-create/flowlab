@@ -50,19 +50,38 @@ export async function POST(req: Request): Promise<NextResponse> {
     const trackName = (app.trackName as string) || "";
 
     const existing = await prisma.brandKit.findUnique({ where: { brandId } });
-    const existingShots = (existing?.storeScreenshots || "").split("\n").map((s: string) => s.trim()).filter(Boolean);
-    const mergedShots = [...new Set([...existingShots, ...screenshotUrls])];
-
     const data = {
       appStoreUrl,
       productPitch: existing?.productPitch || description.slice(0, 800) || null,
-      storeScreenshots: mergedShots.join("\n") || null,
     };
     await prisma.brandKit.upsert({ where: { brandId }, create: { brandId, ...data }, update: data });
+
+    // Store screenshots → brand_assets (category "store"), deduped.
+    let addedScreenshots = 0;
+    if (screenshotUrls.length) {
+      const have = new Set(
+        (await prisma.brandAsset.findMany({ where: { brandId, category: "store" }, select: { url: true } })).map(
+          (a: { url: string }) => a.url,
+        ),
+      );
+      const toAdd = [...new Set(screenshotUrls)].filter((u) => !have.has(u));
+      if (toAdd.length) {
+        await prisma.brandAsset.createMany({
+          data: toAdd.map((url) => ({ brandId, url, kind: "image", category: "store", label: "Store screenshot" })),
+        });
+        addedScreenshots = toAdd.length;
+      }
+    }
 
     const brand = await prisma.brand.findUnique({ where: { id: brandId } });
     if (icon && brand) {
       await prisma.brand.update({ where: { id: brandId }, data: { iconUrl: icon } }).catch(() => {});
+      const haveIcon = await prisma.brandAsset.findFirst({ where: { brandId, url: icon } });
+      if (!haveIcon) {
+        await prisma.brandAsset
+          .create({ data: { brandId, url: icon, kind: "image", category: "logo", label: "App icon" } })
+          .catch(() => {});
+      }
     }
 
     return NextResponse.json({
@@ -71,7 +90,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         name: trackName,
         description: !!description,
         screenshots: screenshotUrls.length,
-        addedScreenshots: mergedShots.length - existingShots.length,
+        addedScreenshots,
         icon: !!icon,
         pitchFilled: !existing?.productPitch && !!description,
       },

@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
-const CATEGORIES = ["logo", "ui", "graphic", "overlay", "music", "sound", "reference", "hook", "body", "packshot", "other"];
+const CATEGORIES = ["logo", "ui", "store", "graphic", "overlay", "music", "sound", "reference", "hook", "body", "packshot", "other"];
 const KINDS = ["image", "video", "audio"];
 
 export async function GET(req: Request): Promise<NextResponse> {

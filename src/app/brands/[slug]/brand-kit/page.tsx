@@ -7,7 +7,6 @@ import BrandMagicButton from "@/components/BrandMagicButton";
 import BrandAssetsManager from "@/components/BrandAssetsManager";
 import SaveBrandKitButton from "@/components/SaveBrandKitButton";
 import TopNav from "@/components/TopNav";
-import BrandKitScreenshots from "@/components/BrandKitScreenshots";
 import { ChevronLeft } from "lucide-react";
 
 export default async function BrandKitPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -110,24 +109,6 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
                   className="flex-1 bg-bg border border-border rounded-md p-2.5 text-[12px] font-mono text-fg outline-none focus:border-brand"
                 />
               </div>
-            </Section>
-
-            <Section
-              title="Store screenshots"
-              description="Auto-found from the App Store / web. Used as references in workflows."
-            >
-              <BrandKitScreenshots
-                key={kit?.storeScreenshots ?? "empty-store"}
-                name="storeScreenshots"
-                initialValue={kit?.storeScreenshots ?? ""}
-              />
-            </Section>
-
-            <Section
-              title="UI screenshots"
-              description="Your own uploads — kept separate from auto-found store screenshots."
-            >
-              <BrandKitScreenshots key={kit?.uiScreenshots ?? "empty"} initialValue={kit?.uiScreenshots ?? ""} />
             </Section>
           </div>
 

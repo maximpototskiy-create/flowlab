@@ -7,7 +7,8 @@ type BrandAsset = { id: string; url: string; kind: string; category: string; lab
 
 const CATEGORIES: { value: string; label: string }[] = [
   { value: "logo", label: "Logo" },
-  { value: "ui", label: "UI" },
+  { value: "ui", label: "UI screenshot" },
+  { value: "store", label: "Store screenshot" },
   { value: "graphic", label: "Graphic element" },
   { value: "overlay", label: "Overlay / plate" },
   { value: "music", label: "Music" },
