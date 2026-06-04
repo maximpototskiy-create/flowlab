@@ -13,7 +13,7 @@ import { insertEmbedding } from "@/lib/semantic";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const MAX_PER_RUN = 20; // import at most N new files per call (re-run for more)
+const MAX_PER_RUN = 8; // import at most N new files per call (loop pulls the rest); smaller = smoother progress
 const MAX_BYTES = 200 * 1024 * 1024; // skip files larger than 200 MB for now
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -82,6 +82,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   let videos = 0;
   let skippedLarge = 0;
   let failed = 0;
+  const embedErrors: string[] = [];
   const batch = fresh.slice(0, MAX_PER_RUN);
 
   for (const f of batch) {
@@ -118,7 +119,9 @@ export async function POST(req: Request): Promise<NextResponse> {
           videos++;
         }
       } catch (embErr) {
-        console.error("[drive/import] embed failed for", f.name, embErr);
+        const msg = embErr instanceof Error ? embErr.message : String(embErr);
+        console.error("[drive/import] embed failed for", f.name, msg);
+        if (embedErrors.length < 3) embedErrors.push(`${f.name}: ${msg}`);
         await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedStatus: "failed" } }).catch(() => {});
       }
     } catch (err) {
@@ -139,6 +142,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     videos,
     skippedLarge,
     failed,
+    embedErrors,
     remaining: Math.max(0, remaining),
   });
 }

@@ -4,7 +4,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { embedImage, embedVideo } from "@/lib/twelvelabs/embed";
+import { embedImage, embedVideo, embedAudio } from "@/lib/twelvelabs/embed";
 import { insertEmbedding, deleteEmbeddingsForAsset } from "@/lib/semantic";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +27,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   const targets = (await prisma.brandAsset.findMany({
     where: {
       brandId,
-      kind: { in: ["image", "video"] },
+      kind: { in: ["image", "video", "audio"] },
       OR: [{ embedStatus: null }, { embedStatus: "failed" }],
     },
   })) as AssetRow[];
@@ -44,8 +44,12 @@ export async function POST(req: Request): Promise<NextResponse> {
         await insertEmbedding({ assetId: a.id, brandId, modality: "image", category: a.category, url: a.url, embedding: vec });
         await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "ready", embedTaskId: null } });
         images++;
-      } else {
+      } else if (a.kind === "video") {
         const { taskId } = await embedVideo(a.url);
+        await prisma.brandAsset.update({ where: { id: a.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
+        videos++;
+      } else {
+        const { taskId } = await embedAudio(a.url);
         await prisma.brandAsset.update({ where: { id: a.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
         videos++;
       }

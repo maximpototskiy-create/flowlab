@@ -117,6 +117,7 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
           if (videosSum) parts.push(`${videosSum} video/audio indexing`);
           if (skippedSum) parts.push(`${skippedSum} too large (skipped)`);
           if (failedSum) parts.push(`${failedSum} failed`);
+          if (d.embedErrors?.length) parts.push(`embed error: ${d.embedErrors[0]}`);
           setImportMsg(parts.join(" · "));
           break;
         }

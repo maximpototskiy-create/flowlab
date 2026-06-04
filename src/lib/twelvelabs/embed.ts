@@ -72,7 +72,8 @@ async function embedAsyncMedia(inputType: "video" | "audio", url: string): Promi
       [inputType]: {
         media_source: { url },
         // visual-text for video (aligned with text search); audio for audio.
-        embedding_option: inputType === "video" ? ["visual-text"] : ["audio"],
+        // Valid video options: visual | audio | transcription. (Not "visual-text".)
+        embedding_option: inputType === "video" ? ["visual"] : ["audio"],
         embedding_scope: ["clip"],
       },
     }),
