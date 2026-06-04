@@ -5,6 +5,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { embedText, embedImage } from "@/lib/twelvelabs/embed";
+import { ensureEmbeddableImage } from "@/lib/image";
 import { searchEmbeddings, type SemanticHit } from "@/lib/semantic";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +36,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!query && !imageUrl) return NextResponse.json({ error: "query or imageUrl required" }, { status: 400 });
 
   try {
-    const embedding = imageUrl ? await embedImage(imageUrl) : await embedText(query);
+    const embedding = imageUrl
+      ? await embedImage(await ensureEmbeddableImage(imageUrl, `queries/${Date.now()}.jpg`))
+      : await embedText(query);
     // Pull extra rows so grouping by asset still yields enough cards.
     const hits = await searchEmbeddings({
       embedding,

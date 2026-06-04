@@ -26,7 +26,7 @@ export default function AssetDrawer({
 }) {
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [source, setSource] = useState<"flowlab" | "ui" | "fal">("flowlab");
+  const [source, setSource] = useState<"flowlab" | "ui" | "fal" | "library">("flowlab");
   const [kind, setKind] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -71,6 +71,48 @@ export default function AssetDrawer({
   const loadPage = useCallback(async (targetLimit: number, append: boolean) => {
     if (append) setLoadingMore(true); else setLoading(true);
     try {
+      // Library = semantic search over THIS brand's curated assets (pgvector).
+      if (source === "library") {
+        const hasQuery = !!debouncedQ || !!(similar && similar.url);
+        if (!hasQuery) {
+          // No query yet — show nothing (prompt the user to type/drop an image).
+          setAssets([]);
+          setHasMore(false);
+          return;
+        }
+        const res = await fetch("/api/semantic-search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: similar?.url ? undefined : debouncedQ,
+            imageUrl: similar?.url,
+            brandId: brandId || undefined,
+            limit: targetLimit,
+          }),
+        });
+        const data = await res.json();
+        const results: Array<{ url: string; modality: string; category: string | null; similarity: number }> = data.results ?? [];
+        const list: AssetItem[] = results.map((r, i) => ({
+          id: `lib-${i}-${r.url}`,
+          cdnUrl: r.url,
+          kind: r.modality === "audio" ? "audio" : r.modality === "video" ? "video" : "image",
+          mimeType: null,
+          sizeBytes: null,
+          width: null,
+          height: null,
+          durationSec: null,
+          source: "library",
+          model: null,
+          prompt: r.category ? `${r.category} · ${Math.round(r.similarity * 100)}%` : null,
+          createdAt: new Date().toISOString(),
+          projectName: null,
+          brandName: null,
+        }));
+        setAssets(list);
+        setHasMore(false);
+        return;
+      }
+
       const p = new URLSearchParams();
       if (debouncedQ) p.set("q", debouncedQ);
       p.set("limit", String(targetLimit));
@@ -194,6 +236,15 @@ export default function AssetDrawer({
           >
             fal
           </button>
+          <button
+            onClick={() => setSource("library")}
+            className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
+              source === "library" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+            }`}
+            title="Semantic search over this brand's saved assets"
+          >
+            Library
+          </button>
         </div>
         <div className="flex gap-1.5">
           <div className="relative flex-1">
@@ -201,11 +252,11 @@ export default function AssetDrawer({
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder={source === "fal" ? "Semantic search…" : "Search…"}
+              placeholder={source === "fal" || source === "library" ? "Semantic search…" : "Search…"}
               className="w-full bg-bg border border-border rounded-md pl-7 pr-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand"
             />
           </div>
-          {source === "fal" && (
+          {(source === "fal" || source === "library") && (
             <>
               <button
                 onClick={() => fileInputRef.current?.click()}
@@ -299,7 +350,7 @@ export default function AssetDrawer({
       )}
 
       {/* Similar-search banner */}
-      {source === "fal" && similar && (
+      {(source === "fal" || source === "library") && similar && (
         <div className="px-3 py-2 border-b border-border flex items-center gap-2 bg-brand/10">
           {similar.kind === "video" ? (
             <video src={similar.url} className="w-7 h-7 rounded object-cover" muted preload="metadata" />
