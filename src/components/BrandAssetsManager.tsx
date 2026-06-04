@@ -75,27 +75,59 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
 
   async function importFromDrive() {
     setImporting(true);
-    setImportMsg(null);
+    setImportMsg("Connecting to Drive…");
+    let totalNew = 0;
+    let importedSum = 0;
+    let videosSum = 0;
+    let skippedSum = 0;
+    let failedSum = 0;
     try {
-      const res = await fetch("/api/drive/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brandId }),
-      });
-      const d = await res.json();
-      if (d.error) {
-        setImportMsg(`Error: ${d.error}`);
-      } else {
-        const parts = [`imported ${d.imported}`];
-        if (d.videos) parts.push(`${d.videos} video indexing`);
-        if (d.skippedLarge) parts.push(`${d.skippedLarge} too large`);
-        if (d.failed) parts.push(`${d.failed} failed`);
-        if (d.remaining) parts.push(`${d.remaining} left — run again`);
-        setImportMsg(d.newFound === 0 ? "Nothing new in Drive." : parts.join(", "));
+      // Loop batches until nothing remains. Each call imports up to 20 files
+      // and returns how many are left, so we can show real progress and pull
+      // everything (images + videos) without manual re-runs.
+      // Safety cap on iterations to avoid any accidental infinite loop.
+      for (let i = 0; i < 100; i++) {
+        const res = await fetch("/api/drive/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brandId }),
+        });
+        const d = await res.json();
+        if (d.error) {
+          setImportMsg(`Error: ${d.error}`);
+          break;
+        }
+        if (i === 0) totalNew = d.newFound ?? 0;
+        importedSum += d.imported ?? 0;
+        videosSum += d.videos ?? 0;
+        skippedSum += d.skippedLarge ?? 0;
+        failedSum += d.failed ?? 0;
+
         await load();
+
+        if (totalNew === 0) {
+          setImportMsg("Nothing new in Drive.");
+          break;
+        }
+        const done = importedSum + skippedSum + failedSum;
+        setImportMsg(`Importing… ${done}/${totalNew}${d.remaining ? ` (${d.remaining} left)` : ""}`);
+
+        if (!d.remaining) {
+          const parts = [`Imported ${importedSum}`];
+          if (videosSum) parts.push(`${videosSum} video/audio indexing`);
+          if (skippedSum) parts.push(`${skippedSum} too large (skipped)`);
+          if (failedSum) parts.push(`${failedSum} failed`);
+          setImportMsg(parts.join(" · "));
+          break;
+        }
+        // Stop if a batch made no progress at all (avoids looping).
+        if ((d.imported ?? 0) === 0 && (d.skippedLarge ?? 0) === 0 && (d.failed ?? 0) === 0) {
+          setImportMsg(`Stopped — ${importedSum} imported, ${d.remaining} could not be processed.`);
+          break;
+        }
       }
     } catch {
-      setImportMsg("Import failed");
+      setImportMsg("Import failed (network).");
     } finally {
       setImporting(false);
     }

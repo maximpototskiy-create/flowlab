@@ -127,7 +127,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
   }
 
-  const remaining = fresh.length - batch.length + skippedLarge;
+  // Files not touched this run (skipped-large stays counted separately so the
+  // client loop terminates instead of retrying the same large files forever).
+  const remaining = fresh.length - batch.length;
   return NextResponse.json({
     ok: true,
     totalInDrive: driveFiles.length,
