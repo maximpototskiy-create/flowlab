@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Upload } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
+import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
 const KINDS = [
   { value: "", label: "All" },
@@ -478,6 +479,11 @@ export default function AssetDrawer({
               <Download size={13} />
             </a>
           </div>
+          {brandId && (
+            <div className="px-3 pb-3 -mt-1 flex justify-end">
+              <SaveToLibraryButton assetId={preview.id} brandId={brandId} compact />
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Download, X, Image as ImageIcon, Video, Music, FileText } from "lucide-react";
 import type { AssetItem, FilterOption } from "@/lib/assetsQuery";
+import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
 export type { AssetItem, FilterOption };
 
@@ -283,15 +284,18 @@ function Lightbox({ asset, onClose }: { asset: AssetItem; onClose: () => void })
             <Meta label="Created" value={new Date(asset.createdAt).toLocaleString()} />
           </div>
 
-          <a
-            href={asset.cdnUrl}
-            download
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-auto flex items-center justify-center gap-2 bg-brand text-black font-medium text-[12px] py-2 rounded-md hover:bg-emerald-400 transition"
-          >
-            <Download size={13} /> Download
-          </a>
+          <div className="mt-auto flex flex-col gap-2">
+            <SaveToLibraryButton assetId={asset.id} />
+            <a
+              href={asset.cdnUrl}
+              download
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 bg-brand text-black font-medium text-[12px] py-2 rounded-md hover:bg-emerald-400 transition"
+            >
+              <Download size={13} /> Download
+            </a>
+          </div>
         </div>
       </div>
     </div>
