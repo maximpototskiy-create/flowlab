@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Keep heavy Node-only deps out of the webpack bundle; resolve at runtime.
+  serverExternalPackages: ["googleapis"],
   // Images from Supabase Storage and fal.ai CDN
   images: {
     remotePatterns: [
