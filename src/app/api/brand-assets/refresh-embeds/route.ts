@@ -5,7 +5,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { retrieveVideoEmbedding } from "@/lib/twelvelabs/embed";
+import { getEmbedTaskStatus } from "@/lib/twelvelabs/embed";
 import { insertEmbedding } from "@/lib/semantic";
 
 export const dynamic = "force-dynamic";
@@ -33,11 +33,20 @@ export async function POST(req: Request): Promise<NextResponse> {
   })) as Row[];
 
   let ready = 0;
+  let failed = 0;
   // Sequential — avoids opening many pooled connections at once.
   for (const a of pending) {
     try {
-      const segments = await retrieveVideoEmbedding(a.embedTaskId as string);
-      if (!segments) continue; // not ready yet
+      const { status, segments, error } = await getEmbedTaskStatus(a.embedTaskId as string);
+      if (status === "failed") {
+        await prisma.brandAsset.update({
+          where: { id: a.id },
+          data: { embedStatus: "failed", embedError: (error ?? "embed task failed").slice(0, 500) },
+        });
+        failed++;
+        continue;
+      }
+      if (status !== "ready") continue; // still processing
       for (const seg of segments) {
         if (seg.embedding?.length) {
           await insertEmbedding({
@@ -52,7 +61,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           });
         }
       }
-      await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "ready" } });
+      await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "ready", embedError: null } });
       ready++;
     } catch {
       /* leave processing; retried next call */
@@ -62,5 +71,5 @@ export async function POST(req: Request): Promise<NextResponse> {
   const remaining = await prisma.brandAsset.count({
     where: { brandId, kind: { in: ["video", "audio"] }, embedStatus: "processing" },
   });
-  return NextResponse.json({ ok: true, ready, remaining });
+  return NextResponse.json({ ok: true, ready, failed, remaining });
 }

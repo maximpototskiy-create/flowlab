@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Loader2, Upload, X, Music, Video as VideoIcon } from "lucide-react";
 
-type BrandAsset = { id: string; url: string; kind: string; category: string; label: string | null; embedStatus?: string | null };
+type BrandAsset = { id: string; url: string; kind: string; category: string; label: string | null; embedStatus?: string | null; embedError?: string | null };
 
 const CATEGORIES: { value: string; label: string }[] = [
   { value: "logo", label: "Logo" },
@@ -137,14 +137,20 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
   async function reindexFailed() {
     setReindexing(true);
     try {
-      await fetch("/api/brand-assets/reembed", {
+      const res = await fetch("/api/brand-assets/reembed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ brandId }),
       });
+      const d = await res.json();
       await load();
+      if (d?.errors?.length) {
+        setImportMsg(`Re-index: ${d.images ?? 0} images, ${d.videos ?? 0} video/audio queued, ${d.failed ?? 0} failed · ${d.errors[0]}`);
+      } else if (d?.ok) {
+        setImportMsg(`Re-index: ${d.images ?? 0} images, ${d.videos ?? 0} video/audio queued${d.failed ? `, ${d.failed} failed` : ""}.`);
+      }
     } catch {
-      /* ignore */
+      setImportMsg("Re-index failed (network).");
     } finally {
       setReindexing(false);
     }
@@ -293,7 +299,7 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
                         ? "bg-red-600/80 text-white"
                         : "bg-amber-500/80 text-black"
                   }`}
-                  title="Semantic search index"
+                  title={a.embedStatus === "failed" && a.embedError ? a.embedError : "Semantic search index"}
                 >
                   {a.embedStatus === "ready" ? "searchable" : a.embedStatus === "failed" ? "index failed" : "indexing…"}
                 </span>

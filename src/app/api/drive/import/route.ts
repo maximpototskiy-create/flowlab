@@ -122,7 +122,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         const msg = embErr instanceof Error ? embErr.message : String(embErr);
         console.error("[drive/import] embed failed for", f.name, msg);
         if (embedErrors.length < 3) embedErrors.push(`${f.name}: ${msg}`);
-        await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedStatus: "failed" } }).catch(() => {});
+        await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedStatus: "failed", embedError: msg.slice(0, 500) } }).catch(() => {});
       }
     } catch (err) {
       console.error("[drive/import] failed for", f.name, err);

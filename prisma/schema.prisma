@@ -81,6 +81,7 @@ model BrandAsset {
   // Semantic embedding status (videos use an async Marengo embed task).
   embedTaskId String? @map("embed_task_id")
   embedStatus String? @map("embed_status") // processing | ready | failed
+  embedError  String? @map("embed_error")  // last embed failure reason (diagnostics)
   driveFileId String? @map("drive_file_id") // source Google Drive file (dedup)
 
   brand     Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)

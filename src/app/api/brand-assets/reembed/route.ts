@@ -35,6 +35,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   let images = 0;
   let videos = 0;
   let failed = 0;
+  const errors: string[] = [];
 
   for (const a of targets) {
     try {
@@ -42,23 +43,25 @@ export async function POST(req: Request): Promise<NextResponse> {
       if (a.kind === "image") {
         const vec = await embedImage(a.url);
         await insertEmbedding({ assetId: a.id, brandId, modality: "image", category: a.category, url: a.url, embedding: vec });
-        await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "ready", embedTaskId: null } });
+        await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "ready", embedTaskId: null, embedError: null } });
         images++;
       } else if (a.kind === "video") {
         const { taskId } = await embedVideo(a.url);
-        await prisma.brandAsset.update({ where: { id: a.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
+        await prisma.brandAsset.update({ where: { id: a.id }, data: { embedTaskId: taskId, embedStatus: "processing", embedError: null } });
         videos++;
       } else {
         const { taskId } = await embedAudio(a.url);
-        await prisma.brandAsset.update({ where: { id: a.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
+        await prisma.brandAsset.update({ where: { id: a.id }, data: { embedTaskId: taskId, embedStatus: "processing", embedError: null } });
         videos++;
       }
     } catch (err) {
-      console.error("[reembed] failed for", a.id, err);
-      await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "failed" } }).catch(() => {});
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[reembed] failed for", a.id, msg);
+      if (errors.length < 3) errors.push(`${(a as { label?: string | null }).label ?? a.id}: ${msg}`);
+      await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "failed", embedError: msg.slice(0, 500) } }).catch(() => {});
       failed++;
     }
   }
 
-  return NextResponse.json({ ok: true, images, videos, failed, total: targets.length });
+  return NextResponse.json({ ok: true, images, videos, failed, total: targets.length, errors });
 }

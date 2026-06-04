@@ -89,10 +89,23 @@ async function embedAsyncMedia(inputType: "video" | "audio", url: string): Promi
 
 // Retrieve a finished embedding task (video or audio) → segments (null if not ready).
 export async function retrieveEmbeddingTask(taskId: string): Promise<VideoSegment[] | null> {
+  const r = await getEmbedTaskStatus(taskId);
+  return r.status === "ready" ? r.segments : null;
+}
+
+// Full status of an embed task: status + segments (when ready) + error text.
+export async function getEmbedTaskStatus(
+  taskId: string,
+): Promise<{ status: string; segments: VideoSegment[]; error: string | null }> {
   const res = await fetch(`${BASE}/embed-v2/tasks/${taskId}`, { headers: { "x-api-key": key() }, cache: "no-store" });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const t = await res.text();
+    return { status: "unknown", segments: [], error: `${res.status}: ${t.slice(0, 200)}` };
+  }
   const j = (await res.json()) as {
     status?: string;
+    error?: string;
+    message?: string;
     data?: Array<{
       embedding?: number[];
       embeddings_float?: number[];
@@ -104,9 +117,11 @@ export async function retrieveEmbeddingTask(taskId: string): Promise<VideoSegmen
       embedding_scope?: string;
     }>;
   };
-  if (j.status !== "ready") return null;
-  const rows = j.data ?? [];
-  return rows
+  const status = j.status ?? "unknown";
+  if (status !== "ready") {
+    return { status, segments: [], error: status === "failed" ? j.error ?? j.message ?? "task failed" : null };
+  }
+  const segments = (j.data ?? [])
     .filter((s) => (s.embedding ?? s.embeddings_float)?.length)
     .map((s) => ({
       embedding: (s.embedding ?? s.embeddings_float) as number[],
@@ -114,6 +129,7 @@ export async function retrieveEmbeddingTask(taskId: string): Promise<VideoSegmen
       endSec: s.end_offset_sec ?? s.end_sec ?? 0,
       option: s.embedding_option ?? null,
     }));
+  return { status, segments, error: null };
 }
 
 // Back-compat alias (brand-assets route imports this name).
