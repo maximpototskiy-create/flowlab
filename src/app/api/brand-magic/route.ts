@@ -161,7 +161,7 @@ YouTube, X/Twitter). Base it on real search results.`,
     const structured = await callAgent({
       task: "generate",
       json: true,
-      system: ENGLISH_SYSTEM + "\nReturn STRICT valid JSON only. No markdown, no commentary. All values in English.",
+      system: ENGLISH_SYSTEM + "\nReturn STRICT valid JSON only. No markdown, no commentary. All values in English.\nNEVER fabricate or guess URLs (website or social links). Only output a URL if it explicitly appeared in the research text/sources; otherwise use an empty string. A wrong link is worse than none.",
       user: `From the research below, produce JSON exactly in this schema (all values in English):
 {
   "productPitch": "1-2 sentence pitch: what the app does and for whom",
@@ -172,11 +172,11 @@ YouTube, X/Twitter). Base it on real search results.`,
   "bannedThemes": "comma-separated sensitive themes to never mention",
   "colors": "space-separated hex codes if identifiable, else empty string",
   "fonts": "headline and body font names if identifiable (e.g. 'Inter (body), Source Serif Pro (headline)'), else empty string",
-  "website": "official website URL or empty string",
-  "instagram": "Instagram profile URL or empty string",
-  "tiktok": "TikTok profile URL or empty string",
-  "youtube": "YouTube channel URL or empty string",
-  "x": "X/Twitter profile URL or empty string",
+  "website": "official website URL — ONLY if it appeared in the research/sources, else empty string",
+  "instagram": "full Instagram profile URL — ONLY if a real, verified handle appeared in the research/sources, else empty string",
+  "tiktok": "full TikTok profile URL — ONLY if verified in the research/sources, else empty string",
+  "youtube": "YouTube channel URL — ONLY if verified in the research/sources, else empty string",
+  "x": "X/Twitter profile URL — ONLY if verified in the research/sources, else empty string",
   "competitors": ["competitor names"],
   "summary": "2-3 sentence brand summary"
 }

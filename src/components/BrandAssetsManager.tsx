@@ -52,14 +52,26 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // While any video embed is still processing, re-poll so the badge flips to
-  // "searchable" without a manual refresh (GET finishes embeds server-side).
+  // While any video/audio is still embedding, poll the lightweight refresh
+  // endpoint (bounded, sequential) and reload the list. The list GET itself
+  // is now instant and never blocks on TwelveLabs.
   useEffect(() => {
-    const stillEmbedding = assets.some((a) => a.kind === "video" && a.embedStatus === "processing");
+    const stillEmbedding = assets.some((a) => (a.kind === "video" || a.kind === "audio") && a.embedStatus === "processing");
     if (!stillEmbedding) return;
-    const t = setInterval(() => { load(); }, 12000);
+    const t = setInterval(async () => {
+      try {
+        await fetch("/api/brand-assets/refresh-embeds", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brandId }),
+        });
+      } catch {
+        /* ignore */
+      }
+      load();
+    }, 12000);
     return () => clearInterval(t);
-  }, [assets, load]);
+  }, [assets, load, brandId]);
 
   async function importFromDrive() {
     setImporting(true);

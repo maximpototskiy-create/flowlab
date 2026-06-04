@@ -32,7 +32,7 @@ function buildDatabaseUrl(): string | undefined {
     // Symptom this fixes: dashboard/workflow pages returning 500 with
     // "P2024: Timed out fetching a new connection from the connection pool"
     // while a long generation is running.
-    u.searchParams.set("connection_limit", "3");
+    u.searchParams.set("connection_limit", "5");
     // Shorter pool_timeout — fail fast (5s) and let the request retry rather
     // than make the user stare at a white screen for 20s before 500. With
     // connection_limit=3 we expect waits to be rare; if they happen we want

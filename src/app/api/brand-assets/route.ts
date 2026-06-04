@@ -9,7 +9,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { embedImage, embedVideo, retrieveVideoEmbedding } from "@/lib/twelvelabs/embed";
+import { embedImage, embedVideo } from "@/lib/twelvelabs/embed";
 import { insertEmbedding, deleteEmbeddingsForAsset } from "@/lib/semantic";
 
 export const dynamic = "force-dynamic";
@@ -18,60 +18,20 @@ export const maxDuration = 60;
 const CATEGORIES = ["logo", "ui", "store", "graphic", "overlay", "music", "sound", "reference", "hook", "body", "packshot", "other"];
 const KINDS = ["image", "video", "audio"];
 
-type AssetRow = {
-  id: string;
-  brandId: string;
-  url: string;
-  kind: string;
-  category: string;
-  embedStatus?: string | null;
-  embedTaskId?: string | null;
-};
-
 export async function GET(req: Request): Promise<NextResponse> {
   await requireUser();
   const { searchParams } = new URL(req.url);
   const brandId = searchParams.get("brandId");
   if (!brandId) return NextResponse.json({ assets: [] });
 
-  const assets = (await prisma.brandAsset.findMany({
+  // Fast path: just return the list. Embedding-status refresh for "processing"
+  // videos/audio is done by a separate, rate-limited endpoint
+  // (/api/brand-assets/refresh-embeds) so this never blocks on TwelveLabs and
+  // never starves the DB connection pool.
+  const assets = await prisma.brandAsset.findMany({
     where: { brandId },
     orderBy: { createdAt: "desc" },
-  })) as AssetRow[];
-
-  // Lazily finish video embeds: for processing rows, poll the embed task and,
-  // when ready, store one embedding per clip segment.
-  const pending = assets.filter((a) => (a.kind === "video" || a.kind === "audio") && a.embedStatus === "processing" && a.embedTaskId);
-  if (pending.length) {
-    await Promise.allSettled(
-      pending.map(async (a) => {
-        try {
-          const segments = await retrieveVideoEmbedding(a.embedTaskId as string);
-          if (!segments) return; // not ready yet
-          for (const seg of segments) {
-            if (seg.embedding?.length) {
-              await insertEmbedding({
-                assetId: a.id,
-                brandId: a.brandId,
-                modality: a.kind === "audio" ? "audio" : "video",
-                category: a.category,
-                url: a.url,
-                embedding: seg.embedding,
-                startSec: seg.startSec,
-                endSec: seg.endSec,
-              });
-            }
-          }
-          await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "ready" } });
-        } catch {
-          /* leave processing; will retry next list */
-        }
-      }),
-    );
-    const fresh = await prisma.brandAsset.findMany({ where: { brandId }, orderBy: { createdAt: "desc" } });
-    return NextResponse.json({ assets: fresh });
-  }
-
+  });
   return NextResponse.json({ assets });
 }
 
