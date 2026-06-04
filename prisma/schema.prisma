@@ -49,6 +49,7 @@ model Brand {
   description String?
   color       String    @default("emerald") // visual tag
   iconUrl     String?   @map("icon_url")
+  driveFolderId String? @map("drive_folder_id") // Google Drive brand folder
   createdBy   String    @map("created_by") @db.Uuid
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -80,6 +81,7 @@ model BrandAsset {
   // Semantic embedding status (videos use an async Marengo embed task).
   embedTaskId String? @map("embed_task_id")
   embedStatus String? @map("embed_status") // processing | ready | failed
+  driveFileId String? @map("drive_file_id") // source Google Drive file (dedup)
 
   brand     Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
 

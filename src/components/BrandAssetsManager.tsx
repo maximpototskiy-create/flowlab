@@ -31,6 +31,8 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
   const [category, setCategory] = useState("logo");
   const [filter, setFilter] = useState("all");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -58,6 +60,34 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
     const t = setInterval(() => { load(); }, 12000);
     return () => clearInterval(t);
   }, [assets, load]);
+
+  async function importFromDrive() {
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const res = await fetch("/api/drive/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandId }),
+      });
+      const d = await res.json();
+      if (d.error) {
+        setImportMsg(`Error: ${d.error}`);
+      } else {
+        const parts = [`imported ${d.imported}`];
+        if (d.videos) parts.push(`${d.videos} video indexing`);
+        if (d.skippedLarge) parts.push(`${d.skippedLarge} too large`);
+        if (d.failed) parts.push(`${d.failed} failed`);
+        if (d.remaining) parts.push(`${d.remaining} left — run again`);
+        setImportMsg(d.newFound === 0 ? "Nothing new in Drive." : parts.join(", "));
+        await load();
+      }
+    } catch {
+      setImportMsg("Import failed");
+    } finally {
+      setImporting(false);
+    }
+  }
 
   async function reindexFailed() {
     setReindexing(true);
@@ -138,6 +168,16 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
           onChange={(e) => handleFiles(e.target.files)}
         />
         <span className="text-[10px] text-fg-subtle">Images, video, audio.</span>
+        <button
+          type="button"
+          onClick={importFromDrive}
+          disabled={importing}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-border text-fg-muted text-[12px] hover:text-fg transition disabled:opacity-60"
+          title="Pull new files from this brand's Google Drive folder"
+        >
+          {importing ? <Loader2 size={13} className="animate-spin" /> : null}
+          {importing ? "Importing…" : "Import from Drive"}
+        </button>
         {assets.some((a) => a.embedStatus === "failed") && (
           <button
             type="button"
@@ -151,6 +191,8 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
           </button>
         )}
       </div>
+
+      {importMsg && <p className="text-[11px] text-fg-muted">{importMsg}</p>}
 
       {/* Category filter */}
       {usedCategories.length > 1 && (
