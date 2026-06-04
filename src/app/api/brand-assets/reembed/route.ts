@@ -36,6 +36,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   let videos = 0;
   let failed = 0;
   const errors: string[] = [];
+  const videoErrors: string[] = [];
 
   for (const a of targets) {
     try {
@@ -57,11 +58,13 @@ export async function POST(req: Request): Promise<NextResponse> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[reembed] failed for", a.id, msg);
-      if (errors.length < 3) errors.push(`${(a as { label?: string | null }).label ?? a.id}: ${msg}`);
+      const label = (a as { label?: string | null }).label ?? a.id;
+      if (errors.length < 3) errors.push(`${label}: ${msg}`);
+      if ((a.kind === "video" || a.kind === "audio") && videoErrors.length < 3) videoErrors.push(`${label}: ${msg}`);
       await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "failed", embedError: msg.slice(0, 500) } }).catch(() => {});
       failed++;
     }
   }
 
-  return NextResponse.json({ ok: true, images, videos, failed, total: targets.length, errors });
+  return NextResponse.json({ ok: true, images, videos, failed, total: targets.length, errors, videoErrors });
 }

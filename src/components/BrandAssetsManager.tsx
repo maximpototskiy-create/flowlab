@@ -144,10 +144,11 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
       });
       const d = await res.json();
       await load();
-      if (d?.errors?.length) {
-        setImportMsg(`Re-index: ${d.images ?? 0} images, ${d.videos ?? 0} video/audio queued, ${d.failed ?? 0} failed · ${d.errors[0]}`);
-      } else if (d?.ok) {
-        setImportMsg(`Re-index: ${d.images ?? 0} images, ${d.videos ?? 0} video/audio queued${d.failed ? `, ${d.failed} failed` : ""}.`);
+      if (d?.ok) {
+        const base = `Re-index: ${d.images ?? 0} images, ${d.videos ?? 0} video/audio queued${d.failed ? `, ${d.failed} failed` : ""}`;
+        const vid = d.videoErrors?.length ? ` · VIDEO: ${d.videoErrors[0]}` : "";
+        const img = !d.videoErrors?.length && d.errors?.length ? ` · ${d.errors[0]}` : "";
+        setImportMsg(base + vid + img);
       }
     } catch {
       setImportMsg("Re-index failed (network).");
