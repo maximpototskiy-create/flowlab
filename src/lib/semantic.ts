@@ -29,7 +29,7 @@ function toVectorLiteral(vec: number[]): string {
 export async function insertEmbedding(params: {
   assetId: string | null;
   brandId: string | null;
-  modality: "image" | "video" | "text";
+  modality: "image" | "video" | "text" | "audio";
   category: string | null;
   url: string;
   embedding: number[];

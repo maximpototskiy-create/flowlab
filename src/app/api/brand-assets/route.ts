@@ -41,7 +41,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
   // Lazily finish video embeds: for processing rows, poll the embed task and,
   // when ready, store one embedding per clip segment.
-  const pending = assets.filter((a) => a.kind === "video" && a.embedStatus === "processing" && a.embedTaskId);
+  const pending = assets.filter((a) => (a.kind === "video" || a.kind === "audio") && a.embedStatus === "processing" && a.embedTaskId);
   if (pending.length) {
     await Promise.allSettled(
       pending.map(async (a) => {
@@ -53,7 +53,7 @@ export async function GET(req: Request): Promise<NextResponse> {
               await insertEmbedding({
                 assetId: a.id,
                 brandId: a.brandId,
-                modality: "video",
+                modality: a.kind === "audio" ? "audio" : "video",
                 category: a.category,
                 url: a.url,
                 embedding: seg.embedding,

@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { findBrandFolder, collectBrandFiles, downloadDriveFile, type DriveFile } from "@/lib/drive/client";
 import { uploadBytes } from "@/lib/storage";
-import { embedImage, embedVideo } from "@/lib/twelvelabs/embed";
+import { embedImage, embedVideo, embedAudio } from "@/lib/twelvelabs/embed";
 import { insertEmbedding } from "@/lib/semantic";
 
 export const dynamic = "force-dynamic";
@@ -72,7 +72,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       skippedLarge++;
       continue;
     }
-    const kind = f.mimeType.startsWith("video/") ? "video" : "image";
+    const kind = f.mimeType.startsWith("video/") ? "video" : f.mimeType.startsWith("audio/") ? "audio" : "image";
     try {
       const bytes = await downloadDriveFile(f.id);
       const safeName = f.name.replace(/[^\w.\-]+/g, "_");
@@ -90,8 +90,13 @@ export async function POST(req: Request): Promise<NextResponse> {
           await insertEmbedding({ assetId: asset.id, brandId, modality: "image", category: f.category, url: cdnUrl, embedding: vec });
           await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedStatus: "ready" } });
           embeddedImages++;
-        } else {
+        } else if (kind === "video") {
           const { taskId } = await embedVideo(cdnUrl);
+          await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
+          videos++;
+        } else {
+          // audio
+          const { taskId } = await embedAudio(cdnUrl);
           await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
           videos++;
         }

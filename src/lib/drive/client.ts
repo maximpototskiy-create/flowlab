@@ -28,7 +28,21 @@ const FOLDER_CATEGORY: Record<string, string> = {
   packshot: "packshot",
   logos: "logo",
   logo: "logo",
+  icon: "logo",
+  icons: "logo",
   ui: "ui",
+  "ui screenshots": "ui",
+  store: "store",
+  "store screenshots": "store",
+  graphic: "graphic",
+  graphics: "graphic",
+  overlay: "overlay",
+  overlays: "overlay",
+  music: "music",
+  audio: "music",
+  sound: "sound",
+  sounds: "sound",
+  sfx: "sound",
   references: "reference",
   reference: "reference",
 };
@@ -94,7 +108,11 @@ export async function collectBrandFiles(brandFolderId: string): Promise<DriveFil
       if (c.mimeType === FOLDER_MIME) {
         const mapped = FOLDER_CATEGORY[c.name.trim().toLowerCase()];
         await walk(c.id, mapped ?? inheritedCategory);
-      } else if ((c.mimeType ?? "").startsWith("image/") || (c.mimeType ?? "").startsWith("video/")) {
+      } else if (
+        (c.mimeType ?? "").startsWith("image/") ||
+        (c.mimeType ?? "").startsWith("video/") ||
+        (c.mimeType ?? "").startsWith("audio/")
+      ) {
         files.push({
           id: c.id,
           name: c.name,

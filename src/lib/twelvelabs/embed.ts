@@ -54,16 +54,25 @@ export async function embedImage(url: string): Promise<number[]> {
 
 // Create an async video embedding task (clip-level). Returns the task id.
 export async function embedVideo(url: string): Promise<{ taskId: string }> {
+  return embedAsyncMedia("video", url);
+}
+
+// Create an async audio embedding task (clip-level). Returns the task id.
+export async function embedAudio(url: string): Promise<{ taskId: string }> {
+  return embedAsyncMedia("audio", url);
+}
+
+async function embedAsyncMedia(inputType: "video" | "audio", url: string): Promise<{ taskId: string }> {
   const res = await fetch(`${BASE}/embed-v2/tasks`, {
     method: "POST",
     headers: { "x-api-key": key(), "Content-Type": "application/json" },
     body: JSON.stringify({
-      input_type: "video",
+      input_type: inputType,
       model_name: MODEL,
-      video: {
+      [inputType]: {
         media_source: { url },
-        // visual-text: visual embeddings aligned with text — best for text search.
-        embedding_option: ["visual-text"],
+        // visual-text for video (aligned with text search); audio for audio.
+        embedding_option: inputType === "video" ? ["visual-text"] : ["audio"],
         embedding_scope: ["clip"],
       },
     }),
@@ -77,8 +86,8 @@ export async function embedVideo(url: string): Promise<{ taskId: string }> {
   return { taskId: j._id || "" };
 }
 
-// Retrieve a finished video embedding task → segments (null if not ready).
-export async function retrieveVideoEmbedding(taskId: string): Promise<VideoSegment[] | null> {
+// Retrieve a finished embedding task (video or audio) → segments (null if not ready).
+export async function retrieveEmbeddingTask(taskId: string): Promise<VideoSegment[] | null> {
   const res = await fetch(`${BASE}/embed-v2/tasks/${taskId}`, { headers: { "x-api-key": key() }, cache: "no-store" });
   if (!res.ok) return null;
   const j = (await res.json()) as {
@@ -105,3 +114,6 @@ export async function retrieveVideoEmbedding(taskId: string): Promise<VideoSegme
       option: s.embedding_option ?? null,
     }));
 }
+
+// Back-compat alias (brand-assets route imports this name).
+export const retrieveVideoEmbedding = retrieveEmbeddingTask;
