@@ -7,6 +7,7 @@ import { NODE_TYPES, getActiveInputs, type GraphNode, type GraphEdge, type Field
 import { NodeIcon } from "@/lib/canvas/icons";
 import UploadZone from "./UploadZone";
 import BrandAssetsPicker from "./BrandAssetsPicker";
+import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
 export const NODE_WIDTH = 280;
 // h-9 (36px) + border-b-1 = 37, but visually centre matches 36 better
@@ -455,6 +456,28 @@ function CanvasNodeImpl({
             }}
           />
         )}
+
+        {/* Save the current result into the brand library (auto-embeds). */}
+        {(() => {
+          const resultUrl =
+            (node.results && node.results[selectedResultIdx]?.value) ||
+            (node.results && node.results[0]?.value) ||
+            "";
+          if (!resultUrl || !workflowMeta.brandId) return null;
+          const promptLabel =
+            (node.config.instructions as string) || (node.config.prompt as string) || undefined;
+          return (
+            <div className="mt-2 flex justify-end">
+              <SaveToLibraryButton
+                url={resultUrl}
+                kind={isVideo(resultUrl) ? "video" : "image"}
+                label={promptLabel}
+                brandId={workflowMeta.brandId}
+                compact
+              />
+            </div>
+          );
+        })()}
 
         {/* Running state */}
         {status === "running" && (

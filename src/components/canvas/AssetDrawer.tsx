@@ -481,7 +481,7 @@ export default function AssetDrawer({
           </div>
           {brandId && (
             <div className="px-3 pb-3 -mt-1 flex justify-end">
-              <SaveToLibraryButton assetId={preview.id} brandId={brandId} compact />
+              <SaveToLibraryButton url={preview.cdnUrl} kind={preview.kind} label={preview.prompt || undefined} brandId={brandId} compact />
             </div>
           )}
         </div>

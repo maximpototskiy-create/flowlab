@@ -1,6 +1,7 @@
-// POST /api/brand-assets/from-asset { assetId, brandId, category }
-// Saves a generated/library Asset into a brand's curated assets and embeds it
-// (same pipeline as manual upload / Drive import). Dedupes by url per brand.
+// POST /api/brand-assets/from-asset { url, kind?, brandId, category, label? }
+// Saves any media URL (a node result, a generated asset, etc.) into a brand's
+// curated assets and embeds it (same pipeline as upload / Drive import).
+// Dedupes by url per brand.
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -14,48 +15,46 @@ export const maxDuration = 120;
 
 const CATEGORIES = ["logo", "ui", "store", "graphic", "overlay", "music", "sound", "reference", "hook", "body", "packshot", "other"];
 
+function kindFromUrl(url: string): string {
+  const u = url.split("?")[0].toLowerCase();
+  if (/\.(mp4|mov|webm|m4v)$/.test(u)) return "video";
+  if (/\.(mp3|wav|m4a|aac|ogg)$/.test(u)) return "audio";
+  return "image";
+}
+
 export async function POST(req: Request): Promise<NextResponse> {
   await requireUser();
-  let body: { assetId?: string; brandId?: string; category?: string };
+  let body: { url?: string; kind?: string; brandId?: string; category?: string; label?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
-  const { assetId, brandId, category } = body;
-  if (!assetId || !brandId || !category) return NextResponse.json({ error: "assetId, brandId, category required" }, { status: 400 });
+  const { url, brandId, category, label } = body;
+  if (!url || !brandId || !category) return NextResponse.json({ error: "url, brandId, category required" }, { status: 400 });
   if (!CATEGORIES.includes(category)) return NextResponse.json({ error: "bad category" }, { status: 400 });
 
-  const asset = await prisma.asset.findUnique({ where: { id: assetId } });
-  if (!asset) return NextResponse.json({ error: "asset not found" }, { status: 404 });
-  const kind = asset.kind === "text" ? "image" : asset.kind; // text isn't embeddable as media
-  if (!["image", "video", "audio"].includes(kind)) return NextResponse.json({ error: "unsupported asset kind" }, { status: 400 });
+  let kind = body.kind && ["image", "video", "audio"].includes(body.kind) ? body.kind : kindFromUrl(url);
+  if (kind === "text") kind = "image";
 
-  // Dedupe: same url already saved to this brand?
-  const existing = await prisma.brandAsset.findFirst({ where: { brandId, url: asset.cdnUrl } });
+  const existing = await prisma.brandAsset.findFirst({ where: { brandId, url } });
   if (existing) return NextResponse.json({ asset: existing, already: true });
 
   const created = await prisma.brandAsset.create({
-    data: {
-      brandId,
-      url: asset.cdnUrl,
-      kind,
-      category,
-      label: asset.prompt?.slice(0, 200) || asset.model || "generated",
-    },
+    data: { brandId, url, kind, category, label: (label || "saved").slice(0, 200) },
   });
 
   try {
     if (kind === "image") {
-      const embedUrl = await ensureEmbeddableImage(asset.cdnUrl, `brands/${brandId}/jpeg/${created.id}.jpg`);
+      const embedUrl = await ensureEmbeddableImage(url, `brands/${brandId}/jpeg/${created.id}.jpg`);
       const vec = await embedImage(embedUrl);
-      await insertEmbedding({ assetId: created.id, brandId, modality: "image", category, url: asset.cdnUrl, embedding: vec });
+      await insertEmbedding({ assetId: created.id, brandId, modality: "image", category, url, embedding: vec });
       await prisma.brandAsset.update({ where: { id: created.id }, data: { embedStatus: "ready" } });
     } else if (kind === "video") {
-      const { taskId } = await embedVideoSmart(asset.cdnUrl, `brands/${brandId}/padded/${created.id}.mp4`);
+      const { taskId } = await embedVideoSmart(url, `brands/${brandId}/padded/${created.id}.mp4`);
       await prisma.brandAsset.update({ where: { id: created.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
     } else {
-      const { taskId } = await embedAudio(asset.cdnUrl);
+      const { taskId } = await embedAudio(url);
       await prisma.brandAsset.update({ where: { id: created.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
     }
   } catch (err) {

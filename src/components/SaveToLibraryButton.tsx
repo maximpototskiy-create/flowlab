@@ -10,11 +10,15 @@ const CATEGORIES = ["logo", "ui", "store", "graphic", "overlay", "music", "sound
 // Save a generated/library Asset into a brand's curated assets (auto-embeds).
 // If `brandId` is provided (e.g. on the canvas), the brand picker is hidden.
 export default function SaveToLibraryButton({
-  assetId,
+  url,
+  kind,
+  label,
   brandId,
   compact,
 }: {
-  assetId: string;
+  url: string;
+  kind?: string;
+  label?: string;
   brandId?: string | null;
   compact?: boolean;
 }) {
@@ -49,7 +53,7 @@ export default function SaveToLibraryButton({
       const res = await fetch("/api/brand-assets/from-asset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assetId, brandId: useBrand, category }),
+        body: JSON.stringify({ url, kind, label, brandId: useBrand, category }),
       });
       const d = await res.json();
       if (d.error) setError(d.error);

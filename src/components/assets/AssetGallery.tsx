@@ -285,7 +285,7 @@ function Lightbox({ asset, onClose }: { asset: AssetItem; onClose: () => void })
           </div>
 
           <div className="mt-auto flex flex-col gap-2">
-            <SaveToLibraryButton assetId={asset.id} />
+            <SaveToLibraryButton url={asset.cdnUrl} kind={asset.kind} label={asset.prompt || asset.model || undefined} />
             <a
               href={asset.cdnUrl}
               download
