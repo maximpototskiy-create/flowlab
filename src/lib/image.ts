@@ -4,31 +4,23 @@
 import sharp from "sharp";
 import { uploadBytes } from "@/lib/storage";
 
-// Returns a URL that Marengo can embed. Rules:
-//  • our Supabase JPEG/PNG → used as-is (Marengo accepts our URLs);
-//  • anything else (external host like App Store mzstatic, or webp/gif/heic…)
-//    → downloaded, converted to JPEG, re-hosted in our storage, that URL used.
-// External URLs are always re-hosted because Marengo rejects many of them
-// ("parameters are invalid: url") even when the format is fine.
+// Returns a URL that Marengo can embed. We always normalize the image and
+// re-host it in our storage as JPEG: resized to a safe max dimension (2048px),
+// alpha flattened. This avoids every known cause of "parameters are invalid:
+// url" — oversized resolution, large files, unsupported formats (webp/gif/…),
+// and external hosts (App Store mzstatic) that Marengo refuses to fetch.
 export async function ensureEmbeddableImage(url: string, jpegStoragePath: string): Promise<string> {
-  const isOurs = /\.supabase\.co/i.test(url);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`fetch image ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
 
-  let format: string | undefined;
-  try {
-    format = (await sharp(buf).metadata()).format;
-  } catch {
-    format = undefined;
-  }
-  const okFormat = format === "jpeg" || format === "jpg" || format === "png";
+  const jpeg = await sharp(buf)
+    .rotate() // honor EXIF orientation
+    .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
+    .flatten({ background: "#ffffff" })
+    .jpeg({ quality: 88 })
+    .toBuffer();
 
-  // Our own JPEG/PNG can be embedded directly.
-  if (isOurs && okFormat) return url;
-
-  // Otherwise re-host as JPEG in our storage and embed that URL.
-  const jpeg = await sharp(buf).flatten({ background: "#ffffff" }).jpeg({ quality: 90 }).toBuffer();
   const { cdnUrl } = await uploadBytes(jpeg, jpegStoragePath, "image/jpeg");
   return cdnUrl;
 }
