@@ -9,7 +9,8 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { embedImage, embedVideo } from "@/lib/twelvelabs/embed";
+import { embedImage } from "@/lib/twelvelabs/embed";
+import { embedVideoSmart } from "@/lib/video";
 import { insertEmbedding, deleteEmbeddingsForAsset } from "@/lib/semantic";
 
 export const dynamic = "force-dynamic";
@@ -70,7 +71,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   if (kind === "video") {
     try {
-      const { taskId } = await embedVideo(url); // async; segments fetched later via GET
+      const { taskId } = await embedVideoSmart(url, `brands/${brandId}/padded/${asset.id}.mp4`); // async; segments fetched later
       await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
       return NextResponse.json({ asset: { ...asset, embedTaskId: taskId, embedStatus: "processing" } });
     } catch (err) {

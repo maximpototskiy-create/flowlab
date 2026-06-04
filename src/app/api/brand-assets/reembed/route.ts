@@ -4,7 +4,8 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { embedImage, embedVideo, embedAudio } from "@/lib/twelvelabs/embed";
+import { embedImage, embedAudio } from "@/lib/twelvelabs/embed";
+import { embedVideoSmart } from "@/lib/video";
 import { insertEmbedding, deleteEmbeddingsForAsset } from "@/lib/semantic";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +48,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "ready", embedTaskId: null, embedError: null } });
         images++;
       } else if (a.kind === "video") {
-        const { taskId } = await embedVideo(a.url);
+        const { taskId } = await embedVideoSmart(a.url, `brands/${brandId}/padded/${a.id}.mp4`);
         await prisma.brandAsset.update({ where: { id: a.id }, data: { embedTaskId: taskId, embedStatus: "processing", embedError: null } });
         videos++;
       } else {
