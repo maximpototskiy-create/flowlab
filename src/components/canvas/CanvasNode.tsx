@@ -457,13 +457,20 @@ function CanvasNodeImpl({
           />
         )}
 
-        {/* Save the current result into the brand library (auto-embeds). */}
+        {/* Save the current result into the brand library (auto-embeds).
+            Shown for generative nodes (no def.custom) that have a result and a
+            brand on the project. Reads the URL from results[] or, for a single
+            result, from outputs.<port>. */}
         {(() => {
+          if (def.custom || !workflowMeta.brandId) return null;
           const resultUrl =
             (node.results && node.results[selectedResultIdx]?.value) ||
             (node.results && node.results[0]?.value) ||
+            (node.outputs
+              ? (Object.values(node.outputs).find((v) => typeof v === "string" && (v as string).startsWith("http")) as string | undefined)
+              : undefined) ||
             "";
-          if (!resultUrl || !workflowMeta.brandId) return null;
+          if (!resultUrl) return null;
           const promptLabel =
             (node.config.instructions as string) || (node.config.prompt as string) || undefined;
           return (

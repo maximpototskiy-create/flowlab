@@ -161,8 +161,11 @@ export async function runNode(
 
     // ─────────────────────── IMAGE
     case "imageGen": {
-      const prompt = String(config.instructions || inputs.prompt || "").trim();
-      if (!prompt) throw new Error("Provide a prompt (input or instructions)");
+      const rawPrompt = String(config.instructions || inputs.prompt || "").trim();
+      if (!rawPrompt) throw new Error("Provide a prompt (input or instructions)");
+      // Any text rendered INTO the image must be English, even if the prompt
+      // itself is written in another language (e.g. Russian instructions).
+      const prompt = `${rawPrompt}\n\nIMPORTANT: Any text, labels, or copy rendered inside the image must be written in English only — never in the language of this prompt.`;
       let model = String(config.model ?? "fal-ai/flux/dev");
       const aspect = String(config.aspect ?? "1:1");
       const numResults = Math.max(1, Math.min(4, Number(config.num_results ?? 1)));
@@ -446,7 +449,10 @@ export async function runNode(
 
     // ─────────────────────── VIDEO
     case "videoGen": {
-      const prompt = String(config.instructions || inputs.prompt || "cinematic slow zoom");
+      const basePrompt = String(config.instructions || inputs.prompt || "cinematic slow zoom");
+      // Any on-screen text in generated video must be English regardless of
+      // the prompt's language.
+      const prompt = `${basePrompt}\n\nIMPORTANT: Any on-screen text must be in English only.`;
       const model = String(config.model ?? "fal-ai/kling-video/v3/pro/image-to-video");
       const duration = String(config.duration ?? "5");
       const aspect = String(config.aspect ?? "9:16");
