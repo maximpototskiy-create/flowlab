@@ -213,12 +213,20 @@ export default function AssetDrawer({
         {/* Source switch */}
         <div className="flex gap-1">
           <button
+            onClick={() => setSource("library")}
+            className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
+              source === "library" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+            }`}
+          >
+            Library
+          </button>
+          <button
             onClick={() => setSource("flowlab")}
             className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
               source === "flowlab" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
             }`}
           >
-            FlowLab
+            Generated
           </button>
           <button
             onClick={() => setSource("ui")}
@@ -226,7 +234,7 @@ export default function AssetDrawer({
               source === "ui" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
             }`}
           >
-            UI
+            Brand UI
           </button>
           <button
             onClick={() => setSource("fal")}
@@ -236,16 +244,16 @@ export default function AssetDrawer({
           >
             fal
           </button>
-          <button
-            onClick={() => setSource("library")}
-            className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
-              source === "library" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
-            }`}
-            title="Semantic search over this brand's saved assets"
-          >
-            Library
-          </button>
         </div>
+        <p className="text-[9px] text-fg-subtle leading-tight">
+          {source === "library"
+            ? "Your saved brand assets — search by meaning (text or image)."
+            : source === "flowlab"
+              ? "Everything generated in your FlowLab projects."
+              : source === "ui"
+                ? "This brand's UI screenshots from the Brand Kit."
+                : "Your full fal.ai asset library."}
+        </p>
         <div className="flex gap-1.5">
           <div className="relative flex-1">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
@@ -372,7 +380,11 @@ export default function AssetDrawer({
             <Loader2 size={18} className="animate-spin" />
           </div>
         ) : visible.length === 0 ? (
-          <p className="text-center text-fg-subtle text-[11px] py-12">No assets.</p>
+          <p className="text-center text-fg-subtle text-[11px] py-12">
+            {source === "library" && !debouncedQ && !similar
+              ? "Type to search your brand library, or drop an image."
+              : "No assets."}
+          </p>
         ) : (
           <div className="grid grid-cols-2 gap-2">
             {visible.map((a) => (
