@@ -86,13 +86,22 @@ async function listChildren(drive: drive_v3.Drive, folderId: string): Promise<dr
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 // Find a brand's folder by name inside the given library folder.
+// Name match is tolerant: case-insensitive and ignores spaces/_/- so that
+// "Cleaner Kit" matches a brand named "CleanerKit".
 export async function findBrandFolder(libraryFolderId: string, brandName: string): Promise<string | null> {
   const drive = driveClient();
   const children = await listChildren(drive, libraryFolderId);
-  const match = children.find(
-    (f) => f.mimeType === FOLDER_MIME && (f.name ?? "").trim().toLowerCase() === brandName.trim().toLowerCase(),
-  );
+  const norm = (s: string) => s.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const target = norm(brandName);
+  const match = children.find((f) => f.mimeType === FOLDER_MIME && norm(f.name ?? "") === target);
   return match?.id ?? null;
+}
+
+// List immediate subfolders (for diagnostics).
+export async function listSubfolderNames(folderId: string): Promise<string[]> {
+  const drive = driveClient();
+  const children = await listChildren(drive, folderId);
+  return children.filter((c) => c.mimeType === FOLDER_MIME).map((c) => c.name ?? "");
 }
 
 // Recursively collect media files under a brand folder, tagging each with the

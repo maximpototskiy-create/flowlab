@@ -33,24 +33,41 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Resolve the brand's Drive folder: stored id, or look it up by brand name
   // inside the shared library folder (DRIVE_LIBRARY_FOLDER_ID).
   let folderId = (brand as { driveFolderId?: string | null }).driveFolderId ?? null;
+  const libraryId = process.env.DRIVE_LIBRARY_FOLDER_ID;
+
+  async function resolveByName(): Promise<string | null> {
+    if (!libraryId) return null;
+    return findBrandFolder(libraryId, brand!.name);
+  }
+
   if (!folderId) {
-    const libraryId = process.env.DRIVE_LIBRARY_FOLDER_ID;
     if (!libraryId) return NextResponse.json({ error: "No drive folder set for brand and DRIVE_LIBRARY_FOLDER_ID is missing" }, { status: 400 });
     try {
-      folderId = await findBrandFolder(libraryId, brand.name);
+      folderId = await resolveByName();
     } catch (err) {
-      return NextResponse.json({ error: err instanceof Error ? err.message : "Drive auth failed" }, { status: 500 });
+      return NextResponse.json({ error: `Drive access failed (check service account & sharing): ${err instanceof Error ? err.message : err}` }, { status: 500 });
     }
-    if (!folderId) return NextResponse.json({ error: `No Drive folder named "${brand.name}" found in the library` }, { status: 404 });
+    if (!folderId) return NextResponse.json({ error: `No Drive folder matching "${brand.name}" in the library. Check DRIVE_LIBRARY_FOLDER_ID points to FlowLab and the folder name matches.` }, { status: 404 });
     await prisma.brand.update({ where: { id: brandId }, data: { driveFolderId: folderId } });
   }
 
-  // List Drive files and skip those we already imported.
+  // List Drive files. If the saved folder id is stale/invalid, re-resolve once.
   let driveFiles: DriveFile[];
   try {
     driveFiles = await collectBrandFiles(folderId);
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Drive list failed" }, { status: 500 });
+    try {
+      const re = await resolveByName();
+      if (re && re !== folderId) {
+        folderId = re;
+        await prisma.brand.update({ where: { id: brandId }, data: { driveFolderId: folderId } });
+        driveFiles = await collectBrandFiles(folderId);
+      } else {
+        return NextResponse.json({ error: `Drive list failed: ${err instanceof Error ? err.message : err}. Check the FlowLab folder is shared with the service account.` }, { status: 500 });
+      }
+    } catch (err2) {
+      return NextResponse.json({ error: `Drive list failed: ${err2 instanceof Error ? err2.message : err2}` }, { status: 500 });
+    }
   }
 
   const existing = await prisma.brandAsset.findMany({
