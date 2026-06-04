@@ -7,21 +7,30 @@
 // ─────────────────────────────────────────────────────────────────────────
 import { spawn } from "child_process";
 import { writeFile, readFile, unlink } from "fs/promises";
+import { existsSync } from "fs";
 import os from "os";
 import path from "path";
 import ffmpegPath from "ffmpeg-static";
 import { uploadBytes } from "@/lib/storage";
 import { embedVideo } from "@/lib/twelvelabs/embed";
 
+function resolveFfmpeg(): string {
+  // ffmpeg-static returns the bundled binary path; fall back to PATH locally.
+  if (ffmpegPath && existsSync(ffmpegPath as unknown as string)) return ffmpegPath as unknown as string;
+  return "ffmpeg";
+}
+
 function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (!ffmpegPath) return reject(new Error("ffmpeg binary not available"));
-    const proc = spawn(ffmpegPath as unknown as string, args);
+    const bin = resolveFfmpeg();
+    const proc = spawn(bin, args);
     let err = "";
     proc.stderr.on("data", (d) => {
       err += d.toString();
     });
-    proc.on("error", reject);
+    proc.on("error", (e: NodeJS.ErrnoException) =>
+      reject(new Error(e.code === "ENOENT" ? "ffmpeg binary missing in deployment" : e.message)),
+    );
     proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${err.slice(-300)}`))));
   });
 }
