@@ -6,8 +6,6 @@
 //   • Async /embed-v2/tasks  → video/audio (clip segments). Poll for results.
 // ─────────────────────────────────────────────────────────────────────────
 
-import sharp from "sharp";
-
 const BASE = "https://api.twelvelabs.io/v1.3";
 const MODEL = "marengo3.0";
 
@@ -48,14 +46,11 @@ export async function embedText(text: string): Promise<number[]> {
 // Embed an image by URL → one 512-d vector. Marengo only accepts JPEG/PNG,
 // so we download the image and normalize it to JPEG (handles WebP, etc.),
 // then send it inline as base64.
+// Embed an image by public URL → one 512-d vector. The URL must point at a
+// JPEG/PNG (Marengo only accepts those). WebP/other formats are converted to
+// JPEG and re-hosted upstream (see ensureEmbeddableImage) before calling this.
 export async function embedImage(url: string): Promise<number[]> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch image ${res.status}`);
-  const input = Buffer.from(await res.arrayBuffer());
-  // Normalize any format (webp/gif/heic/…) to JPEG. flatten() drops alpha.
-  const jpeg = await sharp(input).flatten({ background: "#ffffff" }).jpeg({ quality: 90 }).toBuffer();
-  const b64 = jpeg.toString("base64");
-  const data = await embedSync({ input_type: "image", image: { media_source: { base_64_string: b64 } } });
+  const data = await embedSync({ input_type: "image", image: { media_source: { url } } });
   const emb = data[0]?.embedding as number[] | undefined;
   if (!emb) throw new Error("No image embedding returned");
   return emb;

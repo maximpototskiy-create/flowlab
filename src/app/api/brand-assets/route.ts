@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { embedImage } from "@/lib/twelvelabs/embed";
+import { ensureEmbeddableImage } from "@/lib/image";
 import { embedVideoSmart } from "@/lib/video";
 import { insertEmbedding, deleteEmbeddingsForAsset } from "@/lib/semantic";
 
@@ -58,7 +59,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Embed into the semantic index. Best-effort: upload always succeeds.
   if (kind === "image") {
     try {
-      const vec = await embedImage(url);
+      const embedUrl = await ensureEmbeddableImage(url, `brands/${brandId}/jpeg/${asset.id}.jpg`);
+      const vec = await embedImage(embedUrl);
       await insertEmbedding({ assetId: asset.id, brandId, modality: "image", category, url, embedding: vec });
       await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedStatus: "ready" } });
       return NextResponse.json({ asset: { ...asset, embedStatus: "ready" } });

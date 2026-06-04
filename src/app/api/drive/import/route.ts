@@ -10,6 +10,7 @@ import { uploadBytes } from "@/lib/storage";
 import { embedImage, embedAudio } from "@/lib/twelvelabs/embed";
 import { embedVideoSmart } from "@/lib/video";
 import { insertEmbedding } from "@/lib/semantic";
+import { ensureEmbeddableImage } from "@/lib/image";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -105,7 +106,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       // Embed (best-effort).
       try {
         if (kind === "image") {
-          const vec = await embedImage(cdnUrl);
+          const embedUrl = await ensureEmbeddableImage(cdnUrl, `brands/${brandId}/jpeg/${asset.id}.jpg`);
+          const vec = await embedImage(embedUrl);
           await insertEmbedding({ assetId: asset.id, brandId, modality: "image", category: f.category, url: cdnUrl, embedding: vec });
           await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedStatus: "ready" } });
           embeddedImages++;

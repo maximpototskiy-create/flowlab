@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { embedImage, embedAudio } from "@/lib/twelvelabs/embed";
+import { ensureEmbeddableImage } from "@/lib/image";
 import { embedVideoSmart } from "@/lib/video";
 import { insertEmbedding, deleteEmbeddingsForAsset } from "@/lib/semantic";
 
@@ -43,7 +44,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     try {
       await deleteEmbeddingsForAsset(a.id).catch(() => {});
       if (a.kind === "image") {
-        const vec = await embedImage(a.url);
+        const embedUrl = await ensureEmbeddableImage(a.url, `brands/${brandId}/jpeg/${a.id}.jpg`);
+        const vec = await embedImage(embedUrl);
         await insertEmbedding({ assetId: a.id, brandId, modality: "image", category: a.category, url: a.url, embedding: vec });
         await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "ready", embedTaskId: null, embedError: null } });
         images++;
