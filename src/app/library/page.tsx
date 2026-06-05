@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Loader2, Search, ImagePlus, X, Type } from "lucide-react";
+import { Loader2, Search, ImagePlus, X, Type, Music } from "lucide-react";
 
 type Moment = { startSec: number | null; endSec: number | null; similarity: number };
 type AssetResult = {
@@ -223,6 +223,8 @@ export default function LibraryPage() {
                     {r.modality === "image" ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={r.url} alt="" className="w-full h-full object-cover" loading="lazy" />
+                    ) : r.modality === "audio" ? (
+                      <Music size={28} className="text-fg-subtle" />
                     ) : (
                       // eslint-disable-next-line jsx-a11y/media-has-caption
                       <video src={r.url} className="w-full h-full object-cover" muted preload="metadata" />
@@ -257,6 +259,12 @@ export default function LibraryPage() {
               {open.modality === "image" ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={open.url} alt="" className="max-h-[60vh] w-auto object-contain" />
+              ) : open.modality === "audio" ? (
+                <div className="w-full p-8 flex flex-col items-center gap-4">
+                  <Music size={48} className="text-fg-subtle" />
+                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                  <audio src={open.url} controls autoPlay className="w-full" />
+                </div>
               ) : (
                 // eslint-disable-next-line jsx-a11y/media-has-caption
                 <video src={open.url} controls autoPlay className="max-h-[60vh] w-auto" />

@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { findBrandFolder, collectBrandFiles, downloadDriveFile, type DriveFile } from "@/lib/drive/client";
 import { uploadBytes } from "@/lib/storage";
 import { embedImage, embedAudio } from "@/lib/twelvelabs/embed";
-import { embedVideoSmart } from "@/lib/video";
+import { embedVideoSmart, convertToMp4 } from "@/lib/video";
 import { insertEmbedding } from "@/lib/semantic";
 import { ensureEmbeddableImage } from "@/lib/image";
 
@@ -94,9 +94,23 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
     const kind = f.mimeType.startsWith("video/") ? "video" : f.mimeType.startsWith("audio/") ? "audio" : "image";
     try {
-      const bytes = await downloadDriveFile(f.id);
-      const safeName = f.name.replace(/[^\w.\-]+/g, "_");
-      const { cdnUrl } = await uploadBytes(bytes, `brands/${brandId}/drive/${f.id}_${safeName}`, f.mimeType);
+      let bytes = await downloadDriveFile(f.id);
+      let safeName = f.name.replace(/[^\w.\-]+/g, "_");
+      let mime = f.mimeType;
+      // .mov (QuickTime) doesn't play in Chrome/Firefox <video> — transcode to MP4.
+      const isMov = f.mimeType === "video/quicktime" || /\.mov$/i.test(f.name);
+      if (kind === "video" && isMov) {
+        try {
+          bytes = await convertToMp4(bytes);
+          mime = "video/mp4";
+          safeName = safeName.replace(/\.mov$/i, ".mp4");
+          if (!/\.mp4$/i.test(safeName)) safeName += ".mp4";
+        } catch (convErr) {
+          console.error("[drive/import] mov→mp4 failed for", f.name, convErr);
+          // fall back to original bytes; preview may not play but embed still works
+        }
+      }
+      const { cdnUrl } = await uploadBytes(bytes, `brands/${brandId}/drive/${f.id}_${safeName}`, mime);
 
       const asset = await prisma.brandAsset.create({
         data: { brandId, url: cdnUrl, kind, category: f.category, label: f.name, driveFileId: f.id },

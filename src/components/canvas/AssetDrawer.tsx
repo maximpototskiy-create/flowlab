@@ -33,6 +33,7 @@ export default function AssetDrawer({
   const [preview, setPreview] = useState<AssetItem | null>(null);
   // "Find similar" mode: search fal by a reference media URL.
   const [similar, setSimilar] = useState<{ url: string; kind: string; label: string } | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [limit, setLimit] = useState(60);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -209,7 +210,24 @@ export default function AssetDrawer({
       </div>
 
       {/* Filters */}
-      <div className="p-3 space-y-2 border-b border-border">
+      <div
+        className="p-3 space-y-2 border-b border-border"
+        onDragOver={(e) => {
+          if (source === "library" || source === "fal") {
+            e.preventDefault();
+            setDragOver(true);
+          }
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          if (source !== "library" && source !== "fal") return;
+          e.preventDefault();
+          setDragOver(false);
+          const f = e.dataTransfer.files?.[0];
+          if (f && f.type.startsWith("image/")) onSearchImagePicked(f);
+        }}
+        style={dragOver ? { outline: "2px dashed var(--brand)", outlineOffset: "-4px" } : undefined}
+      >
         {/* Source switch */}
         <div className="flex gap-1">
           <button

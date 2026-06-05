@@ -35,6 +35,28 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
+// Transcode any video buffer to browser-friendly MP4 (H.264/AAC). Used for
+// .mov (QuickTime) which Chrome/Firefox won't play in <video>.
+export async function convertToMp4(input: Buffer): Promise<Buffer> {
+  const dir = os.tmpdir();
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const inPath = path.join(dir, `${id}_in`);
+  const outPath = path.join(dir, `${id}_out.mp4`);
+  await writeFile(inPath, input);
+  try {
+    try {
+      await runFfmpeg(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", outPath]);
+    } catch {
+      // no audio track
+      await runFfmpeg(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart", outPath]);
+    }
+    return await readFile(outPath);
+  } finally {
+    await unlink(inPath).catch(() => {});
+    await unlink(outPath).catch(() => {});
+  }
+}
+
 // Pad a short video to ≥4s by cloning (freezing) the last frame for +2s.
 // Tries with audio first; falls back to video-only if there's no audio track.
 export async function padVideoToMinDuration(input: Buffer): Promise<Buffer> {
