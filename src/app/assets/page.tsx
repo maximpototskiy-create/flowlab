@@ -2,6 +2,7 @@
 // shared queryAssets() helper (also used by /api/assets for the canvas drawer).
 import { requireUser } from "@/lib/auth";
 import TopNav from "@/components/TopNav";
+import AssetTabs from "@/components/AssetTabs";
 import AssetGallery from "@/components/assets/AssetGallery";
 import { queryAssets } from "@/lib/assetsQuery";
 
@@ -43,6 +44,8 @@ export default async function AssetsPage({
               : `${assets.length} asset${assets.length === 1 ? "" : "s"}.`}
           </p>
         </div>
+
+        <AssetTabs />
 
         <AssetGallery
           assets={assets}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import AssetTabs from "@/components/AssetTabs";
 import { Loader2, Search, X } from "lucide-react";
 
 type TLIndex = { id: string; name: string };
@@ -184,6 +185,7 @@ export default function AssetSearchPage() {
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-4">
+      <AssetTabs />
       <div>
         <h1 className="text-lg font-semibold text-fg">Asset search</h1>
         <p className="text-[12px] text-fg-muted mt-0.5">

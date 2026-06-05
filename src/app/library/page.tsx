@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import AssetTabs from "@/components/AssetTabs";
 import { Loader2, Search, ImagePlus, X, Type, Music } from "lucide-react";
 
 type Moment = { startSec: number | null; endSec: number | null; similarity: number };
@@ -125,6 +126,7 @@ export default function LibraryPage() {
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-4">
+      <AssetTabs />
       <div>
         <h1 className="text-lg font-semibold text-fg">Library</h1>
         <p className="text-[12px] text-fg-muted mt-0.5">
