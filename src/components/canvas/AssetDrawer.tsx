@@ -79,8 +79,33 @@ export default function AssetDrawer({
       if (source === "library") {
         const hasQuery = !!debouncedQ || !!(similar && similar.url);
         if (!hasQuery) {
-          // No query yet — show nothing (prompt the user to type/drop an image).
-          setAssets([]);
+          // No search query → browse mode: list this brand's assets, optionally
+          // filtered by the selected category, newest first.
+          const bp = new URLSearchParams();
+          if (brandId) bp.set("brandId", brandId);
+          if (libCategory !== "all") bp.set("category", libCategory);
+          bp.set("limit", String(targetLimit));
+          const bres = await fetch(`/api/brand-assets/browse?${bp.toString()}`);
+          const bdata = await bres.json();
+          const brows: Array<{ url: string; kind: string; category: string | null }> = bdata.assets ?? [];
+          setAssets(
+            brows.map((r, i) => ({
+              id: `lib-b-${i}-${r.url}`,
+              cdnUrl: r.url,
+              kind: r.kind === "audio" ? "audio" : r.kind === "video" ? "video" : "image",
+              mimeType: null,
+              sizeBytes: null,
+              width: null,
+              height: null,
+              durationSec: null,
+              source: "library",
+              model: null,
+              prompt: r.category,
+              createdAt: new Date().toISOString(),
+              projectName: null,
+              brandName: null,
+            })),
+          );
           setHasMore(false);
           return;
         }
@@ -433,7 +458,7 @@ export default function AssetDrawer({
         ) : visible.length === 0 ? (
           <p className="text-center text-fg-subtle text-[11px] py-12">
             {source === "library" && !debouncedQ && !similar
-              ? "Type to search your brand library, or drop an image."
+              ? "Pick a category to browse, type to search, or drop an image."
               : "No assets."}
           </p>
         ) : (

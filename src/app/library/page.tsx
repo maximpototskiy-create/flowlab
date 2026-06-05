@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Loader2, Search, ImagePlus, X, Type, Music } from "lucide-react";
 
 type Moment = { startSec: number | null; endSec: number | null; similarity: number };
@@ -82,12 +82,52 @@ export default function LibraryPage() {
     }
   }
 
+  // Browse mode: no search query — just list assets by category/type, newest first.
+  const browse = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const p = new URLSearchParams();
+      if (category !== "all") p.set("category", category);
+      if (modality !== "all") p.set("modality", modality);
+      p.set("limit", "60");
+      const res = await fetch(`/api/brand-assets/browse?${p.toString()}`);
+      const data = await res.json();
+      const rows: Array<{ url: string; kind: string; category: string | null }> = data.assets ?? [];
+      setResults(
+        rows.map((r) => ({
+          assetId: r.url,
+          url: r.url,
+          modality: r.kind === "audio" ? "audio" : r.kind === "video" ? "video" : "image",
+          category: r.category,
+          brandId: null,
+          similarity: 1,
+          moments: [],
+          matches: 0,
+        })),
+      );
+    } catch {
+      setError("Network error");
+    } finally {
+      setLoading(false);
+    }
+  }, [category, modality]);
+
+  // When a category/type is chosen and there's no active search, browse it.
+  useEffect(() => {
+    const hasQuery = (mode === "text" && query.trim()) || (mode === "image" && imageUrl);
+    if (!hasQuery && (category !== "all" || modality !== "all")) {
+      browse();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, modality]);
+
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-4">
       <div>
         <h1 className="text-lg font-semibold text-fg">Library</h1>
         <p className="text-[12px] text-fg-muted mt-0.5">
-          Semantic search across your assets — by text or by image. Results are your own files, ready to use.
+          Search your assets by text or image — or pick a category below to browse without searching.
         </p>
       </div>
 
