@@ -26,6 +26,7 @@ export type AssetFilters = {
   brand?: string;
   kind?: string;
   source?: string;
+  sort?: string;
   q?: string;
   limit?: number;
 };
@@ -84,7 +85,7 @@ export async function queryAssets(f: AssetFilters): Promise<{
   const [assetsRaw, projects, brands] = await Promise.all([
     prisma.asset.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: f.sort === "oldest" ? "asc" : "desc" },
       take: FETCH,
       include: {
         project: { select: { id: true, name: true } },

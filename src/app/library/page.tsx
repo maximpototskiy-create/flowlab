@@ -31,6 +31,7 @@ export default function LibraryPage() {
   const [uploadingImg, setUploadingImg] = useState(false);
   const [modality, setModality] = useState<"all" | "image" | "video">("all");
   const [category, setCategory] = useState<string>("all");
+  const [sort, setSort] = useState<"newest" | "oldest" | "type">("newest");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<AssetResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,6 +91,7 @@ export default function LibraryPage() {
       const p = new URLSearchParams();
       if (category !== "all") p.set("category", category);
       if (modality !== "all") p.set("modality", modality);
+      p.set("sort", sort);
       p.set("limit", "60");
       const res = await fetch(`/api/brand-assets/browse?${p.toString()}`);
       const data = await res.json();
@@ -111,7 +113,7 @@ export default function LibraryPage() {
     } finally {
       setLoading(false);
     }
-  }, [category, modality]);
+  }, [category, modality, sort]);
 
   // When a category/type is chosen and there's no active search, browse it.
   useEffect(() => {
@@ -120,7 +122,7 @@ export default function LibraryPage() {
       browse();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, modality]);
+  }, [category, modality, sort]);
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-4">
@@ -239,8 +241,18 @@ export default function LibraryPage() {
             </button>
           ))}
         </div>
+        <span className="text-fg-subtle text-[10px]">·</span>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as "newest" | "oldest" | "type")}
+          className="bg-bg border border-border rounded-md px-2 py-0.5 text-[10px] text-fg-muted outline-none focus:border-brand"
+          title="Sort (applies when browsing, not searching)"
+        >
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="type">By type</option>
+        </select>
       </div>
-
       {error && <p className="text-[12px] text-red-400">{error}</p>}
       {loading && <p className="text-[11px] text-fg-subtle">Searching…</p>}
 

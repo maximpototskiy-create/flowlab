@@ -13,18 +13,31 @@ export async function GET(req: Request): Promise<NextResponse> {
   const category = searchParams.get("category");
   const modality = searchParams.get("modality"); // image | video | audio
   const brandId = searchParams.get("brandId");
+  const sort = searchParams.get("sort") ?? "newest"; // newest | oldest | type
   const limit = Math.min(Number(searchParams.get("limit") ?? 60), 200);
 
-  const where: Record<string, unknown> = {
-    brand: { createdBy: user.id, archivedAt: null },
-  };
-  if (brandId) where.brandId = brandId;
+  // If a brandId is given (project/canvas context), trust it directly — same as
+  // the Brand Assets manager. Only the global /library (no brandId) scopes to
+  // the current user's brands.
+  const where: Record<string, unknown> = {};
+  if (brandId) {
+    where.brandId = brandId;
+  } else {
+    where.brand = { createdBy: user.id, archivedAt: null };
+  }
   if (category && category !== "all") where.category = category;
   if (modality && modality !== "all") where.kind = modality;
 
+  const orderBy =
+    sort === "oldest"
+      ? { createdAt: "asc" as const }
+      : sort === "type"
+        ? [{ kind: "asc" as const }, { createdAt: "desc" as const }]
+        : { createdAt: "desc" as const };
+
   const rows = await prisma.brandAsset.findMany({
     where,
-    orderBy: { createdAt: "desc" },
+    orderBy,
     take: limit,
     select: { id: true, url: true, kind: true, category: true, label: true, embedStatus: true, brandId: true, createdAt: true },
   });

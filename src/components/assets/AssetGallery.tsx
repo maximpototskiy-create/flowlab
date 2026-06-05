@@ -54,7 +54,7 @@ export default function AssetGallery({
   assets: AssetItem[];
   projects: FilterOption[];
   brands: FilterOption[];
-  active: { project?: string; brand?: string; kind?: string; source?: string; q?: string };
+  active: { project?: string; brand?: string; kind?: string; source?: string; q?: string; sort?: string };
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -147,6 +147,15 @@ export default function AssetGallery({
         >
           <option value="">All brands</option>
           {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
+        </select>
+        <select
+          value={active.sort ?? "newest"}
+          onChange={(e) => setFilter("sort", e.target.value === "newest" ? null : e.target.value)}
+          className="bg-bg-card border border-border rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
+          title="Sort by date"
+        >
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
         </select>
 
         {hasFilters && (

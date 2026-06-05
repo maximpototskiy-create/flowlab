@@ -29,6 +29,22 @@ export default function SaveToLibraryButton({
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [alreadySaved, setAlreadySaved] = useState(false);
+
+  // If brand is known, check whether this asset is already in the library.
+  useEffect(() => {
+    if (!brandId || !url) return;
+    let cancelled = false;
+    fetch(`/api/brand-assets/check?brandId=${encodeURIComponent(brandId)}&url=${encodeURIComponent(url)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled && d.saved) setAlreadySaved(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId, url]);
 
   useEffect(() => {
     if (!open || brandId || brands.length) return;
@@ -59,6 +75,7 @@ export default function SaveToLibraryButton({
       if (d.error) setError(d.error);
       else {
         setDone(true);
+        setAlreadySaved(true);
         setTimeout(() => {
           setOpen(false);
           setDone(false);
@@ -73,16 +90,27 @@ export default function SaveToLibraryButton({
 
   return (
     <div className="relative inline-block">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={`inline-flex items-center gap-1.5 rounded-md border border-border text-fg-muted hover:text-fg transition ${
-          compact ? "px-2 py-1 text-[11px]" : "px-3 py-2 text-[12px]"
-        }`}
-        title="Save to brand library (makes it searchable)"
-      >
-        <BookmarkPlus size={13} /> Save to library
-      </button>
+      {alreadySaved ? (
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-md border border-emerald-600/40 text-emerald-400 ${
+            compact ? "px-2 py-1 text-[11px]" : "px-3 py-2 text-[12px]"
+          }`}
+          title="Already saved to the brand library"
+        >
+          <Check size={13} /> In library
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={`inline-flex items-center gap-1.5 rounded-md border border-border text-fg-muted hover:text-fg transition ${
+            compact ? "px-2 py-1 text-[11px]" : "px-3 py-2 text-[12px]"
+          }`}
+          title="Save to brand library (makes it searchable)"
+        >
+          <BookmarkPlus size={13} /> Save to library
+        </button>
+      )}
 
       {open && (
         <div

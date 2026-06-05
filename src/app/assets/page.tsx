@@ -21,8 +21,9 @@ export default async function AssetsPage({
   const kind = pick("kind");
   const source = pick("source");
   const q = pick("q")?.trim();
+  const sort = pick("sort");
 
-  const { assets, projects, brands } = await queryAssets({ project, brand, kind, source, q });
+  const { assets, projects, brands } = await queryAssets({ project, brand, kind, source, q, sort });
 
   return (
     <div className="grain min-h-screen">
@@ -47,7 +48,7 @@ export default async function AssetsPage({
           assets={assets}
           projects={projects}
           brands={brands}
-          active={{ project, brand, kind, source, q }}
+          active={{ project, brand, kind, source, q, sort }}
         />
       </main>
     </div>
