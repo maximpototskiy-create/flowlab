@@ -5,8 +5,15 @@
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 
-export async function getCurrentUser() {
+// Throttle lastSeenAt writes: at most once per user per 5 min, per lambda.
+// Previously every request (incl. 5s polling) issued an UPDATE, each taking a
+// pooled connection — a major contributor to pool exhaustion under load.
+const lastSeenWrites = new Map<string, number>();
+const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
+
+export const getCurrentUser = cache(async () => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -28,16 +35,22 @@ export async function getCurrentUser() {
     });
   }
 
-  // Update last seen (fire-and-forget, no await needed)
-  prisma.user
-    .update({
-      where: { id: user.id },
-      data: { lastSeenAt: new Date() },
-    })
-    .catch(() => {});
+  // Update last seen — throttled, fire-and-forget. Avoids an UPDATE (and a
+  // pooled connection) on every single request.
+  const now = Date.now();
+  const last = lastSeenWrites.get(user.id) ?? 0;
+  if (now - last > LAST_SEEN_THROTTLE_MS) {
+    lastSeenWrites.set(user.id, now);
+    prisma.user
+      .update({
+        where: { id: user.id },
+        data: { lastSeenAt: new Date() },
+      })
+      .catch(() => {});
+  }
 
   return profile;
-}
+});
 
 export async function requireUser() {
   const user = await getCurrentUser();

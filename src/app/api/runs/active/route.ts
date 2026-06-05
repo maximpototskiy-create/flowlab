@@ -14,13 +14,22 @@ export const runtime = "nodejs";
 // Don't cache — status changes by the second.
 export const dynamic = "force-dynamic";
 
+// Short per-user in-memory cache (per lambda instance). The badge is polled
+// frequently and by multiple tabs; without this each poll hits the DB. 3s is
+// fresh enough for a status badge and slashes connection-pool pressure.
+const RESULT_TTL_MS = 3000;
+const resultCache = new Map<string, { at: number; payload: unknown }>();
+
 export async function GET() {
   try {
-    // Don't use requireUser() in poll endpoints — redirect() inside polling
-    // causes ERR_ABORTED on the client. Return 401 instead.
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const cached = resultCache.get(user.id);
+    if (cached && Date.now() - cached.at < RESULT_TTL_MS) {
+      return NextResponse.json(cached.payload);
     }
 
     // Pull every run still in flight for this user. The set is naturally
@@ -98,6 +107,7 @@ export async function GET() {
       }),
     };
 
+    resultCache.set(user.id, { at: Date.now(), payload });
     return NextResponse.json(payload);
   } catch (err) {
     // This endpoint is polled every few seconds purely to drive a status

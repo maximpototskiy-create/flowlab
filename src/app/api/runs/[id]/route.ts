@@ -62,13 +62,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
     return NextResponse.json(payload);
   } catch (err) {
-    console.error("[api/runs/[id]] GET failed:", err);
-    return NextResponse.json(
-      {
-        error: "Failed to fetch run",
-        details: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
-    );
+    // Polled while a run is in flight — must not 500 on a transient DB hiccup
+    // (e.g. P2024 pool timeout under load). Return a soft "transient" 200 so
+    // the client keeps the last state and retries next tick.
+    console.error("[api/runs/[id]] GET failed (transient):", err);
+    return NextResponse.json({ transient: true }, { status: 200 });
   }
 }

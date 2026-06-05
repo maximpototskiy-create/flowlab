@@ -1517,6 +1517,7 @@ export default function Canvas({
         const res = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as {
+          transient?: boolean;
           status: "pending" | "running" | "done" | "error" | "cancelled";
           totalCostUsd: number;
           errorMessage: string | null;
@@ -1528,6 +1529,8 @@ export default function Canvas({
             assets: { cdnUrl: string; kind: string }[];
           }[];
         };
+        // Transient DB hiccup on the server — keep current state, retry next tick.
+        if (data.transient || !data.status) return;
 
         // Update node statuses & outputs
         setGraph((g) => ({
