@@ -15,10 +15,15 @@ export async function GET(req: Request): Promise<NextResponse> {
   const brandId = searchParams.get("brandId");
   const limit = Math.min(Number(searchParams.get("limit") ?? 60), 200);
 
-  const where: Record<string, unknown> = {
-    brand: { createdBy: user.id, archivedAt: null },
-  };
-  if (brandId) where.brandId = brandId;
+  // If a brandId is given (project/canvas context), trust it directly — same as
+  // the Brand Assets manager. Only the global /library (no brandId) scopes to
+  // the current user's brands.
+  const where: Record<string, unknown> = {};
+  if (brandId) {
+    where.brandId = brandId;
+  } else {
+    where.brand = { createdBy: user.id, archivedAt: null };
+  }
   if (category && category !== "all") where.category = category;
   if (modality && modality !== "all") where.kind = modality;
 
