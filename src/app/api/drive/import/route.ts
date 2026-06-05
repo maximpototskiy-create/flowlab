@@ -15,7 +15,7 @@ import { ensureEmbeddableImage } from "@/lib/image";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const MAX_PER_RUN = 8; // import at most N new files per call (loop pulls the rest); smaller = smoother progress
+const MAX_PER_RUN = 4; // smaller batch = more frequent progress updates
 const MAX_BYTES = 200 * 1024 * 1024; // skip files larger than 200 MB for now
 
 export async function POST(req: Request): Promise<NextResponse> {

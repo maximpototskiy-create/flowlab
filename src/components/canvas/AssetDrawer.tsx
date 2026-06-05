@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Upload } from "lucide-react";
+import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
 import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
@@ -26,7 +26,10 @@ export default function AssetDrawer({
 }) {
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [source, setSource] = useState<"flowlab" | "ui" | "fal" | "library">("flowlab");
+  const [source, setSource] = useState<"library" | "generated" | "ui">("generated");
+  const [genSource, setGenSource] = useState<"projects" | "fal">("projects");
+  const [libCategory, setLibCategory] = useState<string>("all");
+  const isFal = source === "generated" && genSource === "fal";
   const [kind, setKind] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -45,7 +48,7 @@ export default function AssetDrawer({
 
   // Load tags + characters once we're on the fal source.
   useEffect(() => {
-    if (source !== "fal") return;
+    if (!isFal) return;
     let alive = true;
     (async () => {
       try {
@@ -88,6 +91,7 @@ export default function AssetDrawer({
             query: similar?.url ? undefined : debouncedQ,
             imageUrl: similar?.url,
             brandId: brandId || undefined,
+            category: libCategory === "all" ? undefined : libCategory,
             limit: targetLimit,
           }),
         });
@@ -117,29 +121,29 @@ export default function AssetDrawer({
       const p = new URLSearchParams();
       if (debouncedQ) p.set("q", debouncedQ);
       p.set("limit", String(targetLimit));
-      if (source === "fal" && similar) {
+      if (isFal && similar) {
         p.set(similar.kind === "video" ? "search_video_url" : "search_image_url", similar.url);
       }
-      if (source === "fal" && activeTag) p.set("tag_id", activeTag);
-      if (source === "fal" && activeChar) p.set("character_identifier", activeChar);
+      if (isFal && activeTag) p.set("tag_id", activeTag);
+      if (isFal && activeChar) p.set("character_identifier", activeChar);
       // UI = brand-kit screenshots for the current brand.
       if (source === "ui") {
         p.set("source", "brand_kit");
         if (brandId) p.set("brand", brandId);
       }
-      const endpoint = source === "fal" ? "/api/fal-assets" : "/api/assets";
+      const endpoint = isFal ? "/api/fal-assets" : "/api/assets";
       const res = await fetch(`${endpoint}?${p.toString()}`);
       const data = await res.json();
       const list: AssetItem[] = data.assets ?? [];
       setAssets((prev) => (append ? [...prev, ...list.slice(prev.length)] : list));
-      setHasMore(source === "fal" ? !!data.has_more : list.length >= targetLimit);
+      setHasMore(isFal ? !!data.has_more : list.length >= targetLimit);
     } catch {
       if (!append) setAssets([]);
       setHasMore(false);
     } finally {
       if (append) setLoadingMore(false); else setLoading(false);
     }
-  }, [debouncedQ, source, similar, brandId, activeTag, activeChar]);
+  }, [debouncedQ, source, isFal, libCategory, similar, brandId, activeTag, activeChar]);
 
   // Initial load + reload on filter change (resets to first page).
   useEffect(() => {
@@ -149,7 +153,7 @@ export default function AssetDrawer({
 
   // Clear taxonomy filters when leaving fal.
   useEffect(() => {
-    if (source !== "fal") { setActiveTag(null); setActiveChar(null); }
+    if (!isFal) { setActiveTag(null); setActiveChar(null); }
   }, [source]);
 
   const loadMore = useCallback(() => {
@@ -213,14 +217,14 @@ export default function AssetDrawer({
       <div
         className="p-3 space-y-2 border-b border-border"
         onDragOver={(e) => {
-          if (source === "library" || source === "fal") {
+          if (source === "library" || isFal) {
             e.preventDefault();
             setDragOver(true);
           }
         }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
-          if (source !== "library" && source !== "fal") return;
+          if (source !== "library" && !isFal) return;
           e.preventDefault();
           setDragOver(false);
           const f = e.dataTransfer.files?.[0];
@@ -228,7 +232,7 @@ export default function AssetDrawer({
         }}
         style={dragOver ? { outline: "2px dashed var(--brand)", outlineOffset: "-4px" } : undefined}
       >
-        {/* Source switch */}
+        {/* Source switch — 3 top-level sources */}
         <div className="flex gap-1">
           <button
             onClick={() => setSource("library")}
@@ -239,9 +243,9 @@ export default function AssetDrawer({
             Library
           </button>
           <button
-            onClick={() => setSource("flowlab")}
+            onClick={() => setSource("generated")}
             className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
-              source === "flowlab" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+              source === "generated" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
             }`}
           >
             Generated
@@ -254,56 +258,75 @@ export default function AssetDrawer({
           >
             Brand UI
           </button>
-          <button
-            onClick={() => setSource("fal")}
-            className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
-              source === "fal" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
-            }`}
-          >
-            fal
-          </button>
         </div>
         <p className="text-[9px] text-fg-subtle leading-tight">
           {source === "library"
             ? "Your saved brand assets — search by meaning (text or image)."
-            : source === "flowlab"
-              ? "Everything generated in your FlowLab projects."
-              : source === "ui"
-                ? "This brand's UI screenshots from the Brand Kit."
-                : "Your full fal.ai asset library."}
+            : source === "generated"
+              ? "Generated content. Switch between this project and your full fal.ai library."
+              : "This brand's UI screenshots from the Brand Kit."}
         </p>
+
+        {/* Generated: sub-source (our projects vs fal) */}
+        {source === "generated" && (
+          <div className="flex gap-1">
+            <button
+              onClick={() => setGenSource("projects")}
+              className={`px-2 py-0.5 rounded-full text-[10px] border transition ${
+                genSource === "projects" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+              }`}
+            >
+              My projects
+            </button>
+            <button
+              onClick={() => setGenSource("fal")}
+              className={`px-2 py-0.5 rounded-full text-[10px] border transition ${
+                genSource === "fal" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+              }`}
+            >
+              fal library
+            </button>
+          </div>
+        )}
+
+        {/* Library: category chips */}
+        {source === "library" && (
+          <div className="flex flex-wrap gap-1">
+            {["all", "logo", "ui", "store", "graphic", "overlay", "music", "sound", "reference", "hook", "body", "packshot", "other"].map((c) => (
+              <button
+                key={c}
+                onClick={() => setLibCategory(c)}
+                className={`px-2 py-0.5 rounded-full text-[9px] border transition ${
+                  libCategory === c ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
+                }`}
+              >
+                {c === "all" ? "All" : c}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex gap-1.5">
           <div className="relative flex-1">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder={source === "fal" || source === "library" ? "Semantic search…" : "Search…"}
+              placeholder={source === "library" || isFal ? "Semantic search…" : "Search…"}
               className="w-full bg-bg border border-border rounded-md pl-7 pr-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand"
             />
           </div>
-          {(source === "fal" || source === "library") && (
-            <>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingSearch}
-                title="Search by your image"
-                className="flex-shrink-0 px-2 rounded-md border border-border text-fg-muted hover:text-fg hover:border-border-strong transition disabled:opacity-50"
-              >
-                {uploadingSearch ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) onSearchImagePicked(f);
-                  e.target.value = "";
-                }}
-              />
-            </>
+          {(source === "library" || isFal) && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onSearchImagePicked(f);
+                e.target.value = "";
+              }}
+            />
           )}
         </div>
         {source !== "ui" && (
@@ -321,10 +344,20 @@ export default function AssetDrawer({
             ))}
           </div>
         )}
+        {/* Explicit drop zone for image search (clear where to drop). */}
+        {(source === "library" || isFal) && !similar && (
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand text-[10px] py-2 transition"
+          >
+            {uploadingSearch ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
+            {uploadingSearch ? "Uploading…" : "Drop an image here, or click to search by image"}
+          </button>
+        )}
       </div>
 
       {/* fal: characters + tags */}
-      {source === "fal" && (characters.length > 0 || tags.length > 0) && (
+      {isFal && (characters.length > 0 || tags.length > 0) && (
         <div className="px-3 py-2 border-b border-border space-y-2">
           {characters.length > 0 && (
             <div className="flex gap-2 overflow-x-auto pb-1">
@@ -376,7 +409,7 @@ export default function AssetDrawer({
       )}
 
       {/* Similar-search banner */}
-      {(source === "fal" || source === "library") && similar && (
+      {(source === "library" || isFal) && similar && (
         <div className="px-3 py-2 border-b border-border flex items-center gap-2 bg-brand/10">
           {similar.kind === "video" ? (
             <video src={similar.url} className="w-7 h-7 rounded object-cover" muted preload="metadata" />

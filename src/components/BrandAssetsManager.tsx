@@ -75,7 +75,7 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
 
   async function importFromDrive() {
     setImporting(true);
-    setImportMsg("Connecting to Drive…");
+    setImportMsg("Scanning Drive…");
     let totalNew = 0;
     let importedSum = 0;
     let videosSum = 0;
@@ -110,7 +110,8 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
           break;
         }
         const done = importedSum + skippedSum + failedSum;
-        setImportMsg(`Importing… ${done}/${totalNew}${d.remaining ? ` (${d.remaining} left)` : ""}`);
+        const pct = totalNew ? Math.round((done / totalNew) * 100) : 0;
+        setImportMsg(`Importing… ${done}/${totalNew} (${pct}%)`);
 
         if (!d.remaining) {
           const parts = [`Imported ${importedSum}`];
