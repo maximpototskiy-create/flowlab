@@ -115,12 +115,11 @@ export default function LibraryPage() {
     }
   }, [category, modality, sort]);
 
-  // When a category/type is chosen and there's no active search, browse it.
+  // No active search → browse mode. Loads on mount and whenever a filter or
+  // sort changes, even for "All" (shows everything, newest first by default).
   useEffect(() => {
     const hasQuery = (mode === "text" && query.trim()) || (mode === "image" && imageUrl);
-    if (!hasQuery && (category !== "all" || modality !== "all")) {
-      browse();
-    }
+    if (!hasQuery) browse();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, modality, sort]);
 

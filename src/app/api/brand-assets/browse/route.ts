@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request): Promise<NextResponse> {
-  const user = await requireUser();
+  await requireUser();
   const { searchParams } = new URL(req.url);
   const category = searchParams.get("category");
   const modality = searchParams.get("modality"); // image | video | audio
@@ -16,15 +16,10 @@ export async function GET(req: Request): Promise<NextResponse> {
   const sort = searchParams.get("sort") ?? "newest"; // newest | oldest | type
   const limit = Math.min(Number(searchParams.get("limit") ?? 60), 200);
 
-  // If a brandId is given (project/canvas context), trust it directly — same as
-  // the Brand Assets manager. Only the global /library (no brandId) scopes to
-  // the current user's brands.
+  // Scope: a brandId narrows to that brand; otherwise list across brands
+  // (same visibility model as the /assets gallery).
   const where: Record<string, unknown> = {};
-  if (brandId) {
-    where.brandId = brandId;
-  } else {
-    where.brand = { createdBy: user.id, archivedAt: null };
-  }
+  if (brandId) where.brandId = brandId;
   if (category && category !== "all") where.category = category;
   if (modality && modality !== "all") where.kind = modality;
 
