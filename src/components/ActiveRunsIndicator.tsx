@@ -43,7 +43,7 @@ class ActiveRunsStore {
   private runs: ActiveRun[] = [];
   private loaded = false;
   private listeners = new Set<() => void>();
-  private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private pollInterval: ReturnType<typeof setTimeout> | null = null;
   private subscribers = 0;
   private inFlight = false;
 
@@ -75,14 +75,22 @@ class ActiveRunsStore {
 
   private startPolling() {
     if (this.pollInterval) return;
-    this.pollInterval = setInterval(() => {
-      void this.fetchOnce();
-    }, 5000);
+    void this.fetchOnce().then(() => this.scheduleNext());
+  }
+
+  // Poll fast (5s) only while something is running; otherwise back off to 15s
+  // to keep idle load (and DB pool pressure) low.
+  private scheduleNext() {
+    if (this.listeners.size === 0) return;
+    const delay = this.runs.length > 0 ? 5000 : 15000;
+    this.pollInterval = setTimeout(() => {
+      void this.fetchOnce().then(() => this.scheduleNext());
+    }, delay);
   }
 
   private stopPolling() {
     if (this.pollInterval) {
-      clearInterval(this.pollInterval);
+      clearTimeout(this.pollInterval);
       this.pollInterval = null;
     }
   }

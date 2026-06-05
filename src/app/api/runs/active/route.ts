@@ -100,13 +100,12 @@ export async function GET() {
 
     return NextResponse.json(payload);
   } catch (err) {
-    console.error("[api/runs/active] GET failed:", err);
-    return NextResponse.json(
-      {
-        error: "Failed to fetch active runs",
-        details: err instanceof Error ? err.message : String(err),
-      },
-      { status: 500 },
-    );
+    // This endpoint is polled every few seconds purely to drive a status
+    // badge. It must NEVER take the page down. On any DB hiccup (e.g. P2024
+    // connection-pool timeout under load) return an empty, healthy 200 so the
+    // client just shows "no active runs" this tick and retries next poll —
+    // instead of a 500 that surfaces as a broken page.
+    console.error("[api/runs/active] GET failed (returning empty):", err);
+    return NextResponse.json({ count: 0, runs: [], degraded: true });
   }
 }

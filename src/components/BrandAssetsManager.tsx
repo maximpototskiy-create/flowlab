@@ -116,7 +116,7 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
         if (!d.remaining) {
           const parts = [`Imported ${importedSum}`];
           if (videosSum) parts.push(`${videosSum} video/audio indexing`);
-          if (skippedSum) parts.push(`${skippedSum} too large (skipped)`);
+          if (skippedSum) parts.push(`${skippedSum} too large (>200 MB — upload manually)`);
           if (failedSum) parts.push(`${failedSum} failed`);
           if (d.embedErrors?.length) parts.push(`embed error: ${d.embedErrors[0]}`);
           setImportMsg(parts.join(" · "));

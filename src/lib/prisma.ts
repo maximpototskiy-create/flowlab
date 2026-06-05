@@ -32,12 +32,11 @@ function buildDatabaseUrl(): string | undefined {
     // Symptom this fixes: dashboard/workflow pages returning 500 with
     // "P2024: Timed out fetching a new connection from the connection pool"
     // while a long generation is running.
-    u.searchParams.set("connection_limit", "5");
-    // Shorter pool_timeout — fail fast (5s) and let the request retry rather
-    // than make the user stare at a white screen for 20s before 500. With
-    // connection_limit=3 we expect waits to be rare; if they happen we want
-    // them visible quickly.
-    u.searchParams.set("pool_timeout", "5");
+    u.searchParams.set("connection_limit", "10");
+    // pool_timeout: how long a query waits for a free connection before P2024.
+    // Bumped to 15s so brief spikes (polling + a page load + a running
+    // generation) queue instead of erroring out with a 500.
+    u.searchParams.set("pool_timeout", "15");
     // Disable Prisma's prepared statement caching — pgBouncer transaction mode
     // doesn't preserve session state between queries, so cached statements collide.
     if (!u.searchParams.has("statement_cache_size")) {
