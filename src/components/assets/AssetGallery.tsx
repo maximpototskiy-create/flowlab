@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Download, X, Image as ImageIcon, Video, Music, FileText } from "lucide-react";
 import type { AssetItem, FilterOption } from "@/lib/assetsQuery";
@@ -19,6 +19,12 @@ const SOURCES = [
   { value: "upload", label: "Uploads" },
   { value: "brand_kit", label: "Brand kit" },
 ];
+
+// How many cards to mount initially / per "page" of infinite scroll.
+// Keeping this small is the single biggest perf win on /assets: it caps how
+// many DOM nodes (and especially how many <video> metadata fetches) mount on
+// first paint instead of all ~240 at once (TBT was ~1.8s before this).
+const PAGE = 48;
 
 // Existing rows may carry a stale kind="text" for what is really an image or
 // video (old inferKind bug). Every Asset cdnUrl is an http media URL — text
@@ -61,6 +67,32 @@ export default function AssetGallery({
   const [lightbox, setLightbox] = useState<AssetItem | null>(null);
   const [search, setSearch] = useState(active.q ?? "");
 
+  // ── Client-side windowing (infinite scroll) ──
+  // Render `visible` cards; a sentinel below the grid bumps it by PAGE when it
+  // scrolls into view. Reset whenever the asset set changes (new filter).
+  const [visible, setVisible] = useState(PAGE);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setVisible(PAGE);
+  }, [assets]);
+
+  useEffect(() => {
+    if (visible >= assets.length) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible((v) => Math.min(v + PAGE, assets.length));
+        }
+      },
+      { rootMargin: "800px" }, // start loading the next page well before it's on screen
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [assets.length, visible]);
+
   // Update one filter key in the URL (null clears it). Keeps the rest.
   const setFilter = useCallback(
     (key: string, value: string | null) => {
@@ -77,6 +109,7 @@ export default function AssetGallery({
     setFilter(key, active[key as keyof typeof active] === value ? null : value);
 
   const hasFilters = active.project || active.brand || active.kind || active.source || active.q;
+  const shown = assets.slice(0, visible);
 
   return (
     <div>
@@ -175,29 +208,38 @@ export default function AssetGallery({
           <p className="text-fg-muted text-sm">Generate or upload assets and they'll show up here.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-          {assets.map((a) => {
-            const ek = effectiveKind(a);
-            return (
-            <button
-              key={a.id}
-              onClick={() => setLightbox(a)}
-              className="group relative aspect-square rounded-lg overflow-hidden bg-bg-card border border-border hover:border-brand transition text-left"
-            >
-              <AssetThumb asset={a} ek={ek} />
-              {/* hover meta — prompt if present, else model/source */}
-              <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition">
-                <div className="text-[9px] text-white/90 line-clamp-2 leading-snug">
-                  {a.prompt || a.model || a.source}
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            {shown.map((a) => {
+              const ek = effectiveKind(a);
+              return (
+              <button
+                key={a.id}
+                onClick={() => setLightbox(a)}
+                className="group relative aspect-square rounded-lg overflow-hidden bg-bg-card border border-border hover:border-brand transition text-left"
+              >
+                <AssetThumb asset={a} ek={ek} />
+                {/* hover meta — prompt if present, else model/source */}
+                <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition">
+                  <div className="text-[9px] text-white/90 line-clamp-2 leading-snug">
+                    {a.prompt || a.model || a.source}
+                  </div>
                 </div>
-              </div>
-              <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/50 text-[8px] uppercase tracking-wide text-white/80">
-                {ek}
-              </span>
-            </button>
-            );
-          })}
-        </div>
+                <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/50 text-[8px] uppercase tracking-wide text-white/80">
+                  {ek}
+                </span>
+              </button>
+              );
+            })}
+          </div>
+
+          {/* Infinite-scroll sentinel — bumps `visible` by PAGE when reached */}
+          {visible < assets.length && (
+            <div ref={sentinelRef} className="py-8 text-center text-fg-subtle text-[11px]">
+              Loading more… ({visible} / {assets.length})
+            </div>
+          )}
+        </>
       )}
 
       {/* ── Lightbox ── */}
@@ -209,20 +251,10 @@ export default function AssetGallery({
 function AssetThumb({ asset, ek }: { asset: AssetItem; ek: string }) {
   if (ek === "image") {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={asset.cdnUrl} alt="" className="w-full h-full object-cover" loading="lazy" />;
+    return <img src={asset.cdnUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />;
   }
   if (ek === "video") {
-    return (
-      <video
-        src={asset.cdnUrl}
-        className="w-full h-full object-cover"
-        muted
-        playsInline
-        preload="metadata"
-        onMouseEnter={(e) => { (e.currentTarget as HTMLVideoElement).play().catch(() => {}); }}
-        onMouseLeave={(e) => { const v = e.currentTarget as HTMLVideoElement; v.pause(); v.currentTime = 0; }}
-      />
-    );
+    return <LazyVideoThumb src={asset.cdnUrl} />;
   }
   if (ek === "audio") {
     return (
@@ -234,6 +266,56 @@ function AssetThumb({ asset, ek }: { asset: AssetItem; ek: string }) {
   return (
     <div className="w-full h-full flex items-center justify-center p-3 text-fg-muted text-[10px] leading-snug overflow-hidden">
       {asset.prompt ? asset.prompt.slice(0, 140) : <FileText size={28} />}
+    </div>
+  );
+}
+
+// <video preload="metadata"> has no native lazy equivalent: it fires a network
+// request for the clip header the moment it mounts. Mounting hundreds at once
+// floods the network and blocks the main thread (the TBT spike on /assets).
+// This gate mounts the real <video> only once the card nears the viewport;
+// until then it shows a cheap placeholder. Once shown, it stays mounted.
+function LazyVideoThumb({ src }: { src: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setShow(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setShow(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "300px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  return (
+    <div ref={ref} className="w-full h-full">
+      {show ? (
+        <video
+          src={src}
+          className="w-full h-full object-cover"
+          muted
+          playsInline
+          preload="metadata"
+          onMouseEnter={(e) => { (e.currentTarget as HTMLVideoElement).play().catch(() => {}); }}
+          onMouseLeave={(e) => { const v = e.currentTarget as HTMLVideoElement; v.pause(); v.currentTime = 0; }}
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center bg-bg-card text-fg-subtle">
+          <Video size={24} />
+        </div>
+      )}
     </div>
   );
 }
