@@ -399,7 +399,7 @@ export default function AssetDrawer({
                     <span className={`w-9 h-9 rounded-full overflow-hidden border-2 ${on ? "border-brand" : "border-transparent"}`}>
                       {c.cover ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={c.cover} alt="" className="w-full h-full object-cover" />
+                        <img src={c.cover} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                       ) : (
                         <span className="w-full h-full flex items-center justify-center bg-bg text-fg-subtle text-[10px]">
                           {c.name.slice(0, 1)}

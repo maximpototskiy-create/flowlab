@@ -278,7 +278,7 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
             <div key={a.id} className="relative group aspect-square rounded-md overflow-hidden border border-border bg-bg">
               {a.kind === "image" && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={a.url} alt="" className="w-full h-full object-cover" />
+                <img src={a.url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
               )}
               {a.kind === "video" && (
                 <div className="w-full h-full flex items-center justify-center bg-black">

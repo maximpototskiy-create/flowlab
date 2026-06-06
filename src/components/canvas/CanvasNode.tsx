@@ -960,7 +960,7 @@ function PreviewMedia({ url, expanded }: { url: string; expanded?: boolean }) {
   if (isImage(url) || url.startsWith("data:image")) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={url} alt="" className={`w-full ${mediaMax} rounded-md object-cover bg-bg-subtle`} />
+      <img src={url} alt="" loading="lazy" decoding="async" className={`w-full ${mediaMax} rounded-md object-cover bg-bg-subtle`} />
     );
   }
   // text — compact view with scroll. The full text is always available via
@@ -992,7 +992,7 @@ function PreviewMedia({ url, expanded }: { url: string; expanded?: boolean }) {
 }
 
 function PreviewThumb({ url }: { url: string }) {
-  if (isImage(url)) return <img src={url} alt="" className="w-full h-full object-cover" />;
+  if (isImage(url)) return <img src={url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />;
   if (isVideo(url)) return <video src={url} className="w-full h-full object-cover" muted />;
   return <div className="w-full h-full bg-bg-hover" />;
 }
