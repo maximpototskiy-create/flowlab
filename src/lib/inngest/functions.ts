@@ -5,16 +5,29 @@ import type { Graph } from "@/lib/canvas/types";
 
 // Worker that actually runs a workflow. Replaces the old after() background
 // task. Key benefits vs after():
-//  - concurrency control: at most N runs execute at once across the whole app,
-//    which protects fal.ai / TwelveLabs rate limits and the DB pool;
+//  - concurrency control: caps how many runs execute at once (protects fal.ai /
+//    TwelveLabs rate limits and the DB pool) AND keeps it fair across users —
+//    one user's burst can't starve everyone else;
 //  - retries: a transient crash re-runs automatically;
 //  - no request-lifetime ceiling: the run isn't bound to the start request.
 export const runWorkflowFn = inngest.createFunction(
   {
     id: "run-workflow",
-    // Global cap on simultaneously executing runs. Tune as capacity grows.
-    // This is the main lever protecting external APIs and the DB under load.
-    concurrency: { limit: 5 },
+    // Two concurrency constraints (both apply):
+    //  1. Global ceiling — the total number of runs executing simultaneously
+    //     across ALL users. This is the main lever protecting external APIs
+    //     and the DB pool. Raise as fal.ai/TwelveLabs limits + DB allow.
+    //  2. Per-user fairness — keyed by the triggering user's id, so a single
+    //     user can occupy at most `limit` slots. A user firing 10 runs takes
+    //     2 slots and queues the rest, leaving room for other users to run in
+    //     parallel instead of waiting behind them.
+    // Tuning knobs: bump #1 for more total throughput, #2 for how many a single
+    // user may run at once. Older events without userId fall into one shared
+    // per-user bucket (harmless during rollout; all new runs carry userId).
+    concurrency: [
+      { limit: 8 },
+      { key: "event.data.userId", limit: 2 },
+    ],
     // One automatic retry on unexpected failure. Node-level results are already
     // persisted by the executor, so a retry resumes cleanly enough for now.
     retries: 1,
@@ -26,6 +39,7 @@ export const runWorkflowFn = inngest.createFunction(
       graph: Graph;
       workflowId: string;
       scopeNodeId?: string;
+      userId?: string;
     };
 
     // Respect cancellation requested before the worker picked the job up.

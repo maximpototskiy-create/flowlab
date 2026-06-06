@@ -62,7 +62,7 @@ export async function POST(req: Request) {
     try {
       await inngest.send({
         name: EVENTS.workflowRunRequested,
-        data: { runId: run.id, graph: body.graph, workflowId: workflow.id, scopeNodeId: body.scope },
+        data: { runId: run.id, graph: body.graph, workflowId: workflow.id, scopeNodeId: body.scope, userId: user.id },
       });
       queued = true;
       console.log(`[runs/start] queued run ${run.id} on Inngest`);
