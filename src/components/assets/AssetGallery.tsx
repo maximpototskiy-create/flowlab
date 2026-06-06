@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Download, X, Image as ImageIcon, Video, Music, FileText } from "lucide-react";
 import type { AssetItem, FilterOption } from "@/lib/assetsQuery";
@@ -36,6 +37,24 @@ function effectiveKind(a: AssetItem): string {
   if (/\.(mp3|wav|m4a|ogg|aac|flac)$/.test(u)) return "audio";
   if ((a.cdnUrl ?? "").startsWith("http")) return "image";
   return "text";
+}
+
+// Whether next/image can optimize this URL. Must mirror next.config.ts
+// images.remotePatterns — using <Image> on a host that isn't whitelisted throws
+// "hostname not configured" at runtime. Anything else falls back to plain <img>
+// (rare external brand-kit URLs) so it degrades gracefully instead of breaking.
+function canOptimize(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return (
+    host === "supabase.co" || host.endsWith(".supabase.co") ||
+    host === "fal.media" || host.endsWith(".fal.media") ||
+    host === "storage.googleapis.com"
+  );
 }
 
 function fmtSize(b: number | null) {
@@ -250,8 +269,7 @@ export default function AssetGallery({
 
 function AssetThumb({ asset, ek }: { asset: AssetItem; ek: string }) {
   if (ek === "image") {
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={asset.cdnUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />;
+    return <ImageThumb url={asset.cdnUrl} />;
   }
   if (ek === "video") {
     return <LazyVideoThumb src={asset.cdnUrl} />;
@@ -268,6 +286,29 @@ function AssetThumb({ asset, ek }: { asset: AssetItem; ek: string }) {
       {asset.prompt ? asset.prompt.slice(0, 140) : <FileText size={28} />}
     </div>
   );
+}
+
+// Grid image thumbnail. For Supabase/fal-hosted images we use next/image so
+// Vercel serves a small WebP at grid size (was shipping full-res originals —
+// ~36 MB on /assets per Lighthouse "Improve image delivery"). The grid cell is
+// `relative aspect-square`, so `fill` works; `sizes` tells the optimizer the
+// real rendered width per breakpoint (grid is 2/3/4/5 cols, capped by max-w-6xl).
+function ImageThumb({ url }: { url: string }) {
+  if (canOptimize(url)) {
+    return (
+      <Image
+        src={url}
+        alt=""
+        fill
+        sizes="(max-width: 640px) 50vw, (max-width: 768px) 33vw, (max-width: 1024px) 25vw, 220px"
+        quality={70}
+        className="object-cover"
+      />
+    );
+  }
+  // External host not in remotePatterns → plain lazy <img> (no optimization).
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />;
 }
 
 // <video preload="metadata"> has no native lazy equivalent: it fires a network
