@@ -13,21 +13,18 @@ import type { Graph } from "@/lib/canvas/types";
 export const runWorkflowFn = inngest.createFunction(
   {
     id: "run-workflow",
-    // Two concurrency constraints (both apply):
-    //  1. Global ceiling — the total number of runs executing simultaneously
-    //     across ALL users. This is the main lever protecting external APIs
-    //     and the DB pool. Raise as fal.ai/TwelveLabs limits + DB allow.
-    //  2. Per-user fairness — keyed by the triggering user's id, so a single
-    //     user can occupy at most `limit` slots. A user firing 10 runs takes
-    //     2 slots and queues the rest, leaving room for other users to run in
-    //     parallel instead of waiting behind them.
-    // Tuning knobs: bump #1 for more total throughput, #2 for how many a single
-    // user may run at once. Older events without userId fall into one shared
-    // per-user bucket (harmless during rollout; all new runs carry userId).
-    concurrency: [
-      { limit: 12 },
-      { key: "event.data.userId", limit: 2 },
-    ],
+    // Concurrency: a single global ceiling (see note below). No per-user cap —
+    // any user may run as many generations simultaneously as they want.
+    // Per-user fairness is intentionally OFF: any single user may run as many
+    // generations at once as they like. What remains is a single high GLOBAL
+    // ceiling acting as a safety valve, NOT a throttle. It exists because the
+    // real bottlenecks under a burst are (a) the Postgres pool
+    // (connection_limit=15 in prisma.ts) and (b) fal.ai / TwelveLabs rate
+    // limits — a truly unlimited cap can re-trigger the P2024 pool-timeout
+    // cascade that patches 78–80 fixed. 50 is far above realistic peak for the
+    // current team. To go higher (or fully unlimited), raise/remove this line —
+    // but pair it with a bigger DB pool and a check on the external API limits.
+    concurrency: { limit: 50 },
     // One automatic retry on unexpected failure. Node-level results are already
     // persisted by the executor, so a retry resumes cleanly enough for now.
     retries: 1,

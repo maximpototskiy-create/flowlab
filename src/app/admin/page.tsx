@@ -2,9 +2,11 @@
 // Admin-only usage dashboard: per-user generation volume + cost, and a
 // per-model cost breakdown. Server-rendered (no polling) and gated by
 // requireAdmin(), so it never adds to status-poll pool pressure.
+import Link from "next/link";
 import TopNav from "@/components/TopNav";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { setUserRole } from "./actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,7 +37,7 @@ export default async function AdminPage({
 }: {
   searchParams: Promise<{ range?: string }>;
 }) {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   const sp = await searchParams;
   const range = sp.range === "7" || sp.range === "30" ? sp.range : "all";
@@ -140,22 +142,20 @@ export default async function AdminPage({
                 <Th right>Done</Th>
                 <Th right>Errors</Th>
                 <Th right>Cost</Th>
+                <Th>Role</Th>
                 <Th right>Last active</Th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id} className="border-t border-border/60">
+                <tr key={r.id} className="border-t border-border/60 hover:bg-bg-card/40">
                   <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-fg">{r.name || r.email}</span>
-                      {r.role === "admin" && (
-                        <span className="px-1.5 py-0.5 rounded bg-brand/15 text-brand text-[9px] uppercase tracking-wide">
-                          admin
-                        </span>
-                      )}
-                    </div>
-                    {r.name && <div className="text-fg-subtle text-[10px]">{r.email}</div>}
+                    <Link href={`/admin/users/${r.id}`} className="group">
+                      <div className="flex items-center gap-2">
+                        <span className="text-fg group-hover:text-brand transition">{r.name || r.email}</span>
+                      </div>
+                      {r.name && <div className="text-fg-subtle text-[10px]">{r.email}</div>}
+                    </Link>
                   </td>
                   <Td right>{r.runs}</Td>
                   <Td right>{r.done}</Td>
@@ -163,12 +163,15 @@ export default async function AdminPage({
                     {r.errors}
                   </Td>
                   <Td right>{usd(r.cost)}</Td>
+                  <td className="px-3 py-2.5">
+                    <RoleControl userId={r.id} role={r.role} isSelf={r.id === admin.id} />
+                  </td>
                   <Td right>{r.lastSeenAt ? new Date(r.lastSeenAt).toLocaleDateString() : "—"}</Td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-fg-subtle">
+                  <td colSpan={7} className="px-3 py-6 text-center text-fg-subtle">
                     No users.
                   </td>
                 </tr>
@@ -237,5 +240,39 @@ function Td({
     <td className={`px-3 py-2.5 ${right ? "text-right tabular-nums" : ""} ${className ?? ""}`}>
       {children}
     </td>
+  );
+}
+
+// Role badge + a one-click toggle (admin ⇄ member) backed by the setUserRole
+// server action. The current admin can't change their own role (isSelf), so
+// the toggle renders as a static badge for that row.
+function RoleControl({ userId, role, isSelf }: { userId: string; role: string; isSelf: boolean }) {
+  const isAdmin = role === "admin";
+  const badge = (
+    <span
+      className={`px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide ${
+        isAdmin ? "bg-brand/15 text-brand" : "bg-bg-card text-fg-muted border border-border"
+      }`}
+    >
+      {role}
+    </span>
+  );
+
+  if (isSelf) {
+    return <div className="flex items-center gap-2">{badge}<span className="text-fg-subtle text-[10px]">(you)</span></div>;
+  }
+
+  return (
+    <form action={setUserRole} className="flex items-center gap-2">
+      {badge}
+      <input type="hidden" name="userId" value={userId} />
+      <input type="hidden" name="role" value={isAdmin ? "member" : "admin"} />
+      <button
+        type="submit"
+        className="px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-border-strong text-[10px] transition"
+      >
+        {isAdmin ? "Make member" : "Make admin"}
+      </button>
+    </form>
   );
 }
