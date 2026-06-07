@@ -76,6 +76,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [progress, setProgress] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
+  const [panelTab, setPanelTab] = useState<"media" | "effects" | "filters" | "text">("media");
+  const [transMenu, setTransMenu] = useState<{ x: number; y: number; id: string } | null>(null);
 
   const laneRefs = useRef<Map<string, HTMLElement>>(new Map());
   const stripRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -113,8 +115,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     setClips((p) => [...p, base(a.kind, layer, a.url, a.label, Math.max(0, at), duration)]);
   };
   const addText = () => setClips((p) => [...p, base("text", topVisualId(), undefined, "Text", +playheadRef.current.toFixed(2), DEFAULTS.text, { text: "Your caption" })]);
-  const addFx = () => setClips((p) => [...p, base("fx", topVisualId(), undefined, "FX", +playheadRef.current.toFixed(2), DEFAULTS.fx, { fx: "vignette" })]);
-  const addAdjust = () => setClips((p) => [...p, base("adjust", topVisualId(), undefined, "Adjust", +playheadRef.current.toFixed(2), DEFAULTS.adjust, { fx: "grayscale(1)" })]);
+  const addFx = (type = "vignette") => setClips((p) => [...p, base("fx", topVisualId(), undefined, "FX", +playheadRef.current.toFixed(2), DEFAULTS.fx, { fx: type })]);
+  const addAdjust = (v = "grayscale(1)") => setClips((p) => [...p, base("adjust", topVisualId(), undefined, "Adjust", +playheadRef.current.toFixed(2), DEFAULTS.adjust, { fx: v })]);
   const update = (id: string, patch: Partial<EditClip>) => setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected((s) => (s === id ? null : s)); }, []);
   const duplicate = (id: string) => setClips((p) => { const c = p.find((x) => x.id === id); return c ? [...p, { ...c, id: uid(), start: c.start + 0.3 }] : p; });
@@ -192,11 +194,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   }, [play, remove]);
 
   useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
+    if (!menu && !transMenu) return;
+    const close = () => { setMenu(null); setTransMenu(null); };
     window.addEventListener("click", close); window.addEventListener("scroll", close, true); window.addEventListener("resize", close);
     return () => { window.removeEventListener("click", close); window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
-  }, [menu]);
+  }, [menu, transMenu]);
 
   const exportMp4 = useCallback(async () => {
     if (exporting || !clips.length) return;
@@ -286,6 +288,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   const onClipContext = (e: React.MouseEvent, c: EditClip) => { e.preventDefault(); e.stopPropagation(); setSelected(c.id); setMenu({ x: e.clientX, y: e.clientY, id: c.id }); };
 
+  // transition applied via the "+" between two adjacent clips (CapCut-style)
+  const applyTransition = (bId: string, v: string) => {
+    const b = clipsRef.current.find((c) => c.id === bId); if (!b) return;
+    const prev = clipsRef.current.filter((c) => c.layer === b.layer && (c.kind === "video" || c.kind === "image" || c.kind === "text") && c.start < b.start).sort((p, q) => q.start - p.start)[0];
+    const patch: Partial<EditClip> = { transType: v };
+    if (v && prev) { const ns = +(prev.start + prev.duration - 0.5).toFixed(2); if (ns >= 0 && ns < b.start) patch.start = ns; }
+    update(bId, patch); setTransMenu(null);
+  };
+
   const t = playhead;
   const styleFromVisual = (c: EditClip, v: ReturnType<typeof clipVisual>): React.CSSProperties => {
     const tx = (c.x || 0) + v.offX * previewSize.w;
@@ -308,36 +319,76 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   return (
     <div className="flex-1 flex min-h-0">
-      {/* Bin */}
+      {/* Library panel */}
       <aside className="w-60 shrink-0 border-r border-border flex flex-col min-h-0">
         <div className="h-11 shrink-0 border-b border-border flex items-center gap-1 px-2 text-[11px]">
-          {(["all", "video", "image", "audio"] as const).map((f) => (
-            <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-1 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}>{f}</button>
+          {([["media", "Media"], ["effects", "Effects"], ["filters", "Filters"], ["text", "Text"]] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setPanelTab(k)} className={`px-2 py-1 rounded ${panelTab === k ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}>{l}</button>
           ))}
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-2">
-          <div className="grid grid-cols-2 gap-2">
-            {bin.map((a) => (
-              <button key={a.id} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={a.label}
-                className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
-                {a.kind === "image" ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
-                ) : a.kind === "video" ? (
-                  <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
-                ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
-                <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
-                <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
-              </button>
-            ))}
-            {bin.length === 0 && <div className="col-span-2 text-fg-subtle text-[11px] p-3">No assets.</div>}
+
+        {panelTab === "media" && (
+          <>
+            <div className="shrink-0 flex items-center gap-1 px-2 py-1.5 text-[10px] border-b border-border/50">
+              {(["all", "video", "image", "audio"] as const).map((f) => (
+                <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
+              ))}
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-2">
+              <div className="grid grid-cols-2 gap-2">
+                {bin.map((a) => (
+                  <button key={a.id} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={a.label}
+                    className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
+                    {a.kind === "image" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
+                    ) : a.kind === "video" ? (
+                      <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
+                    ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
+                    <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
+                    <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
+                  </button>
+                ))}
+                {bin.length === 0 && <div className="col-span-2 text-fg-subtle text-[11px] p-3">No assets.</div>}
+              </div>
+            </div>
+          </>
+        )}
+
+        {panelTab === "effects" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <div className="text-[10px] text-fg-subtle px-1 pb-2">Overlay-эффект ложится клипом поверх на плейхеде.</div>
+            <div className="grid grid-cols-2 gap-2">
+              {FX.map((f) => (
+                <button key={f.v} onClick={() => addFx(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center group">
+                  <div className="absolute inset-0" style={fxStyle(f.v)} />
+                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Sparkles size={11} /> {f.l}</span>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="m-2 shrink-0 grid grid-cols-3 gap-1.5">
-          <button onClick={addText} className="inline-flex items-center justify-center gap-1 py-2 rounded-md border border-border text-fg-muted hover:text-fg text-[11px]"><Type size={12} /> Text</button>
-          <button onClick={addFx} className="inline-flex items-center justify-center gap-1 py-2 rounded-md border border-border text-fg-muted hover:text-fg text-[11px]"><Sparkles size={12} /> FX</button>
-          <button onClick={addAdjust} className="inline-flex items-center justify-center gap-1 py-2 rounded-md border border-border text-fg-muted hover:text-fg text-[11px]"><Wand2 size={12} /> Adj</button>
-        </div>
+        )}
+
+        {panelTab === "filters" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <div className="text-[10px] text-fg-subtle px-1 pb-2">Фильтр ложится клипом и красит всё под собой на своём отрезке.</div>
+            <div className="grid grid-cols-2 gap-2">
+              {ADJUST.map((f) => (
+                <button key={f.v} onClick={() => addAdjust(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-gradient-to-br from-bg-card to-bg-card/40 flex items-end justify-center">
+                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-400/30 via-fuchsia-400/20 to-amber-300/30" style={{ filter: f.v }} />
+                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Wand2 size={11} /> {f.l}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {panelTab === "text" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <button onClick={addText} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add text</button>
+            <div className="text-[10px] text-fg-subtle px-1 pt-2">Заголовок появится на плейхеде; текст и стиль — в инспекторе.</div>
+          </div>
+        )}
       </aside>
 
       {/* Main */}
@@ -449,10 +500,25 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                           : c.kind === "adjust" ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
                           : "border-border bg-bg-card text-fg-muted"}`}>
                         {c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}
-                        {c.transType && <span title={`transition: ${c.transType}`} className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rotate-45 bg-amber-400 border border-amber-200 z-10" />}
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r" />
                       </div>
                     ))}
+                    {/* transition "+" between adjacent clips (CapCut-style) */}
+                    {(() => {
+                      const lc = onLayer(layer.id).filter((c) => c.kind === "video" || c.kind === "image" || c.kind === "text");
+                      return lc.map((b, idx) => {
+                        if (idx === 0) return null;
+                        const a = lc[idx - 1];
+                        if (b.start > a.start + a.duration + 0.3) return null;
+                        return (
+                          <button key={`tr-${b.id}`} onClick={(e) => { e.stopPropagation(); setTransMenu({ x: e.clientX, y: e.clientY, id: b.id }); }}
+                            style={{ left: b.start * pxPerSec - 9 }} title="Transition"
+                            className={`absolute top-1/2 -translate-y-1/2 z-30 w-[18px] h-[18px] rounded-full flex items-center justify-center text-[11px] leading-none border ${b.transType ? "bg-amber-400 text-black border-amber-200" : "bg-bg-card text-fg-muted border-border hover:border-brand hover:text-brand"}`}>
+                            {b.transType ? "◆" : "+"}
+                          </button>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
                 {/* bottom insertion strip after the last layer */}
@@ -484,7 +550,6 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               <>
                 <label className="flex items-center gap-1 text-fg-muted">anim<select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
                 <label className="flex items-center gap-1 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => update(sel.id, { scale: Number(e.target.value) })} className="w-16" /></label>
-                <label className="flex items-center gap-1 text-fg-muted">trans<select value={sel.transType ?? ""} onChange={(e) => update(sel.id, { transType: e.target.value })} className="bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{TRANSITIONS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
               </>
             )}
             <label className="flex items-center gap-1 text-fg-muted">in<input type="number" min={0} step={0.1} value={sel.fadeIn} onChange={(e) => update(sel.id, { fadeIn: Math.max(0, Number(e.target.value) || 0) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
@@ -509,17 +574,6 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <div className="grid grid-cols-2 gap-1 px-1 pb-1.5">
                   {ANIMS.map((a) => (<button key={a.v} onClick={() => apply({ anim: a.v })} className={`px-1.5 py-1 rounded text-left ${(c.anim ?? "") === a.v ? "bg-brand/20 text-brand" : "hover:bg-white/5 text-fg-muted"}`}>{a.l}</button>))}
                 </div>
-                <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Transition (into previous)</div>
-                <div className="grid grid-cols-2 gap-1 px-1 pb-1.5">
-                  {TRANSITIONS.map((a) => (
-                    <button key={a.v} onClick={() => {
-                      const prev = clips.filter((x) => x.layer === c.layer && (x.kind === "video" || x.kind === "image" || x.kind === "text") && x.start < c.start).sort((p, q) => q.start - p.start)[0];
-                      const patch: Partial<EditClip> = { transType: a.v };
-                      if (a.v && prev) { const ns = +(prev.start + prev.duration - 0.5).toFixed(2); if (ns >= 0 && ns < c.start) patch.start = ns; }
-                      apply(patch);
-                    }} className={`px-1.5 py-1 rounded text-left ${(c.transType ?? "") === a.v ? "bg-amber-400/20 text-amber-300" : "hover:bg-white/5 text-fg-muted"}`}>{a.l}</button>
-                  ))}
-                </div>
               </>
             )}
             <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Fade</div>
@@ -532,6 +586,21 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <div className="border-t border-border my-1" />
             <button onClick={() => { duplicate(menu.id); setMenu(null); }} className="w-full px-1.5 py-1.5 rounded hover:bg-white/5 text-fg-muted text-left inline-flex items-center gap-2"><Copy size={12} /> Duplicate</button>
             <button onClick={() => { remove(menu.id); setMenu(null); }} className="w-full px-1.5 py-1.5 rounded hover:bg-red-500/10 text-red-400 text-left inline-flex items-center gap-2"><Trash2 size={12} /> Delete</button>
+          </div>
+        );
+      })()}
+
+      {/* Transition popover (from the "+" between clips) */}
+      {transMenu && (() => {
+        const b = clips.find((x) => x.id === transMenu.id);
+        return (
+          <div className="fixed z-50 w-44 bg-bg-card border border-border rounded-lg shadow-xl p-1.5 text-[11px]" style={{ left: Math.min(transMenu.x, window.innerWidth - 190), top: Math.min(transMenu.y, window.innerHeight - 240) }} onClick={(e) => e.stopPropagation()}>
+            <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Transition</div>
+            <div className="grid grid-cols-2 gap-1 px-1 pb-1">
+              {TRANSITIONS.map((a) => (
+                <button key={a.v} onClick={() => applyTransition(transMenu.id, a.v)} className={`px-1.5 py-1 rounded text-left ${(b?.transType ?? "") === a.v ? "bg-amber-400/20 text-amber-300" : "hover:bg-white/5 text-fg-muted"}`}>{a.l}</button>
+              ))}
+            </div>
           </div>
         );
       })()}
