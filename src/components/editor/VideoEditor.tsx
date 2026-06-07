@@ -71,6 +71,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const compRef = useRef<any>(null);
   const rafRef = useRef<number | null>(null);
   const dirtyRef = useRef(true); // composition needs rebuild
+  const buildingRef = useRef(false); // prevents concurrent rebuilds
   const rebuildTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
@@ -109,8 +110,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           c.kind === "video" ? new DS.VideoClip(src, { position: "center", height: "100%" })
           : c.kind === "image" ? new DS.ImageClip(src, { position: "center", height: "100%" })
           : new DS.AudioClip(src);
-        try { clip.start = c.start; } catch { /* */ }
-        try { clip.stop = c.start + c.duration; } catch { /* */ }
+        try { clip.start = `${c.start}s`; } catch { /* */ }
+        try { clip.duration = `${c.duration}s`; } catch { /* */ }
         await comp.add(clip);
       } catch (e) { console.error("[editor] clip failed", c, e); }
     }
@@ -121,27 +122,35 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           fontSize: Math.round(res.w / 16), fill: "#ffffff",
           stroke: { color: "#000000", width: 6 },
         });
-        try { clip.start = c.start; } catch { /* */ }
-        try { clip.stop = c.start + c.duration; } catch { /* */ }
+        try { clip.start = `${c.start}s`; } catch { /* */ }
+        try { clip.duration = `${c.duration}s`; } catch { /* */ }
         await comp.add(clip);
       } catch (e) { console.error("[editor] text failed", c, e); }
     }
-    try { comp.duration = totalDur; } catch { /* */ }
+    // composition duration is auto-computed from clips (no setter in 4.0.3)
     return comp;
   }, [clips, res, totalDur]);
 
   const fit = useCallback(() => {
     const c = containerRef.current, p = playerRef.current, comp = compRef.current;
     if (!c || !p || !comp) return;
-    const scale = Math.min(c.clientWidth / comp.width, c.clientHeight / comp.height) || 0.1;
-    p.style.width = `${comp.width}px`;
-    p.style.height = `${comp.height}px`;
-    p.style.transform = `scale(${scale})`;
+    const cw = c.clientWidth, ch = c.clientHeight;
+    if (cw < 2 || ch < 2) { requestAnimationFrame(fit); return; } // wait for layout
+    const compW = comp.width || res.w, compH = comp.height || res.h;
+    const scale = Math.min(cw / compW, ch / compH);
+    p.style.position = "absolute";
+    p.style.left = "50%";
+    p.style.top = "50%";
+    p.style.width = `${compW}px`;
+    p.style.height = `${compH}px`;
     p.style.transformOrigin = "center";
-  }, []);
+    p.style.transform = `translate(-50%, -50%) scale(${scale})`;
+  }, [res]);
 
   const rebuild = useCallback(async () => {
     if (!clips.length) return;
+    if (buildingRef.current) return;
+    buildingRef.current = true;
     setStatus("Building…");
     try {
       const old = compRef.current;
@@ -160,6 +169,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     } catch (e) {
       console.error(e);
       setStatus("Preview failed — see console.");
+    } finally {
+      buildingRef.current = false;
     }
   }, [clips.length, buildComposition, fit]);
 
