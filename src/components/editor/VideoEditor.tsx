@@ -105,7 +105,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
     for (const c of clips.filter((x) => x.track !== "text")) {
       try {
-        const src = await DS.Source.from(c.url);
+        const src = await DS.Source.from(c.url, { prefetch: true });
         const clip =
           c.kind === "video" ? new DS.VideoClip(src, { position: "center", height: "100%" })
           : c.kind === "image" ? new DS.ImageClip(src, { position: "center", height: "100%" })
