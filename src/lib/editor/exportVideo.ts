@@ -20,7 +20,19 @@ export type ExportClip = {
   scale: number;
   x: number;
   y: number;
+  fadeIn: number;
+  fadeOut: number;
 };
+
+function alphaAt(c: { start: number; duration: number; fadeIn: number; fadeOut: number }, tt: number): number {
+  if (tt < c.start || tt >= c.start + c.duration) return 0;
+  const into = tt - c.start;
+  const toEnd = c.start + c.duration - tt;
+  let a = 1;
+  if (c.fadeIn > 0) a = Math.min(a, into / c.fadeIn);
+  if (c.fadeOut > 0) a = Math.min(a, toEnd / c.fadeOut);
+  return Math.max(0, Math.min(1, a));
+}
 
 type Params = {
   clips: ExportClip[];
@@ -153,6 +165,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         if (active) {
           const loc = tt - c.start;
           if (Math.abs(el.currentTime - loc) > 0.35) { try { el.currentTime = loc; } catch { /* */ } }
+          try { (el as HTMLMediaElement).volume = alphaAt(c, tt); } catch { /* */ }
           if (el.paused) el.play().catch(() => {});
         } else if (!el.paused) el.pause();
       }
@@ -162,6 +175,8 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
       ctx.fillRect(0, 0, W, H);
       for (const c of clips) {
         if (!(tt >= c.start && tt < c.start + c.duration)) continue;
+        const alpha = alphaAt(c, tt);
+        ctx.globalAlpha = alpha;
         if (c.kind === "video" || c.kind === "image") {
           const el: HTMLVideoElement | HTMLImageElement | undefined = c.kind === "video" ? videos.get(c.id) : images.get(c.id);
           if (!el) continue;
@@ -186,6 +201,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
           ctx.restore();
         }
       }
+      ctx.globalAlpha = 1;
 
       // taint check on first frame
       if (tt < 0.1) {

@@ -27,7 +27,21 @@ type EditClip = {
   scale: number; // in-frame scale (1 = fit)
   x: number; // in-frame offset px (preview space)
   y: number;
+  fadeIn: number; // seconds
+  fadeOut: number; // seconds
 };
+
+// opacity (and audio volume) at time tt: 1 in the middle, ramps at fade edges.
+// Overlapping two clips each with a fade naturally produces a crossfade.
+function alphaAt(c: { start: number; duration: number; fadeIn: number; fadeOut: number }, tt: number): number {
+  if (tt < c.start || tt >= c.start + c.duration) return 0;
+  const into = tt - c.start;
+  const toEnd = c.start + c.duration - tt;
+  let a = 1;
+  if (c.fadeIn > 0) a = Math.min(a, into / c.fadeIn);
+  if (c.fadeOut > 0) a = Math.min(a, toEnd / c.fadeOut);
+  return Math.max(0, Math.min(1, a));
+}
 
 const RESOLUTIONS = [
   { key: "9:16", label: "Portrait 9:16", w: 1080, h: 1920 },
@@ -75,7 +89,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   // ── editing ──
   const makeClip = (kind: EditClip["kind"], track: Track, url: string | undefined, label: string, start: number, duration: number, text?: string): EditClip =>
-    ({ id: uid(), track, kind, url, label, start, duration, text, scale: 1, x: 0, y: 0 });
+    ({ id: uid(), track, kind, url, label, start, duration, text, scale: 1, x: 0, y: 0, fadeIn: 0, fadeOut: 0 });
   const addAssetAt = (a: { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null }, start?: number) => {
     const track: Track = a.kind === "audio" ? "audio" : "video";
     const duration = a.duration ?? DEFAULTS[a.kind];
@@ -113,6 +127,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       if (active) {
         const local = t - c.start;
         if (Math.abs(el.currentTime - local) > 0.3) { try { el.currentTime = local; } catch { /* */ } }
+        try { el.volume = alphaAt(c, t); } catch { /* */ }
         if (playingRef.current && el.paused) el.play().catch(() => {});
         if (!playingRef.current && !el.paused) el.pause();
       } else if (!el.paused) { el.pause(); }
@@ -181,7 +196,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     try {
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: clips.map((c) => ({ id: c.id, track: c.track, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y })),
+        clips: clips.map((c) => ({ id: c.id, track: c.track, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -328,7 +343,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 const isSel = selected === c.id;
                 return (
                   <div key={c.id} className="absolute inset-0"
-                    style={{ opacity: active ? 1 : 0, transform: transformOf(c), transformOrigin: "center", pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
+                    style={{ opacity: alphaAt(c, t), transform: transformOf(c), transformOrigin: "center", pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
                     onPointerDown={(e) => onVpDown(e, c, "move")}>
                     {c.kind === "image" && (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -443,6 +458,12 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     className="bg-bg-card border border-border rounded px-1.5 py-1 w-14 text-fg outline-none focus:border-brand" /></label>
               </>
             )}
+            <label className="flex items-center gap-1 text-fg-muted">fade in
+              <input type="number" min={0} step={0.1} value={sel.fadeIn} onChange={(e) => update(sel.id, { fadeIn: Math.max(0, Number(e.target.value) || 0) })}
+                className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
+            <label className="flex items-center gap-1 text-fg-muted">fade out
+              <input type="number" min={0} step={0.1} value={sel.fadeOut} onChange={(e) => update(sel.id, { fadeOut: Math.max(0, Number(e.target.value) || 0) })}
+                className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
             <button onClick={() => remove(sel.id)} className="text-red-400 hover:text-red-300 inline-flex items-center gap-1 ml-auto"><Trash2 size={13} /> delete</button>
           </div>
         )}
