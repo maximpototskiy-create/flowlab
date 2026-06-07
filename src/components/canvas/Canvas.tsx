@@ -18,6 +18,7 @@ import type { AssetItem } from "@/lib/assetsQuery";
 import ConnectionPicker from "./ConnectionPicker";
 import NodeExpandedModal from "./NodeExpandedModal";
 import CanvasToolbar from "./CanvasToolbar";
+import WorkflowBuilderPanel from "./WorkflowBuilderPanel";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
@@ -376,6 +377,27 @@ export default function Canvas({
     },
     [],
   );
+
+  // ── AI Workflow Builder ──
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const applyBuiltGraph = useCallback((built: Graph, mode: "insert" | "replace") => {
+    setGraph((g) => {
+      if (mode === "replace") {
+        return { nodes: built.nodes, edges: built.edges, groups: [] };
+      }
+      // Insert: drop the generated graph to the right of existing nodes so it
+      // doesn't overlap. Generated ids are random (n_…) so they won't collide.
+      const maxX = g.nodes.reduce((m, n) => Math.max(m, n.position.x), 0);
+      const dx = g.nodes.length ? maxX + 400 : 0;
+      const shifted = built.nodes.map((n) => ({ ...n, position: { x: n.position.x + dx, y: n.position.y } }));
+      return {
+        nodes: [...g.nodes, ...shifted],
+        edges: [...g.edges, ...built.edges],
+        groups: g.groups,
+      };
+    });
+    setBuilderOpen(false);
+  }, []);
 
   const deleteNode = useCallback((nodeId: string) => {
     setGraph((g) => {
@@ -1604,10 +1626,19 @@ export default function Canvas({
         runCount={runs.length}
         onRunAll={() => startRun()}
         onStopAll={() => stopAllRuns()}
+        onBuildAI={() => setBuilderOpen(true)}
         brandSlug={workflowMeta.brandSlug}
         projectId={workflowMeta.projectId}
         workflowId={workflowId}
       />
+
+      {builderOpen && (
+        <WorkflowBuilderPanel
+          brandHint={workflowMeta.brandSlug}
+          onApply={applyBuiltGraph}
+          onClose={() => setBuilderOpen(false)}
+        />
+      )}
 
       <div className="flex-1 flex min-h-0">
         <NodePalette

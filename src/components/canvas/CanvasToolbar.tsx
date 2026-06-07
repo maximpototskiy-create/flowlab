@@ -1,6 +1,6 @@
 "use client";
 
-import { Play, Square, Loader2, Check, History, BookOpen } from "lucide-react";
+import { Play, Square, Loader2, Check, History, BookOpen, Sparkles } from "lucide-react";
 import ThemeToggle from "../ThemeToggle";
 import Link from "next/link";
 import OtherActiveRunsBadge from "./OtherActiveRunsBadge";
@@ -12,6 +12,7 @@ export default function CanvasToolbar({
   runCount,
   onRunAll,
   onStopAll,
+  onBuildAI,
   brandSlug,
   projectId,
   workflowId,
@@ -22,6 +23,7 @@ export default function CanvasToolbar({
   runCount: number;
   onRunAll: () => void;
   onStopAll?: () => void;
+  onBuildAI?: () => void;
   brandSlug?: string | null;
   projectId: string;
   workflowId: string;
@@ -65,6 +67,17 @@ export default function CanvasToolbar({
         </Link>
 
         <ThemeToggle />
+
+        {onBuildAI && (
+          <button
+            onClick={onBuildAI}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-brand/40 bg-brand/10 hover:bg-brand/20 text-brand text-[12px] font-medium"
+            title="Build a workflow from a text brief"
+          >
+            <Sparkles size={12} />
+            Build with AI
+          </button>
+        )}
 
         {isRunning && onStopAll && (
           <button
