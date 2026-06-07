@@ -13,8 +13,8 @@
 
 export type CompClip = {
   id: string;
-  track: string;
-  kind: "video" | "image" | "audio" | "text" | "fx";
+  layer: string;
+  kind: "video" | "image" | "audio" | "text" | "fx" | "adjust";
   start: number;
   duration: number;
   scale: number;
@@ -65,11 +65,12 @@ export function computeAnim(c: { start: number; duration: number; anim?: string 
 }
 
 const end = (c: CompClip) => c.start + c.duration;
-// previous visual clip on the same track that overlaps c's start
+const isVisualKind = (k: CompClip["kind"]) => k === "video" || k === "image" || k === "text";
+// previous visual clip on the same layer that overlaps c's start
 function prevOverlap(c: CompClip, all: CompClip[]): CompClip | null {
   let best: CompClip | null = null;
   for (const a of all) {
-    if (a === c || a.track !== c.track || a.kind === "audio" || a.kind === "fx") continue;
+    if (a === c || a.layer !== c.layer || !isVisualKind(a.kind)) continue;
     if (a.start < c.start && end(a) > c.start) { if (!best || a.start > best.start) best = a; }
   }
   return best;
@@ -78,7 +79,7 @@ function prevOverlap(c: CompClip, all: CompClip[]): CompClip | null {
 function nextTransOverlap(c: CompClip, all: CompClip[]): CompClip | null {
   let best: CompClip | null = null;
   for (const b of all) {
-    if (b === c || b.track !== c.track || !b.transType) continue;
+    if (b === c || b.layer !== c.layer || !b.transType || !isVisualKind(b.kind)) continue;
     if (b.start > c.start && b.start < end(c)) { if (!best || b.start < best.start) best = b; }
   }
   return best;

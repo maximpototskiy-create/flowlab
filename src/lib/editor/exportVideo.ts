@@ -13,8 +13,8 @@ import { alphaAt, clipVisual, type CompClip } from "./compositor";
 
 export type ExportClip = {
   id: string;
-  track: "video" | "audio" | "text";
-  kind: "video" | "image" | "audio" | "text" | "fx";
+  layer: string;
+  kind: "video" | "image" | "audio" | "text" | "fx" | "adjust";
   url?: string;
   text?: string;
   start: number;
@@ -109,6 +109,10 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("no 2d context");
+  const tcanvas = document.createElement("canvas");
+  tcanvas.width = W; tcanvas.height = H;
+  const tctx = tcanvas.getContext("2d");
+  if (!tctx) throw new Error("no 2d context");
 
   // audio graph
   let audioStream: MediaStream | null = null;
@@ -170,7 +174,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
       ctx.fillRect(0, 0, W, H);
       for (const c of clips) {
         if (!(tt >= c.start && tt < c.start + c.duration)) continue;
-        if (c.kind === "fx") continue;
+        if (c.kind === "fx" || c.kind === "adjust") continue;
         const v = clipVisual(c as CompClip, tt, clips as CompClip[]);
         if (v.opacity <= 0.001) continue;
         ctx.save();
@@ -218,6 +222,17 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         ctx.restore();
       }
       ctx.globalAlpha = 1;
+
+      // adjustment layers: whole-frame CSS-style filter applied to the composite
+      const filt = clips.filter((c) => c.kind === "adjust" && tt >= c.start && tt < c.start + c.duration && c.fx).map((c) => c.fx).join(" ");
+      if (filt) {
+        tctx.clearRect(0, 0, W, H);
+        tctx.drawImage(canvas, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+        ctx.filter = filt;
+        ctx.drawImage(tcanvas, 0, 0);
+        ctx.filter = "none";
+      }
 
       // taint check on first frame
       if (tt < 0.1) {
