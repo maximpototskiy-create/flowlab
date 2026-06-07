@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Film, ImageIcon, Music, Type, Plus, Trash2, ChevronLeft, ChevronRight,
-  Play, Pause, Download, Loader2, Clapperboard,
+  Music, Type, Plus, Trash2, Play, Pause, SkipBack,
+  Download, Loader2, Clapperboard, ZoomIn, ZoomOut,
 } from "lucide-react";
 
 export type EditorAsset = {
@@ -22,8 +22,8 @@ type EditClip = {
   url?: string;
   text?: string;
   label: string;
-  duration: number; // seconds shown on the timeline
-  start: number; // start time on the timeline (text track only; video/audio are sequential)
+  start: number; // seconds on the timeline
+  duration: number; // seconds
 };
 
 const RESOLUTIONS = [
@@ -31,342 +31,344 @@ const RESOLUTIONS = [
   { key: "16:9", label: "Landscape 16:9", w: 1920, h: 1080 },
   { key: "1:1", label: "Square 1:1", w: 1080, h: 1080 },
 ];
-const PX_PER_SEC = 48;
-const DEFAULT_IMAGE_DUR = 3;
-const DEFAULT_TEXT_DUR = 3;
+const TRACKS: Track[] = ["video", "audio", "text"];
+const DEFAULTS = { image: 4, audio: 6, video: 4, text: 3 };
+const MIN_DUR = 0.3;
 
-// The editor engine (@diffusionstudio/core) is a WebCodecs/WASM browser library
-// that breaks the Next.js server build if bundled. So we load it from a CDN at
-// RUNTIME, in the browser only. `new Function` hides the import from the
-// bundler entirely (webpack/turbopack never tries to resolve or bundle it),
-// which also keeps it out of package.json/lockfile. Cached after first load.
+// Engine loaded from CDN at runtime (WebCodecs lib — never bundled). See patch 92.
 const ENGINE_CDN = "https://esm.sh/@diffusionstudio/core@4.0.3";
-let _enginePromise: Promise<any> | null = null;
+let _engine: Promise<any> | null = null;
 function loadEngine(): Promise<any> {
-  if (!_enginePromise) {
-    const dynImport = new Function("u", "return import(u)") as (u: string) => Promise<any>;
-    _enginePromise = dynImport(ENGINE_CDN);
+  if (!_engine) {
+    const dyn = new Function("u", "return import(u)") as (u: string) => Promise<any>;
+    _engine = dyn(ENGINE_CDN);
   }
-  return _enginePromise;
+  return _engine;
 }
 
 let _id = 0;
 const uid = () => `c${Date.now()}_${_id++}`;
+const fmt = (s: number) => {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+};
 
 export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [clips, setClips] = useState<EditClip[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [binFilter, setBinFilter] = useState<"all" | "video" | "image" | "audio">("all");
   const [resKey, setResKey] = useState("9:16");
-  const [building, setBuilding] = useState(false);
+  const [pxPerSec, setPxPerSec] = useState(60);
   const [playing, setPlaying] = useState(false);
+  const [playhead, setPlayhead] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<string | null>(null);
 
-  const previewRef = useRef<HTMLDivElement | null>(null);
-  const compRef = useRef<unknown>(null); // current diffusionstudio Composition
+  const containerRef = useRef<HTMLDivElement | null>(null); // bounded preview area
+  const playerRef = useRef<HTMLDivElement | null>(null); // engine mounts canvas here
+  const compRef = useRef<any>(null);
+  const rafRef = useRef<number | null>(null);
+  const dirtyRef = useRef(true); // composition needs rebuild
+  const rebuildTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
-  const filteredBin = assets.filter((a) => binFilter === "all" || a.kind === binFilter);
+  const bin = assets.filter((a) => binFilter === "all" || a.kind === binFilter);
+  const byTrack = (t: Track) => clips.filter((c) => c.track === t).sort((a, b) => a.start - b.start);
+  const totalDur = Math.max(1, ...clips.map((c) => c.start + c.duration));
+  const sel = clips.find((c) => c.id === selected) ?? null;
 
-  const byTrack = (t: Track) => clips.filter((c) => c.track === t);
-
-  // ── editing ops ──
+  const markDirty = () => { dirtyRef.current = true; };
   const addAsset = (a: EditorAsset) => {
     const track: Track = a.kind === "audio" ? "audio" : "video";
-    const duration = a.duration ?? (a.kind === "image" ? DEFAULT_IMAGE_DUR : a.kind === "audio" ? 5 : 4);
-    setClips((prev) => [
-      ...prev,
-      { id: uid(), track, kind: a.kind, url: a.url, label: a.label, duration, start: 0 },
-    ]);
+    const duration = a.duration ?? DEFAULTS[a.kind];
+    const start = Math.max(0, ...clips.filter((c) => c.track === track).map((c) => c.start + c.duration));
+    setClips((p) => [...p, { id: uid(), track, kind: a.kind, url: a.url, label: a.label, start, duration }]);
+    markDirty();
   };
   const addText = () => {
-    const existing = byTrack("text");
-    const start = existing.reduce((m, c) => Math.max(m, c.start + c.duration), 0);
-    setClips((prev) => [
-      ...prev,
-      { id: uid(), track: "text", kind: "text", text: "Your caption", label: "Text", duration: DEFAULT_TEXT_DUR, start },
-    ]);
+    setClips((p) => [...p, { id: uid(), track: "text", kind: "text", text: "Your caption", label: "Text", start: playhead, duration: DEFAULTS.text }]);
+    markDirty();
   };
-  const update = (id: string, patch: Partial<EditClip>) =>
-    setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  const remove = (id: string) =>
-    setClips((prev) => prev.filter((c) => c.id !== id));
-  const move = (id: string, dir: -1 | 1) =>
-    setClips((prev) => {
-      const c = prev.find((x) => x.id === id);
-      if (!c) return prev;
-      const sameTrack = prev.filter((x) => x.track === c.track);
-      const idx = sameTrack.indexOf(c);
-      const swap = sameTrack[idx + dir];
-      if (!swap) return prev;
-      const next = [...prev];
-      const i1 = next.indexOf(c), i2 = next.indexOf(swap);
-      [next[i1], next[i2]] = [next[i2], next[i1]];
-      return next;
-    });
+  const update = (id: string, patch: Partial<EditClip>) => {
+    setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    markDirty();
+  };
+  const remove = (id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected(null); markDirty(); };
 
-  // ── build a diffusionstudio Composition from the current tracks ──
-  // Lazy-imported so the WebCodecs engine never loads during SSR.
+  // ── build composition from clips ──
   const buildComposition = useCallback(async () => {
     const DS: any = await loadEngine();
     const comp = new DS.Composition({ width: res.w, height: res.h, background: "#000000" });
 
-    // video/image track — sequential, back to back
-    const vLayer = new DS.Layer();
-    let vt = 0;
-    for (const c of clips.filter((x) => x.track === "video")) {
+    for (const c of clips.filter((x) => x.track !== "text")) {
       try {
         const src = await DS.Source.from(c.url);
-        const clip = c.kind === "video" ? new DS.VideoClip(src) : new DS.ImageClip(src);
-        clip.start = vt;
-        try { clip.stop = vt + c.duration; } catch { /* duration via default */ }
-        if (c.kind === "video") { try { clip.trim(0, c.duration); } catch { /* no trim */ } }
-        vLayer.add(clip);
-        vt += c.duration;
-      } catch (e) {
-        console.error("[editor] video clip failed", c, e);
-      }
+        const clip =
+          c.kind === "video" ? new DS.VideoClip(src, { position: "center", height: "100%" })
+          : c.kind === "image" ? new DS.ImageClip(src, { position: "center", height: "100%" })
+          : new DS.AudioClip(src);
+        try { clip.start = c.start; } catch { /* */ }
+        try { clip.stop = c.start + c.duration; } catch { /* */ }
+        await comp.add(clip);
+      } catch (e) { console.error("[editor] clip failed", c, e); }
     }
-    await comp.add(vLayer);
-
-    // audio track — sequential
-    const aLayer = new DS.Layer();
-    let at = 0;
-    for (const c of clips.filter((x) => x.track === "audio")) {
-      try {
-        const src = await DS.Source.from(c.url);
-        const clip = new DS.AudioClip(src);
-        clip.start = at;
-        try { clip.stop = at + c.duration; } catch { /* full length */ }
-        aLayer.add(clip);
-        at += c.duration;
-      } catch (e) {
-        console.error("[editor] audio clip failed", c, e);
-      }
-    }
-    await comp.add(aLayer);
-
-    // text/caption track — explicit start
-    const tLayer = new DS.Layer();
     for (const c of clips.filter((x) => x.track === "text")) {
       try {
         const clip = new DS.TextClip({
-          text: c.text ?? "",
-          x: res.w / 2, y: res.h * 0.82, anchor: 0.5,
-          fontSize: Math.round(res.w / 18), fill: "#ffffff",
-          stroke: "#000000", strokeWidth: 4, textAlign: "center",
+          text: c.text ?? "", position: "center", align: "center", baseline: "middle",
+          fontSize: Math.round(res.w / 16), fill: "#ffffff",
+          stroke: { color: "#000000", width: 6 },
         });
-        clip.start = c.start;
-        try { clip.stop = c.start + c.duration; } catch { /* default */ }
-        tLayer.add(clip);
-      } catch (e) {
-        console.error("[editor] text clip failed", c, e);
-      }
+        try { clip.start = c.start; } catch { /* */ }
+        try { clip.stop = c.start + c.duration; } catch { /* */ }
+        await comp.add(clip);
+      } catch (e) { console.error("[editor] text failed", c, e); }
     }
-    await comp.add(tLayer);
-
+    try { comp.duration = totalDur; } catch { /* */ }
     return comp;
-  }, [clips, res]);
+  }, [clips, res, totalDur]);
 
-  // ── preview ──
-  const buildPreview = useCallback(async () => {
-    if (building || clips.length === 0) return;
-    setBuilding(true);
-    setStatus("Building preview…");
+  const fit = useCallback(() => {
+    const c = containerRef.current, p = playerRef.current, comp = compRef.current;
+    if (!c || !p || !comp) return;
+    const scale = Math.min(c.clientWidth / comp.width, c.clientHeight / comp.height) || 0.1;
+    p.style.width = `${comp.width}px`;
+    p.style.height = `${comp.height}px`;
+    p.style.transform = `scale(${scale})`;
+    p.style.transformOrigin = "center";
+  }, []);
+
+  const rebuild = useCallback(async () => {
+    if (!clips.length) return;
+    setStatus("Building…");
     try {
-      const prev = compRef.current as { unmount?: () => void } | null;
-      try { prev?.unmount?.(); } catch { /* ignore */ }
+      const old = compRef.current;
+      try { old?.pause?.(); old?.unmount?.(playerRef.current); } catch { /* */ }
       const comp = await buildComposition();
       compRef.current = comp;
-      if (previewRef.current) {
-        previewRef.current.innerHTML = "";
-        (comp as { mount: (el: HTMLElement) => void }).mount(previewRef.current);
+      if (playerRef.current) {
+        playerRef.current.innerHTML = "";
+        comp.mount(playerRef.current);
       }
-      await (comp as { seek: (t: number) => Promise<void> }).seek(0);
+      fit();
+      await comp.seek?.(0);
+      setPlayhead(0);
+      dirtyRef.current = false;
       setStatus(null);
     } catch (e) {
       console.error(e);
-      setStatus("Preview failed — check console. The engine may need a tweak for these assets.");
-    } finally {
-      setBuilding(false);
-      setPlaying(false);
+      setStatus("Preview failed — see console.");
     }
-  }, [building, clips.length, buildComposition]);
+  }, [clips.length, buildComposition, fit]);
 
-  const togglePlay = useCallback(async () => {
-    const comp = compRef.current as { play: () => Promise<void>; pause: () => Promise<void>; playing?: boolean } | null;
-    if (!comp) { await buildPreview(); return; }
+  // refit on container resize
+  useEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const ro = new ResizeObserver(() => fit());
+    ro.observe(c);
+    return () => ro.disconnect();
+  }, [fit]);
+
+  // debounced auto-rebuild after edits (keeps preview in sync)
+  useEffect(() => {
+    if (rebuildTimer.current) clearTimeout(rebuildTimer.current);
+    rebuildTimer.current = setTimeout(() => { if (dirtyRef.current) rebuild(); }, 500);
+    return () => { if (rebuildTimer.current) clearTimeout(rebuildTimer.current); };
+  }, [clips, resKey, rebuild]);
+
+  // playhead via RAF while playing (version-agnostic — reads currentTime)
+  const tick = useCallback(() => {
+    const comp = compRef.current;
+    if (!comp) return;
+    const t = typeof comp.currentTime === "number" ? comp.currentTime : 0;
+    setPlayhead(t);
+    if (comp.playing) rafRef.current = requestAnimationFrame(tick);
+    else setPlaying(false);
+  }, []);
+
+  const play = useCallback(async () => {
+    let comp = compRef.current;
+    if (!comp || dirtyRef.current) { await rebuild(); comp = compRef.current; }
+    if (!comp) return;
     try {
-      if (playing) { await comp.pause(); setPlaying(false); }
-      else { await comp.play(); setPlaying(true); }
+      if (playing || comp.playing) {
+        await comp.pause(); setPlaying(false);
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      } else {
+        await comp.play(); setPlaying(true);
+        rafRef.current = requestAnimationFrame(tick);
+      }
     } catch (e) { console.error(e); }
-  }, [playing, buildPreview]);
+  }, [playing, rebuild, tick]);
 
-  // ── export ──
+  const seek = useCallback(async (sec: number) => {
+    setPlayhead(Math.max(0, sec));
+    try { await compRef.current?.seek?.(Math.max(0, sec)); } catch { /* */ }
+  }, []);
+
   const exportMp4 = useCallback(async () => {
-    if (exporting || clips.length === 0) return;
-    setExporting(true);
-    setStatus("Rendering MP4 in your browser… this can take a while.");
+    if (exporting || !clips.length) return;
+    setExporting(true); setProgress(0); setStatus("Rendering MP4…");
     try {
       const DS: any = await loadEngine();
       const comp = await buildComposition();
-      const result = await new DS.Encoder(comp).render();
+      const enc = new DS.Encoder(comp);
+      try { enc.on?.("render", (e: any) => { const d = e?.detail; if (d?.total) setProgress(Math.round((d.progress * 100) / d.total)); }); } catch { /* */ }
+      const result = await enc.render();
       const blob: Blob = result instanceof Blob ? result : (result?.blob ?? result);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = `flowlab-export-${Date.now()}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      a.href = url; a.download = `flowlab-${Date.now()}.mp4`;
+      document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
       setStatus("Done — MP4 downloaded.");
-    } catch (e) {
-      console.error(e);
-      setStatus("Export failed — check console.");
-    } finally {
-      setExporting(false);
-    }
+    } catch (e) { console.error(e); setStatus("Export failed — see console."); }
+    finally { setExporting(false); }
   }, [exporting, clips.length, buildComposition]);
 
-  const totalDur = Math.max(
-    byTrack("video").reduce((s, c) => s + c.duration, 0),
-    byTrack("audio").reduce((s, c) => s + c.duration, 0),
-    byTrack("text").reduce((m, c) => Math.max(m, c.start + c.duration), 0),
-  );
-  const sel = clips.find((c) => c.id === selected) ?? null;
+  // ── clip drag/trim on the timeline ──
+  const dragRef = useRef<{ id: string; mode: "move" | "trim"; startX: number; origStart: number; origDur: number } | null>(null);
+  const onPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim") => {
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    dragRef.current = { id: c.id, mode, startX: e.clientX, origStart: c.start, origDur: c.duration };
+    setSelected(c.id);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = (e.clientX - d.startX) / pxPerSec;
+    if (d.mode === "move") update(d.id, { start: Math.max(0, +(d.origStart + dx).toFixed(2)) });
+    else update(d.id, { duration: Math.max(MIN_DUR, +(d.origDur + dx).toFixed(2)) });
+  };
+  const onPointerUp = () => { dragRef.current = null; };
 
   return (
     <div className="flex-1 flex min-h-0">
       {/* ── Asset bin ── */}
-      <aside className="w-64 shrink-0 border-r border-border flex flex-col">
-        <div className="h-11 border-b border-border flex items-center gap-1 px-2 text-[11px]">
+      <aside className="w-60 shrink-0 border-r border-border flex flex-col min-h-0">
+        <div className="h-11 shrink-0 border-b border-border flex items-center gap-1 px-2 text-[11px]">
           {(["all", "video", "image", "audio"] as const).map((f) => (
-            <button
-              key={f}
-              onClick={() => setBinFilter(f)}
-              className={`px-2 py-1 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}
-            >
-              {f}
-            </button>
+            <button key={f} onClick={() => setBinFilter(f)}
+              className={`px-2 py-1 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}>{f}</button>
           ))}
         </div>
-        <div className="flex-1 overflow-y-auto p-2 grid grid-cols-2 gap-2 content-start">
-          {filteredBin.map((a) => (
-            <button
-              key={a.id}
-              onClick={() => addAsset(a)}
-              title={a.label}
-              className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand"
-            >
-              {a.kind === "image" ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={a.url} alt="" className="w-full h-full object-cover" loading="lazy" />
-              ) : a.kind === "video" ? (
-                <video src={a.url} muted playsInline preload="metadata" className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-fg-subtle"><Music size={20} /></div>
-              )}
-              <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
-              <span className="absolute inset-0 bg-black/0 group-hover:bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100">
-                <Plus size={18} className="text-white" />
-              </span>
-            </button>
-          ))}
-          {filteredBin.length === 0 && <div className="col-span-2 text-fg-subtle text-[11px] p-3">No assets.</div>}
+        <div className="flex-1 min-h-0 overflow-y-auto p-2">
+          <div className="grid grid-cols-2 gap-2">
+            {bin.map((a) => (
+              <button key={a.id} onClick={() => addAsset(a)} title={a.label}
+                className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand">
+                {a.kind === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" />
+                ) : a.kind === "video" ? (
+                  <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>
+                )}
+                <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
+                <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
+              </button>
+            ))}
+            {bin.length === 0 && <div className="col-span-2 text-fg-subtle text-[11px] p-3">No assets.</div>}
+          </div>
         </div>
-        <button onClick={addText} className="m-2 inline-flex items-center justify-center gap-1.5 py-2 rounded-md border border-border text-fg-muted hover:text-fg text-[12px]">
+        <button onClick={addText} className="m-2 shrink-0 inline-flex items-center justify-center gap-1.5 py-2 rounded-md border border-border text-fg-muted hover:text-fg text-[12px]">
           <Type size={13} /> Add text
         </button>
       </aside>
 
-      {/* ── Main: preview + timeline ── */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* ── Main ── */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Toolbar */}
-        <div className="h-11 border-b border-border flex items-center justify-between px-3 gap-2">
-          <div className="flex items-center gap-2 text-fg text-[13px] font-medium">
-            <Clapperboard size={14} className="text-brand" /> Editor
-          </div>
+        <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 gap-2">
+          <div className="flex items-center gap-2 text-fg text-[13px] font-medium"><Clapperboard size={14} className="text-brand" /> Editor</div>
           <div className="flex items-center gap-2">
-            <select value={resKey} onChange={(e) => setResKey(e.target.value)} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
+            <select value={resKey} onChange={(e) => { setResKey(e.target.value); markDirty(); }} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
               {RESOLUTIONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
-            <button onClick={buildPreview} disabled={building || !clips.length} className="px-3 py-1.5 rounded-md border border-border text-fg-muted hover:text-fg text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
-              {building ? <Loader2 size={13} className="animate-spin" /> : <Film size={13} />} Preview
-            </button>
             <button onClick={exportMp4} disabled={exporting || !clips.length} className="px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
-              {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Export MP4
+              {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{exporting ? `${progress}%` : "Export MP4"}
             </button>
           </div>
         </div>
 
-        {/* Preview */}
-        <div className="flex-1 min-h-0 bg-black flex items-center justify-center p-4 overflow-hidden">
-          <div
-            ref={previewRef}
-            className="max-h-full max-w-full flex items-center justify-center [&>canvas]:!h-auto [&>canvas]:!w-auto [&>canvas]:!max-h-full [&>canvas]:!max-w-full [&>canvas]:object-contain"
-          />
+        {/* Preview (bounded; canvas scaled to fit) */}
+        <div ref={containerRef} className="flex-1 min-h-0 bg-black flex items-center justify-center overflow-hidden relative">
+          <div ref={playerRef} />
+          {!clips.length && <div className="absolute text-fg-subtle text-[12px]">Add assets from the left to start.</div>}
         </div>
 
-        {/* Transport + status */}
-        <div className="h-9 border-t border-border flex items-center gap-3 px-3 text-[11px] text-fg-muted">
-          <button onClick={togglePlay} className="text-fg hover:text-brand">{playing ? <Pause size={15} /> : <Play size={15} />}</button>
-          <span className="tabular-nums">{totalDur.toFixed(1)}s total</span>
-          {status && <span className="text-fg-subtle truncate">· {status}</span>}
+        {/* Transport */}
+        <div className="h-9 shrink-0 border-t border-border flex items-center gap-3 px-3 text-[11px] text-fg-muted">
+          <button onClick={() => seek(0)} className="hover:text-fg"><SkipBack size={14} /></button>
+          <button onClick={play} className="text-fg hover:text-brand">{playing ? <Pause size={16} /> : <Play size={16} />}</button>
+          <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
+          <div className="ml-auto flex items-center gap-1.5">
+            <button onClick={() => setPxPerSec((z) => Math.max(20, z - 20))} className="hover:text-fg"><ZoomOut size={13} /></button>
+            <button onClick={() => setPxPerSec((z) => Math.min(200, z + 20))} className="hover:text-fg"><ZoomIn size={13} /></button>
+          </div>
+          {status && <span className="text-fg-subtle truncate max-w-[40%]">· {status}</span>}
         </div>
 
         {/* Timeline */}
-        <div className="h-44 border-t border-border overflow-auto bg-bg-card/40">
-          {(["video", "audio", "text"] as Track[]).map((track) => (
-            <div key={track} className="flex items-stretch border-b border-border/60 min-h-[44px]">
-              <div className="w-16 shrink-0 flex items-center justify-center text-[9px] uppercase tracking-wider text-fg-subtle border-r border-border/60">
-                {track}
-              </div>
-              <div className="flex-1 flex items-center gap-1 p-1.5">
-                {byTrack(track).map((c) => (
-                  <button
-                    key={c.id}
-                    onClick={() => setSelected(c.id)}
-                    style={{ width: Math.max(40, c.duration * PX_PER_SEC) }}
-                    className={`h-8 shrink-0 rounded px-2 text-[10px] truncate text-left border ${
-                      selected === c.id ? "border-brand bg-brand/15 text-brand" : "border-border bg-bg-card text-fg-muted"
-                    }`}
-                    title={c.label}
-                  >
-                    {c.kind === "text" ? (c.text || "Text") : c.label}
-                  </button>
-                ))}
-              </div>
+        <div className="h-48 shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none"
+          onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}>
+          <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
+            {/* Ruler */}
+            <div className="h-6 relative border-b border-border/60 ml-16 cursor-pointer" onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              seek((e.clientX - rect.left) / pxPerSec);
+            }}>
+              {Array.from({ length: Math.ceil(totalDur) + 1 }).map((_, s) => (
+                <div key={s} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1" style={{ left: s * pxPerSec }}>{s}s</div>
+              ))}
+              <div className="absolute top-0 bottom-0 w-0.5 bg-brand pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
             </div>
-          ))}
+
+            {/* Tracks */}
+            {TRACKS.map((track) => (
+              <div key={track} className="flex items-stretch border-b border-border/40 min-h-[48px]">
+                <div className="w-16 shrink-0 flex items-center justify-center text-[9px] uppercase tracking-wider text-fg-subtle border-r border-border/40">{track}</div>
+                <div className="relative flex-1 h-12">
+                  <div className="absolute top-0 bottom-0 w-0.5 bg-brand/60 pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
+                  {byTrack(track).map((c) => (
+                    <div key={c.id}
+                      onPointerDown={(e) => onPointerDown(e, c, "move")}
+                      onClick={() => setSelected(c.id)}
+                      style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
+                      className={`absolute top-1.5 h-9 rounded px-2 text-[10px] leading-9 truncate cursor-grab active:cursor-grabbing border ${
+                        selected === c.id ? "border-brand bg-brand/20 text-brand z-10" : "border-border bg-bg-card text-fg-muted"
+                      }`}>
+                      {c.kind === "text" ? (c.text || "Text") : c.label}
+                      <span onPointerDown={(e) => onPointerDown(e, c, "trim")}
+                        className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* Selected clip inspector */}
+        {/* Inspector */}
         {sel && (
-          <div className="border-t border-border p-2 flex items-center gap-3 text-[11px] flex-wrap">
+          <div className="shrink-0 border-t border-border p-2 flex items-center gap-3 text-[11px] flex-wrap">
             <span className="text-fg-subtle uppercase tracking-wider">{sel.kind}</span>
             {sel.kind === "text" && (
               <input value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })}
-                className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-56 outline-none focus:border-brand" placeholder="Caption text" />
+                className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-56 outline-none focus:border-brand" placeholder="Caption" />
             )}
-            <label className="flex items-center gap-1 text-fg-muted">
-              dur
-              <input type="number" min={0.5} step={0.5} value={sel.duration}
-                onChange={(e) => update(sel.id, { duration: Math.max(0.5, Number(e.target.value) || 0.5) })}
-                className="bg-bg-card border border-border rounded px-1.5 py-1 w-16 text-fg outline-none focus:border-brand" />s
-            </label>
-            {sel.track === "text" && (
-              <label className="flex items-center gap-1 text-fg-muted">
-                start
-                <input type="number" min={0} step={0.5} value={sel.start}
-                  onChange={(e) => update(sel.id, { start: Math.max(0, Number(e.target.value) || 0) })}
-                  className="bg-bg-card border border-border rounded px-1.5 py-1 w-16 text-fg outline-none focus:border-brand" />s
-              </label>
-            )}
-            <button onClick={() => move(sel.id, -1)} className="text-fg-muted hover:text-fg"><ChevronLeft size={15} /></button>
-            <button onClick={() => move(sel.id, 1)} className="text-fg-muted hover:text-fg"><ChevronRight size={15} /></button>
-            <button onClick={() => { remove(sel.id); setSelected(null); }} className="text-red-400 hover:text-red-300 inline-flex items-center gap-1"><Trash2 size={13} /> delete</button>
+            <label className="flex items-center gap-1 text-fg-muted">start
+              <input type="number" min={0} step={0.1} value={sel.start} onChange={(e) => update(sel.id, { start: Math.max(0, Number(e.target.value) || 0) })}
+                className="bg-bg-card border border-border rounded px-1.5 py-1 w-16 text-fg outline-none focus:border-brand" />s</label>
+            <label className="flex items-center gap-1 text-fg-muted">dur
+              <input type="number" min={MIN_DUR} step={0.1} value={sel.duration} onChange={(e) => update(sel.id, { duration: Math.max(MIN_DUR, Number(e.target.value) || MIN_DUR) })}
+                className="bg-bg-card border border-border rounded px-1.5 py-1 w-16 text-fg outline-none focus:border-brand" />s</label>
+            <button onClick={() => remove(sel.id)} className="text-red-400 hover:text-red-300 inline-flex items-center gap-1 ml-auto"><Trash2 size={13} /> delete</button>
           </div>
         )}
       </div>
