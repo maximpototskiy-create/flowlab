@@ -30,13 +30,19 @@ type Params = {
   onProgress?: (p: number) => void;
 };
 
+// Cache-bust so the crossOrigin fetch isn't served from a previously cached
+// (non-CORS) response loaded by the preview/bin — that would taint the canvas.
+function corsUrl(u: string): string {
+  return u + (u.includes("?") ? "&" : "?") + "flcors=1";
+}
+
 function loadVideoEl(url: string): Promise<HTMLVideoElement> {
   return new Promise((resolve, reject) => {
     const v = document.createElement("video");
     v.crossOrigin = "anonymous";
     v.preload = "auto";
     v.playsInline = true;
-    v.src = url;
+    v.src = corsUrl(url);
     v.onloadeddata = () => resolve(v);
     v.onerror = () => reject(new Error("video load failed (CORS?)"));
   });
@@ -45,7 +51,7 @@ function loadImgEl(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const i = new Image();
     i.crossOrigin = "anonymous";
-    i.src = url;
+    i.src = corsUrl(url);
     i.onload = () => resolve(i);
     i.onerror = () => reject(new Error("image load failed (CORS?)"));
   });
@@ -55,7 +61,7 @@ function loadAudioEl(url: string): Promise<HTMLAudioElement> {
     const a = document.createElement("audio");
     a.crossOrigin = "anonymous";
     a.preload = "auto";
-    a.src = url;
+    a.src = corsUrl(url);
     a.onloadeddata = () => resolve(a);
     a.onerror = () => reject(new Error("audio load failed (CORS?)"));
   });
