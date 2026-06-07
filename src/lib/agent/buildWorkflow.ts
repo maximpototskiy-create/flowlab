@@ -51,6 +51,7 @@ Output STRICT JSON ONLY (no markdown, no prose outside JSON) of the shape:
 }
 
 Rules:
+- The user's brief may be written in Russian or any other language. ALWAYS write every node's "prompt"/instruction text in ENGLISH, and write the "summary" in English too — regardless of the brief's language. (Image/video models render on-screen text in English and respond best to English prompts.)
 - Use ONLY node types from the catalog below. Never invent a type or a port name.
 - "ref" is your own temporary label to wire edges; it must be unique within nodes.
 - Put the node's main instruction (the prompt/script/description) in "prompt". It is written into the node's primary field automatically.
