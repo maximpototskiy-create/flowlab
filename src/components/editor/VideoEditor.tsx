@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
-  Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2, Layers,
+  Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
 } from "lucide-react";
 
 export type EditorAsset = {
@@ -75,6 +75,12 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
+
+  const laneRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const stripRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const dropHintRef = useRef<typeof dropHint>(null);
+  dropHintRef.current = dropHint;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mediaRefs = useRef<Map<string, HTMLVideoElement | HTMLAudioElement>>(new Map());
@@ -112,9 +118,23 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const update = (id: string, patch: Partial<EditClip>) => setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected((s) => (s === id ? null : s)); }, []);
   const duplicate = (id: string) => setClips((p) => { const c = p.find((x) => x.id === id); return c ? [...p, { ...c, id: uid(), start: c.start + 0.3 }] : p; });
-  const addVisualLayer = () => setLayers((p) => { const n = p.filter((l) => l.type === "visual").length + 1; return [{ id: `v${Date.now()}_${_l++}`, name: `V${n}`, type: "visual" }, ...p]; });
-  const addAudioLayer = () => setLayers((p) => { const n = p.filter((l) => l.type === "audio").length + 1; return [...p, { id: `a${Date.now()}_${_l++}`, name: `A${n}`, type: "audio" }]; });
-  const removeLayer = (id: string) => { if (layers.length <= 1) return; setLayers((p) => p.filter((l) => l.id !== id)); setClips((p) => p.filter((c) => c.layer !== id)); };
+  const layerType = (c: { kind: Kind }): LayerType => (c.kind === "audio" ? "audio" : "visual");
+  const createLayerAt = (index: number, type: LayerType): string => {
+    const id = `${type === "visual" ? "v" : "a"}${Date.now()}_${_l++}`;
+    const name = `${type === "visual" ? "V" : "A"}${layers.filter((l) => l.type === type).length + 1}`;
+    setLayers((p) => { const n = [...p]; n.splice(Math.max(0, Math.min(index, n.length)), 0, { id, name, type }); return n; });
+    return id;
+  };
+  // auto-prune empty layers (keep ≥1 visual and ≥1 audio) — tracks appear/disappear like CapCut
+  useEffect(() => {
+    setLayers((prev) => {
+      const used = new Set(clips.map((c) => c.layer));
+      const next = prev.filter((l) => used.has(l.id));
+      if (!next.some((l) => l.type === "visual")) { const v = prev.find((l) => l.type === "visual"); if (v) next.unshift(v); }
+      if (!next.some((l) => l.type === "audio")) { const a = prev.find((l) => l.type === "audio"); if (a) next.push(a); }
+      return next.length === prev.length ? prev : next;
+    });
+  }, [clips]);
 
   useEffect(() => {
     const c = containerRef.current; if (!c) return;
@@ -201,17 +221,29 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     finally { setExporting(false); }
   }, [exporting, clips, layers, res, previewSize, stop]);
 
-  const dragRef = useRef<{ id: string; mode: "move" | "trim"; startX: number; origStart: number; origDur: number } | null>(null);
+  const dragRef = useRef<{ id: string; mode: "move" | "trim"; startX: number; origStart: number; origDur: number; type: LayerType } | null>(null);
+  const hitTest = (clientY: number, type: LayerType): { type: "lane" | "strip"; id: string } | null => {
+    for (const [id, el] of stripRefs.current) { const r = el.getBoundingClientRect(); if (clientY >= r.top - 3 && clientY <= r.bottom + 3) return { type: "strip", id }; }
+    for (const [id, el] of laneRefs.current) { const r = el.getBoundingClientRect(); if (clientY >= r.top && clientY <= r.bottom) { const lane = layers.find((l) => l.id === id); return lane && lane.type === type ? { type: "lane", id } : null; } }
+    return null;
+  };
   const onClipPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim") => {
     e.stopPropagation(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    dragRef.current = { id: c.id, mode, startX: e.clientX, origStart: c.start, origDur: c.duration }; setSelected(c.id);
+    dragRef.current = { id: c.id, mode, startX: e.clientX, origStart: c.start, origDur: c.duration, type: layerType(c) }; setSelected(c.id);
   };
   const onClipPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current; if (!d) return; const dx = (e.clientX - d.startX) / pxPerSec;
-    if (d.mode === "move") update(d.id, { start: Math.max(0, +(d.origStart + dx).toFixed(2)) });
+    if (d.mode === "move") { update(d.id, { start: Math.max(0, +(d.origStart + dx).toFixed(2)) }); setDropHint(hitTest(e.clientY, d.type)); }
     else update(d.id, { duration: Math.max(MIN_DUR, +(d.origDur + dx).toFixed(2)) });
   };
-  const onClipPointerUp = () => { dragRef.current = null; };
+  const onClipPointerUp = () => {
+    const d = dragRef.current; dragRef.current = null;
+    const hint = dropHintRef.current; setDropHint(null);
+    if (!d || d.mode !== "move" || !hint) return;
+    const clip = clipsRef.current.find((c) => c.id === d.id); if (!clip) return;
+    if (hint.type === "lane") { if (hint.id !== clip.layer) update(d.id, { layer: hint.id }); }
+    else { const index = Number(hint.id.split("-")[1]); const id = createLayerAt(index, d.type); update(d.id, { layer: id }); }
+  };
 
   const scrubRef = useRef(false);
   const seekFromRuler = (clientX: number, el: HTMLElement) => { const r = el.getBoundingClientRect(); seek((clientX - r.left) / pxPerSec); };
@@ -236,13 +268,20 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     e.dataTransfer.effectAllowed = "copy";
   };
   const onLaneDrop = (e: React.DragEvent, layer: Layer) => {
-    e.preventDefault();
+    e.preventDefault(); setDropHint(null);
     const raw = e.dataTransfer.getData("application/x-flowlab-asset"); if (!raw) return;
     const a = JSON.parse(raw) as { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null };
-    const wantType: LayerType = a.kind === "audio" ? "audio" : "visual";
-    if (wantType !== layer.type) return;
+    if ((a.kind === "audio" ? "audio" : "visual") !== layer.type) return;
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     addAssetAt(a, layer.id, Math.max(0, (e.clientX - r.left) / pxPerSec));
+  };
+  const onStripDrop = (e: React.DragEvent, index: number) => {
+    e.preventDefault(); setDropHint(null);
+    const raw = e.dataTransfer.getData("application/x-flowlab-asset"); if (!raw) return;
+    const a = JSON.parse(raw) as { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null };
+    const id = createLayerAt(index, a.kind === "audio" ? "audio" : "visual");
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    addAssetAt(a, id, Math.max(0, (e.clientX - r.left) / pxPerSec));
   };
 
   const onClipContext = (e: React.MouseEvent, c: EditClip) => { e.preventDefault(); e.stopPropagation(); setSelected(c.id); setMenu({ x: e.clientX, y: e.clientY, id: c.id }); };
@@ -364,8 +403,6 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           <button onClick={play} className="text-fg hover:text-brand">{playing ? <Pause size={16} /> : <Play size={16} />}</button>
           <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={addVisualLayer} className="hover:text-fg inline-flex items-center gap-1" title="Add video layer"><Layers size={13} /> +V</button>
-            <button onClick={addAudioLayer} className="hover:text-fg inline-flex items-center gap-1" title="Add audio layer"><Music size={12} /> +A</button>
             <button onClick={() => setPxPerSec((z) => Math.max(20, z - 20))} className="hover:text-fg"><ZoomOut size={13} /></button>
             <button onClick={() => setPxPerSec((z) => Math.min(200, z + 20))} className="hover:text-fg"><ZoomIn size={13} /></button>
           </div>
@@ -382,28 +419,53 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               ))}
               <div className="absolute top-0 bottom-0 w-0.5 bg-brand pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
             </div>
-            {layers.map((layer) => (
-              <div key={layer.id} className="flex items-stretch border-b border-border/40 min-h-[48px]">
-                <div className="w-20 shrink-0 flex items-center justify-between px-1.5 text-[9px] uppercase tracking-wider text-fg-subtle border-r border-border/40">
-                  <span>{layer.name}</span>
-                  {layers.length > 1 && <button onClick={() => removeLayer(layer.id)} className="text-fg-subtle hover:text-red-400" title="Remove layer"><Trash2 size={10} /></button>}
+            {layers.map((layer, li) => (
+              <div key={layer.id}>
+                {/* insertion strip above this layer */}
+                <div className="flex h-2.5 items-center">
+                  <div className="w-20 shrink-0" />
+                  <div ref={(el) => { if (el) stripRefs.current.set(`strip-${li}`, el); else stripRefs.current.delete(`strip-${li}`); }}
+                    onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li}` }); }}
+                    onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li}` ? null : h))}
+                    onDrop={(e) => onStripDrop(e, li)}
+                    className={`flex-1 rounded transition-all ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "h-2.5 bg-brand/50 ring-1 ring-brand" : "h-0.5 bg-border/30"}`} />
                 </div>
-                <div className="relative flex-1 h-12" onDragOver={(e) => e.preventDefault()} onDrop={(e) => onLaneDrop(e, layer)}>
-                  <div className="absolute top-0 bottom-0 w-0.5 bg-brand/60 pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
-                  {onLayer(layer.id).map((c) => (
-                    <div key={c.id} onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={() => setSelected(c.id)} onContextMenu={(e) => onClipContext(e, c)}
-                      style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
-                      className={`absolute top-1.5 h-9 rounded px-2 text-[10px] leading-9 truncate cursor-grab active:cursor-grabbing border touch-none ${
-                        selected === c.id ? "border-brand bg-brand/20 text-brand z-10"
-                        : c.kind === "fx" ? "border-purple-500/50 bg-purple-500/15 text-purple-300"
-                        : c.kind === "adjust" ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
-                        : "border-border bg-bg-card text-fg-muted"}`}>
-                      {c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}
-                      {c.transType && <span title={`transition: ${c.transType}`} className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rotate-45 bg-amber-400 border border-amber-200 z-10" />}
-                      <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r" />
-                    </div>
-                  ))}
+                <div className="flex items-stretch border-b border-border/40 min-h-[48px]">
+                  <div className="w-20 shrink-0 flex items-center justify-between px-1.5 text-[9px] uppercase tracking-wider text-fg-subtle border-r border-border/40">
+                    <span>{layer.name}</span>
+                  </div>
+                  <div ref={(el) => { if (el) laneRefs.current.set(layer.id, el); else laneRefs.current.delete(layer.id); }}
+                    className={`relative flex-1 h-12 ${dropHint?.type === "lane" && dropHint.id === layer.id ? "bg-brand/10 ring-1 ring-inset ring-brand/50" : ""}`}
+                    onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "lane", id: layer.id }); }}
+                    onDragLeave={() => setDropHint((h) => (h?.type === "lane" && h.id === layer.id ? null : h))}
+                    onDrop={(e) => onLaneDrop(e, layer)}>
+                    <div className="absolute top-0 bottom-0 w-0.5 bg-brand/60 pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
+                    {onLayer(layer.id).map((c) => (
+                      <div key={c.id} onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={() => setSelected(c.id)} onContextMenu={(e) => onClipContext(e, c)}
+                        style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
+                        className={`absolute top-1.5 h-9 rounded px-2 text-[10px] leading-9 truncate cursor-grab active:cursor-grabbing border touch-none ${
+                          selected === c.id ? "border-brand bg-brand/20 text-brand z-10"
+                          : c.kind === "fx" ? "border-purple-500/50 bg-purple-500/15 text-purple-300"
+                          : c.kind === "adjust" ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
+                          : "border-border bg-bg-card text-fg-muted"}`}>
+                        {c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}
+                        {c.transType && <span title={`transition: ${c.transType}`} className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rotate-45 bg-amber-400 border border-amber-200 z-10" />}
+                        <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r" />
+                      </div>
+                    ))}
+                  </div>
                 </div>
+                {/* bottom insertion strip after the last layer */}
+                {li === layers.length - 1 && (
+                  <div className="flex h-2.5 items-center">
+                    <div className="w-20 shrink-0" />
+                    <div ref={(el) => { if (el) stripRefs.current.set(`strip-${li + 1}`, el); else stripRefs.current.delete(`strip-${li + 1}`); }}
+                      onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li + 1}` }); }}
+                      onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li + 1}` ? null : h))}
+                      onDrop={(e) => onStripDrop(e, li + 1)}
+                      className={`flex-1 rounded transition-all ${dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}` ? "h-2.5 bg-brand/50 ring-1 ring-brand" : "h-0.5 bg-border/30"}`} />
+                  </div>
+                )}
               </div>
             ))}
           </div>
