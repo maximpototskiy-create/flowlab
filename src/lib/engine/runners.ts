@@ -3,6 +3,7 @@
 // Generated assets are uploaded to Supabase Storage and recorded in DB.
 
 import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
+import { createVideoFromPrompt, pollVideo } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 
@@ -827,6 +828,22 @@ export async function runNode(
         outputs: { video: persisted },
         costUsd: estimateCost(model, { duration: Number(duration) }),
         durationMs: Date.now() - t0,
+      };
+    }
+
+    case "heygenVideo": {
+      const prompt = String(config.instructions || inputs.prompt || "").trim();
+      if (!prompt) throw new Error("Provide a prompt/script (input or instructions)");
+      const videoId = await createVideoFromPrompt(prompt);
+      const url = await pollVideo(videoId);
+      const persisted = await persistAsset(url, ctx, "heygen");
+      return {
+        // Cost is billed by HeyGen in credits (plan-dependent); not mapped to
+        // USD yet, so reported as 0 here. TODO: credits→USD once a plan is set.
+        outputs: { video: persisted },
+        costUsd: 0,
+        durationMs: Date.now() - t0,
+        metadata: { provider: "heygen", videoId },
       };
     }
 

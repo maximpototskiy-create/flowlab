@@ -1058,6 +1058,22 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     quickFields: ["model"],
   },
 
+  heygenVideo: {
+    name: "HeyGen Avatar",
+    category: "video",
+    icon: "user-round",
+    description: "Generate a talking-avatar video from a prompt/script via HeyGen (async, renders in minutes).",
+    inputs: [{ name: "prompt", type: "text", optional: true }],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: { instructions: "" },
+    fields: [],
+    primaryField: "instructions",
+    primaryLabel: "Prompt / script",
+    primaryPlaceholder: "A friendly presenter explaining our product launch in 30 seconds…",
+    examples: ["A presenter introducing our app in 20 seconds"],
+    starters: ["A spokesperson explaining…"],
+  },
+
   uploadVideo: {
     name: "Upload Video",
     category: "video",
