@@ -260,9 +260,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               title={a.label}
               className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand"
             >
-              {a.kind === "image" || a.kind === "video" ? (
+              {a.kind === "image" ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={a.url} alt="" className="w-full h-full object-cover" loading="lazy" />
+              ) : a.kind === "video" ? (
+                <video src={a.url} muted playsInline preload="metadata" className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-fg-subtle"><Music size={20} /></div>
               )}
@@ -300,8 +302,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         </div>
 
         {/* Preview */}
-        <div className="flex-1 min-h-0 bg-black flex items-center justify-center p-4">
-          <div ref={previewRef} className="max-h-full max-w-full [&>canvas]:max-h-full [&>canvas]:max-w-full [&>canvas]:object-contain" style={{ aspectRatio: `${res.w}/${res.h}` }} />
+        <div className="flex-1 min-h-0 bg-black flex items-center justify-center p-4 overflow-hidden">
+          <div
+            ref={previewRef}
+            className="max-h-full max-w-full flex items-center justify-center [&>canvas]:!h-auto [&>canvas]:!w-auto [&>canvas]:!max-h-full [&>canvas]:!max-w-full [&>canvas]:object-contain"
+          />
         </div>
 
         {/* Transport + status */}

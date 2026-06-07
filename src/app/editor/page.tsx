@@ -24,7 +24,7 @@ export default async function EditorPage() {
     }));
 
   return (
-    <div className="min-h-screen bg-bg flex flex-col">
+    <div className="h-screen overflow-hidden bg-bg flex flex-col">
       <TopNav activeNav="editor" />
       <VideoEditor assets={bin} />
     </div>
