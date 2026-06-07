@@ -25,7 +25,7 @@ export const runWorkflowFn = inngest.createFunction(
     // user may run at once. Older events without userId fall into one shared
     // per-user bucket (harmless during rollout; all new runs carry userId).
     concurrency: [
-      { limit: 8 },
+      { limit: 12 },
       { key: "event.data.userId", limit: 2 },
     ],
     // One automatic retry on unexpected failure. Node-level results are already

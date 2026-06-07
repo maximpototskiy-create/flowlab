@@ -57,3 +57,11 @@ export async function requireUser() {
   if (!user) redirect("/login");
   return user;
 }
+
+// Gate for admin-only pages/routes. Non-admins are bounced to the dashboard.
+export async function requireAdmin() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  if (user.role !== "admin") redirect("/dashboard");
+  return user;
+}

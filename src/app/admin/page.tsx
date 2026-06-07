@@ -1,0 +1,241 @@
+// src/app/admin/page.tsx
+// Admin-only usage dashboard: per-user generation volume + cost, and a
+// per-model cost breakdown. Server-rendered (no polling) and gated by
+// requireAdmin(), so it never adds to status-poll pool pressure.
+import TopNav from "@/components/TopNav";
+import { requireAdmin } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const RANGES = [
+  { key: "7", label: "7 days" },
+  { key: "30", label: "30 days" },
+  { key: "all", label: "All time" },
+];
+
+// Cost is tracked in USD (Run.totalCostUsd / RunStep.costUsd). AI spend is
+// usually fractions of a dollar, so show more precision for small numbers.
+function usd(n: number) {
+  return "$" + (n < 1 ? n.toFixed(4) : n.toFixed(2));
+}
+
+// Explicit shapes for the Prisma aggregate results. These mirror what
+// run.groupBy / runStep.groupBy return at runtime; declaring them keeps this
+// file self-typed (and tsc-clean) regardless of whether the generated Prisma
+// client is present in the current environment.
+type UserRow = { id: string; email: string; name: string | null; role: string; lastSeenAt: Date | null };
+type RunAggRow = { triggeredBy: string; _count: { _all: number }; _sum: { totalCostUsd: number | null } };
+type StatusAggRow = { triggeredBy: string; status: string; _count: { _all: number } };
+type ModelAggRow = { model: string | null; _count: { _all: number }; _sum: { costUsd: number | null } };
+
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ range?: string }>;
+}) {
+  await requireAdmin();
+
+  const sp = await searchParams;
+  const range = sp.range === "7" || sp.range === "30" ? sp.range : "all";
+  const since = range === "all" ? undefined : new Date(Date.now() - Number(range) * 86_400_000);
+  const runWhere = since ? { startedAt: { gte: since } } : {};
+  const stepWhere = since ? { startedAt: { gte: since } } : {};
+
+  const [users, runAgg, statusAgg, modelAgg] = (await Promise.all([
+    prisma.user.findMany({
+      select: { id: true, email: true, name: true, role: true, lastSeenAt: true },
+    }),
+    prisma.run.groupBy({
+      by: ["triggeredBy"],
+      where: runWhere,
+      _count: { _all: true },
+      _sum: { totalCostUsd: true },
+    }),
+    prisma.run.groupBy({
+      by: ["triggeredBy", "status"],
+      where: runWhere,
+      _count: { _all: true },
+    }),
+    prisma.runStep.groupBy({
+      by: ["model"],
+      where: stepWhere,
+      _count: { _all: true },
+      _sum: { costUsd: true },
+      orderBy: { _sum: { costUsd: "desc" } },
+    }),
+  ])) as unknown as [UserRow[], RunAggRow[], StatusAggRow[], ModelAggRow[]];
+
+  const runByUser = new Map(runAgg.map((r) => [r.triggeredBy, r]));
+  const doneByUser = new Map<string, number>();
+  const errByUser = new Map<string, number>();
+  for (const s of statusAgg) {
+    if (s.status === "done") doneByUser.set(s.triggeredBy, s._count._all);
+    if (s.status === "error") errByUser.set(s.triggeredBy, s._count._all);
+  }
+
+  const rows = users
+    .map((u) => {
+      const agg = runByUser.get(u.id);
+      return {
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        role: u.role,
+        lastSeenAt: u.lastSeenAt,
+        runs: agg?._count._all ?? 0,
+        cost: agg?._sum.totalCostUsd ?? 0,
+        done: doneByUser.get(u.id) ?? 0,
+        errors: errByUser.get(u.id) ?? 0,
+      };
+    })
+    .sort((a, b) => b.cost - a.cost || b.runs - a.runs);
+
+  const totalRuns = rows.reduce((s, r) => s + r.runs, 0);
+  const totalCost = rows.reduce((s, r) => s + r.cost, 0);
+  const activeUsers = rows.filter((r) => r.runs > 0).length;
+
+  return (
+    <div className="min-h-screen bg-bg">
+      <TopNav activeNav="admin" />
+      <main className="max-w-7xl mx-auto px-6 lg:px-10 py-8">
+        <div className="flex items-end justify-between mb-6 flex-wrap gap-3">
+          <div>
+            <h1 className="font-display text-3xl">Admin · Usage</h1>
+            <p className="text-fg-muted text-sm mt-1">Generation volume and cost per user.</p>
+          </div>
+          <div className="flex items-center gap-1">
+            {RANGES.map((r) => (
+              <a
+                key={r.key}
+                href={`/admin?range=${r.key}`}
+                className={`px-3 py-1.5 rounded-md text-[11px] border transition ${
+                  range === r.key
+                    ? "bg-brand/15 border-brand text-brand"
+                    : "border-border text-fg-muted hover:text-fg hover:border-border-strong"
+                }`}
+              >
+                {r.label}
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {/* Summary */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+          <Card label="Total runs" value={String(totalRuns)} />
+          <Card label="Total cost" value={usd(totalCost)} />
+          <Card label="Active users" value={`${activeUsers} / ${users.length}`} />
+        </div>
+
+        {/* By user */}
+        <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-2">By user</h2>
+        <div className="border border-border rounded-lg overflow-x-auto mb-8">
+          <table className="w-full text-[12px]">
+            <thead className="bg-bg-card text-fg-subtle text-[10px] uppercase tracking-wider">
+              <tr>
+                <Th>User</Th>
+                <Th right>Runs</Th>
+                <Th right>Done</Th>
+                <Th right>Errors</Th>
+                <Th right>Cost</Th>
+                <Th right>Last active</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-t border-border/60">
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-fg">{r.name || r.email}</span>
+                      {r.role === "admin" && (
+                        <span className="px-1.5 py-0.5 rounded bg-brand/15 text-brand text-[9px] uppercase tracking-wide">
+                          admin
+                        </span>
+                      )}
+                    </div>
+                    {r.name && <div className="text-fg-subtle text-[10px]">{r.email}</div>}
+                  </td>
+                  <Td right>{r.runs}</Td>
+                  <Td right>{r.done}</Td>
+                  <Td right className={r.errors > 0 ? "text-red-400" : undefined}>
+                    {r.errors}
+                  </Td>
+                  <Td right>{usd(r.cost)}</Td>
+                  <Td right>{r.lastSeenAt ? new Date(r.lastSeenAt).toLocaleDateString() : "—"}</Td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-3 py-6 text-center text-fg-subtle">
+                    No users.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* By model */}
+        <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-2">By model</h2>
+        <div className="border border-border rounded-lg overflow-x-auto">
+          <table className="w-full text-[12px]">
+            <thead className="bg-bg-card text-fg-subtle text-[10px] uppercase tracking-wider">
+              <tr>
+                <Th>Model</Th>
+                <Th right>Generations</Th>
+                <Th right>Cost</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {modelAgg.map((m, i) => (
+                <tr key={i} className="border-t border-border/60">
+                  <Td>{m.model || "—"}</Td>
+                  <Td right>{m._count._all}</Td>
+                  <Td right>{usd(m._sum.costUsd ?? 0)}</Td>
+                </tr>
+              ))}
+              {modelAgg.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="px-3 py-6 text-center text-fg-subtle">
+                    No data in range.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function Card({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-bg-card border border-border rounded-lg p-4">
+      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">{label}</div>
+      <div className="font-display text-2xl mt-1">{value}</div>
+    </div>
+  );
+}
+
+function Th({ children, right }: { children: React.ReactNode; right?: boolean }) {
+  return <th className={`px-3 py-2 font-medium ${right ? "text-right" : "text-left"}`}>{children}</th>;
+}
+
+function Td({
+  children,
+  right,
+  className,
+}: {
+  children: React.ReactNode;
+  right?: boolean;
+  className?: string;
+}) {
+  return (
+    <td className={`px-3 py-2.5 ${right ? "text-right tabular-nums" : ""} ${className ?? ""}`}>
+      {children}
+    </td>
+  );
+}
