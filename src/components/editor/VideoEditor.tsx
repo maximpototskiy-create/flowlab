@@ -35,6 +35,21 @@ const PX_PER_SEC = 48;
 const DEFAULT_IMAGE_DUR = 3;
 const DEFAULT_TEXT_DUR = 3;
 
+// The editor engine (@diffusionstudio/core) is a WebCodecs/WASM browser library
+// that breaks the Next.js server build if bundled. So we load it from a CDN at
+// RUNTIME, in the browser only. `new Function` hides the import from the
+// bundler entirely (webpack/turbopack never tries to resolve or bundle it),
+// which also keeps it out of package.json/lockfile. Cached after first load.
+const ENGINE_CDN = "https://esm.sh/@diffusionstudio/core@4.0.3";
+let _enginePromise: Promise<any> | null = null;
+function loadEngine(): Promise<any> {
+  if (!_enginePromise) {
+    const dynImport = new Function("u", "return import(u)") as (u: string) => Promise<any>;
+    _enginePromise = dynImport(ENGINE_CDN);
+  }
+  return _enginePromise;
+}
+
 let _id = 0;
 const uid = () => `c${Date.now()}_${_id++}`;
 
@@ -94,7 +109,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   // ── build a diffusionstudio Composition from the current tracks ──
   // Lazy-imported so the WebCodecs engine never loads during SSR.
   const buildComposition = useCallback(async () => {
-    const DS: any = await import("@diffusionstudio/core");
+    const DS: any = await loadEngine();
     const comp = new DS.Composition({ width: res.w, height: res.h, background: "#000000" });
 
     // video/image track — sequential, back to back
@@ -194,7 +209,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     setExporting(true);
     setStatus("Rendering MP4 in your browser… this can take a while.");
     try {
-      const DS: any = await import("@diffusionstudio/core");
+      const DS: any = await loadEngine();
       const comp = await buildComposition();
       const result = await new DS.Encoder(comp).render();
       const blob: Blob = result instanceof Blob ? result : (result?.blob ?? result);
