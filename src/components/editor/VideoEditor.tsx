@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
-  Download, Clapperboard, ZoomIn, ZoomOut,
+  Download, Clapperboard, ZoomIn, ZoomOut, Loader2,
 } from "lucide-react";
 
 export type EditorAsset = {
@@ -172,7 +172,33 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [play, remove]);
 
-  const exportMp4 = () => setStatus("MP4-экспорт делаю следующим патчем на ffmpeg.wasm (без ключей и водяного знака).");
+  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const exportMp4 = useCallback(async () => {
+    if (exporting || !clips.length) return;
+    setExporting(true); setProgress(0); setStatus("Запись ролика…");
+    stop();
+    try {
+      const { exportTimeline } = await import("@/lib/editor/exportVideo");
+      const { blob, ext, mp4 } = await exportTimeline({
+        clips: clips.map((c) => ({ id: c.id, track: c.track, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y })),
+        width: res.w, height: res.h, previewWidth: previewSize.w,
+        onProgress: (p) => setProgress(Math.round(p * 100)),
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `flowlab-${Date.now()}.${ext}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      setStatus(mp4 ? "Готово — MP4 скачан." : "Готово — WebM скачан (браузер не поддержал запись в MP4).");
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : "см. консоль";
+      setStatus(`Экспорт не удался: ${msg}`);
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting, clips, res, previewSize, stop]);
 
   // ── clip drag/trim on the timeline ──
   const dragRef = useRef<{ id: string; mode: "move" | "trim"; startX: number; origStart: number; origDur: number } | null>(null);
@@ -285,8 +311,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <select value={resKey} onChange={(e) => setResKey(e.target.value)} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
               {RESOLUTIONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
-            <button onClick={exportMp4} disabled={!clips.length} className="px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
-              <Download size={13} /> Export MP4
+            <button onClick={exportMp4} disabled={exporting || !clips.length} className="px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
+              {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{exporting ? `${progress}%` : "Export MP4"}
             </button>
           </div>
         </div>
