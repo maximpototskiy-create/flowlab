@@ -12,7 +12,7 @@ export default async function TopNav({
   activeNav,
 }: {
   crumbs?: Crumb[];
-  activeNav?: "dashboard" | "brands" | "projects" | "assets" | "templates" | "admin";
+  activeNav?: "dashboard" | "brands" | "projects" | "assets" | "templates" | "admin" | "editor";
 } = {}) {
   const user = await requireUser();
 
@@ -35,6 +35,9 @@ export default async function TopNav({
             </NavLink>
             <NavLink href="/assets" active={activeNav === "assets"}>
               Assets
+            </NavLink>
+            <NavLink href="/editor" active={activeNav === "editor"}>
+              Editor
             </NavLink>
             {user.role === "admin" && (
               <NavLink href="/admin" active={activeNav === "admin"}>
