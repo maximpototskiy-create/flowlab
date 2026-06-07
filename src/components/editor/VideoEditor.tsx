@@ -24,6 +24,9 @@ type EditClip = {
   label: string;
   start: number; // seconds
   duration: number; // seconds
+  scale: number; // in-frame scale (1 = fit)
+  x: number; // in-frame offset px (preview space)
+  y: number;
 };
 
 const RESOLUTIONS = [
@@ -57,7 +60,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const playingRef = useRef(false);
   const playheadRef = useRef(0);
   const clipsRef = useRef<EditClip[]>([]);
+  const selectedRef = useRef<string | null>(null);
   clipsRef.current = clips;
+  selectedRef.current = selected;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
   const bin = assets.filter((a) => binFilter === "all" || a.kind === binFilter);
@@ -65,17 +70,20 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const totalDur = Math.max(0.1, ...clips.map((c) => c.start + c.duration));
   const sel = clips.find((c) => c.id === selected) ?? null;
   const isActive = (c: EditClip, t: number) => t >= c.start && t < c.start + c.duration;
+  const endOf = (cl: EditClip[]) => Math.max(0.1, ...cl.map((c) => c.start + c.duration));
 
   // ── editing ──
-  const addAsset = (a: EditorAsset) => {
+  const makeClip = (kind: EditClip["kind"], track: Track, url: string | undefined, label: string, start: number, duration: number, text?: string): EditClip =>
+    ({ id: uid(), track, kind, url, label, start, duration, text, scale: 1, x: 0, y: 0 });
+  const addAssetAt = (a: { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null }, start?: number) => {
     const track: Track = a.kind === "audio" ? "audio" : "video";
     const duration = a.duration ?? DEFAULTS[a.kind];
-    const start = Math.max(0, ...clips.filter((c) => c.track === track).map((c) => c.start + c.duration));
-    setClips((p) => [...p, { id: uid(), track, kind: a.kind, url: a.url, label: a.label, start, duration }]);
+    const at = start ?? Math.max(0, ...clips.filter((c) => c.track === track).map((c) => c.start + c.duration));
+    setClips((p) => [...p, makeClip(a.kind, track, a.url, a.label, Math.max(0, at), duration)]);
   };
-  const addText = () => setClips((p) => [...p, { id: uid(), track: "text", kind: "text", text: "Your caption", label: "Text", start: +playheadRef.current.toFixed(2), duration: DEFAULTS.text }]);
+  const addText = () => setClips((p) => [...p, makeClip("text", "text", undefined, "Text", +playheadRef.current.toFixed(2), DEFAULTS.text, "Your caption")]);
   const update = (id: string, patch: Partial<EditClip>) => setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  const remove = (id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected(null); };
+  const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected((s) => (s === id ? null : s)); }, []);
 
   // ── preview box sizing (contain) ──
   useEffect(() => {
@@ -95,20 +103,18 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     return () => ro.disconnect();
   }, [res]);
 
-  // ── playback engine (native media elements driven by a master clock) ──
+  // ── playback engine ──
   const syncMedia = useCallback((t: number) => {
     for (const c of clipsRef.current) {
       const el = mediaRefs.current.get(c.id);
       if (!el) continue;
-      const active = isActive(c, t);
+      const active = t >= c.start && t < c.start + c.duration;
       if (active) {
         const local = t - c.start;
         if (Math.abs(el.currentTime - local) > 0.3) { try { el.currentTime = local; } catch { /* */ } }
         if (playingRef.current && el.paused) el.play().catch(() => {});
         if (!playingRef.current && !el.paused) el.pause();
-      } else if (!el.paused) {
-        el.pause();
-      }
+      } else if (!el.paused) { el.pause(); }
     }
   }, []);
 
@@ -123,7 +129,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     const dt = (now - lastTsRef.current) / 1000;
     lastTsRef.current = now;
     let t = playheadRef.current + dt;
-    const end = Math.max(0.1, ...clipsRef.current.map((c) => c.start + c.duration));
+    const end = endOf(clipsRef.current);
     if (t >= end) { t = end; playheadRef.current = t; setPlayhead(t); syncMedia(t); stop(); return; }
     playheadRef.current = t;
     setPlayhead(t);
@@ -134,8 +140,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const play = useCallback(() => {
     if (playingRef.current) { stop(); return; }
     if (!clipsRef.current.length) return;
-    const end = Math.max(0.1, ...clipsRef.current.map((c) => c.start + c.duration));
-    if (playheadRef.current >= end) { playheadRef.current = 0; setPlayhead(0); }
+    if (playheadRef.current >= endOf(clipsRef.current)) { playheadRef.current = 0; setPlayhead(0); }
     playingRef.current = true;
     setPlaying(true);
     lastTsRef.current = performance.now();
@@ -152,26 +157,72 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
-  const exportMp4 = () => setStatus("MP4-экспорт переводим на ffmpeg.wasm — следующим патчем (без ключей и водяного знака).");
+  // ── keyboard: space = play/pause, Del/Backspace = delete selected ──
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tg = e.target as HTMLElement | null;
+      if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT" || tg.isContentEditable)) return;
+      if (e.code === "Space") { e.preventDefault(); play(); }
+      else if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedRef.current) { e.preventDefault(); remove(selectedRef.current); }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [play, remove]);
 
-  // ── clip drag/trim ──
+  const exportMp4 = () => setStatus("MP4-экспорт делаю следующим патчем на ffmpeg.wasm (без ключей и водяного знака).");
+
+  // ── clip drag/trim on the timeline ──
   const dragRef = useRef<{ id: string; mode: "move" | "trim"; startX: number; origStart: number; origDur: number } | null>(null);
-  const onPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim") => {
+  const onClipPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim") => {
     e.stopPropagation();
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     dragRef.current = { id: c.id, mode, startX: e.clientX, origStart: c.start, origDur: c.duration };
     setSelected(c.id);
   };
-  const onPointerMove = (e: React.PointerEvent) => {
+  const onClipPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
     const dx = (e.clientX - d.startX) / pxPerSec;
     if (d.mode === "move") update(d.id, { start: Math.max(0, +(d.origStart + dx).toFixed(2)) });
     else update(d.id, { duration: Math.max(MIN_DUR, +(d.origDur + dx).toFixed(2)) });
   };
-  const onPointerUp = () => { dragRef.current = null; };
+  const onClipPointerUp = () => { dragRef.current = null; };
+
+  // ── scrub (drag the playhead along the ruler without playing) ──
+  const scrubRef = useRef(false);
+  const seekFromRuler = (clientX: number, el: HTMLElement) => {
+    const rect = el.getBoundingClientRect();
+    seek((clientX - rect.left) / pxPerSec);
+  };
+  const onRulerDown = (e: React.PointerEvent) => {
+    scrubRef.current = true;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    if (playingRef.current) stop();
+    seekFromRuler(e.clientX, e.currentTarget as HTMLElement);
+  };
+  const onRulerMove = (e: React.PointerEvent) => { if (scrubRef.current) seekFromRuler(e.clientX, e.currentTarget as HTMLElement); };
+  const onRulerUp = () => { scrubRef.current = false; };
+
+  // ── drag-drop from bin to a track lane ──
+  const onBinDragStart = (e: React.DragEvent, a: EditorAsset) => {
+    e.dataTransfer.setData("application/x-flowlab-asset", JSON.stringify({ kind: a.kind, url: a.url, label: a.label, duration: a.duration }));
+    e.dataTransfer.effectAllowed = "copy";
+  };
+  const onLaneDrop = (e: React.DragEvent, track: Track) => {
+    e.preventDefault();
+    const raw = e.dataTransfer.getData("application/x-flowlab-asset");
+    if (!raw) return;
+    const a = JSON.parse(raw) as { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null };
+    const want: Track = a.kind === "audio" ? "audio" : "video";
+    if (want !== track) return; // only drop onto the matching lane
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    addAssetAt(a, Math.max(0, (e.clientX - rect.left) / pxPerSec));
+  };
 
   const t = playhead;
+  const transformOf = (c: EditClip) => `translate(${c.x}px, ${c.y}px) scale(${c.scale})`;
 
   return (
     <div className="flex-1 flex min-h-0">
@@ -186,11 +237,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         <div className="flex-1 min-h-0 overflow-y-auto p-2">
           <div className="grid grid-cols-2 gap-2">
             {bin.map((a) => (
-              <button key={a.id} onClick={() => addAsset(a)} title={a.label}
-                className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand">
+              <button key={a.id} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={a.label}
+                className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
                 {a.kind === "image" ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" />
+                  <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
                 ) : a.kind === "video" ? (
                   <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
                 ) : (
@@ -223,21 +274,21 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           </div>
         </div>
 
-        {/* Preview — native HTML5 player */}
+        {/* Preview — native HTML5 player with visible frame */}
         <div ref={containerRef} className="flex-1 min-h-0 bg-black flex items-center justify-center overflow-hidden relative">
           {clips.length > 0 ? (
-            <div className="relative bg-black overflow-hidden" style={{ width: previewSize.w, height: previewSize.h }}>
+            <div className="relative bg-black overflow-hidden ring-1 ring-white/20" style={{ width: previewSize.w, height: previewSize.h }}>
               {clips.filter((c) => c.kind === "image").map((c) => (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img key={c.id} src={c.url} alt="" draggable={false}
                   className="absolute inset-0 w-full h-full object-contain"
-                  style={{ opacity: isActive(c, t) ? 1 : 0 }} />
+                  style={{ opacity: isActive(c, t) ? 1 : 0, transform: transformOf(c) }} />
               ))}
               {clips.filter((c) => c.kind === "video").map((c) => (
                 <video key={c.id} src={c.url} playsInline preload="auto"
                   ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
                   className="absolute inset-0 w-full h-full object-contain"
-                  style={{ opacity: isActive(c, t) ? 1 : 0 }} />
+                  style={{ opacity: isActive(c, t) ? 1 : 0, transform: transformOf(c) }} />
               ))}
               {clips.filter((c) => c.kind === "audio").map((c) => (
                 <audio key={c.id} src={c.url} preload="auto"
@@ -245,13 +296,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               ))}
               {clips.filter((c) => c.kind === "text" && isActive(c, t)).map((c) => (
                 <div key={c.id} className="absolute inset-x-0 px-4 text-center font-bold text-white"
-                  style={{ bottom: "12%", fontSize: Math.max(14, previewSize.w / 16), textShadow: "0 2px 8px #000, 0 0 4px #000" }}>
+                  style={{ bottom: "12%", fontSize: Math.max(14, previewSize.w / 16), textShadow: "0 2px 8px #000, 0 0 4px #000", transform: transformOf(c) }}>
                   {c.text}
                 </div>
               ))}
+              {/* safe-area guides */}
+              <div className="absolute inset-[5%] border border-white/10 pointer-events-none" />
             </div>
           ) : (
-            <div className="text-fg-subtle text-[12px]">Add assets from the left to start.</div>
+            <div className="text-fg-subtle text-[12px]">Add or drag assets from the left to start.</div>
           )}
         </div>
 
@@ -260,42 +313,42 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           <button onClick={() => seek(0)} className="hover:text-fg"><SkipBack size={14} /></button>
           <button onClick={play} className="text-fg hover:text-brand">{playing ? <Pause size={16} /> : <Play size={16} />}</button>
           <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
+          <span className="text-fg-subtle hidden sm:inline">· Space = play · Del = remove</span>
           <div className="ml-auto flex items-center gap-1.5">
             <button onClick={() => setPxPerSec((z) => Math.max(20, z - 20))} className="hover:text-fg"><ZoomOut size={13} /></button>
             <button onClick={() => setPxPerSec((z) => Math.min(200, z + 20))} className="hover:text-fg"><ZoomIn size={13} /></button>
           </div>
-          {status && <span className="text-fg-subtle truncate max-w-[45%]">· {status}</span>}
+          {status && <span className="text-fg-subtle truncate max-w-[40%]">· {status}</span>}
         </div>
 
         {/* Timeline */}
         <div className="h-48 shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none"
-          onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}>
+          onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
-            <div className="h-6 relative border-b border-border/60 ml-16 cursor-pointer" onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              seek((e.clientX - rect.left) / pxPerSec);
-            }}>
+            {/* Ruler — scrub with LMB */}
+            <div className="h-6 relative border-b border-border/60 ml-16 cursor-ew-resize touch-none"
+              onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
               {Array.from({ length: Math.ceil(totalDur) + 1 }).map((_, s) => (
-                <div key={s} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1" style={{ left: s * pxPerSec }}>{s}s</div>
+                <div key={s} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pointer-events-none" style={{ left: s * pxPerSec }}>{s}s</div>
               ))}
-              <div className="absolute top-0 bottom-0 w-0.5 bg-brand pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
+              <div className="absolute -top-0 bottom-0 w-0.5 bg-brand pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
             </div>
 
             {TRACKS.map((track) => (
               <div key={track} className="flex items-stretch border-b border-border/40 min-h-[48px]">
                 <div className="w-16 shrink-0 flex items-center justify-center text-[9px] uppercase tracking-wider text-fg-subtle border-r border-border/40">{track}</div>
-                <div className="relative flex-1 h-12">
+                <div className="relative flex-1 h-12" onDragOver={(e) => e.preventDefault()} onDrop={(e) => onLaneDrop(e, track)}>
                   <div className="absolute top-0 bottom-0 w-0.5 bg-brand/60 pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
                   {byTrack(track).map((c) => (
                     <div key={c.id}
-                      onPointerDown={(e) => onPointerDown(e, c, "move")}
+                      onPointerDown={(e) => onClipPointerDown(e, c, "move")}
                       onClick={() => setSelected(c.id)}
                       style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
-                      className={`absolute top-1.5 h-9 rounded px-2 text-[10px] leading-9 truncate cursor-grab active:cursor-grabbing border ${
+                      className={`absolute top-1.5 h-9 rounded px-2 text-[10px] leading-9 truncate cursor-grab active:cursor-grabbing border touch-none ${
                         selected === c.id ? "border-brand bg-brand/20 text-brand z-10" : "border-border bg-bg-card text-fg-muted"
                       }`}>
                       {c.kind === "text" ? (c.text || "Text") : c.label}
-                      <span onPointerDown={(e) => onPointerDown(e, c, "trim")}
+                      <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")}
                         className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r" />
                     </div>
                   ))}
@@ -311,14 +364,27 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <span className="text-fg-subtle uppercase tracking-wider">{sel.kind}</span>
             {sel.kind === "text" && (
               <input value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })}
-                className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-56 outline-none focus:border-brand" placeholder="Caption" />
+                className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-48 outline-none focus:border-brand" placeholder="Caption" />
             )}
             <label className="flex items-center gap-1 text-fg-muted">start
               <input type="number" min={0} step={0.1} value={sel.start} onChange={(e) => update(sel.id, { start: Math.max(0, Number(e.target.value) || 0) })}
-                className="bg-bg-card border border-border rounded px-1.5 py-1 w-16 text-fg outline-none focus:border-brand" />s</label>
+                className="bg-bg-card border border-border rounded px-1.5 py-1 w-14 text-fg outline-none focus:border-brand" />s</label>
             <label className="flex items-center gap-1 text-fg-muted">dur
               <input type="number" min={MIN_DUR} step={0.1} value={sel.duration} onChange={(e) => update(sel.id, { duration: Math.max(MIN_DUR, Number(e.target.value) || MIN_DUR) })}
-                className="bg-bg-card border border-border rounded px-1.5 py-1 w-16 text-fg outline-none focus:border-brand" />s</label>
+                className="bg-bg-card border border-border rounded px-1.5 py-1 w-14 text-fg outline-none focus:border-brand" />s</label>
+            {sel.kind !== "audio" && (
+              <>
+                <label className="flex items-center gap-1 text-fg-muted">scale
+                  <input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => update(sel.id, { scale: Number(e.target.value) })} className="w-20" />
+                  <span className="tabular-nums w-8">{sel.scale.toFixed(2)}</span></label>
+                <label className="flex items-center gap-1 text-fg-muted">x
+                  <input type="number" step={5} value={sel.x} onChange={(e) => update(sel.id, { x: Number(e.target.value) || 0 })}
+                    className="bg-bg-card border border-border rounded px-1.5 py-1 w-14 text-fg outline-none focus:border-brand" /></label>
+                <label className="flex items-center gap-1 text-fg-muted">y
+                  <input type="number" step={5} value={sel.y} onChange={(e) => update(sel.id, { y: Number(e.target.value) || 0 })}
+                    className="bg-bg-card border border-border rounded px-1.5 py-1 w-14 text-fg outline-none focus:border-brand" /></label>
+              </>
+            )}
             <button onClick={() => remove(sel.id)} className="text-red-400 hover:text-red-300 inline-flex items-center gap-1 ml-auto"><Trash2 size={13} /> delete</button>
           </div>
         )}
