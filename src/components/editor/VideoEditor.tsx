@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy,
@@ -32,6 +33,7 @@ type EditClip = {
   fadeOut: number;
   anim?: string;
   fx?: string;
+  transType?: string;
 };
 
 const RESOLUTIONS = [
@@ -55,31 +57,6 @@ const FX: { v: string; l: string }[] = [
 let _id = 0;
 const uid = () => `c${Date.now()}_${_id++}`;
 const fmt = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
-
-function alphaAt(c: { start: number; duration: number; fadeIn: number; fadeOut: number }, tt: number): number {
-  if (tt < c.start || tt >= c.start + c.duration) return 0;
-  const into = tt - c.start, toEnd = c.start + c.duration - tt;
-  let a = 1;
-  if (c.fadeIn > 0) a = Math.min(a, into / c.fadeIn);
-  if (c.fadeOut > 0) a = Math.min(a, toEnd / c.fadeOut);
-  return Math.max(0, Math.min(1, a));
-}
-function easeOut(x: number) { return 1 - (1 - x) * (1 - x); }
-function computeAnim(c: { start: number; duration: number; anim?: string }, tt: number): { s: number; fx: number; fy: number } {
-  const dur = Math.max(0.001, c.duration);
-  const p = Math.min(1, Math.max(0, (tt - c.start) / dur));
-  let s = 1, fx = 0, fy = 0;
-  switch (c.anim) {
-    case "kenBurns": s = 1 + 0.12 * p; fx = -0.04 * p; fy = -0.02 * p; break;
-    case "zoomIn": s = 1 + 0.25 * p; break;
-    case "zoomOut": s = 1.25 - 0.25 * p; break;
-    case "slideL": fx = -(1 - easeOut(Math.min(1, p / 0.25))); break;
-    case "slideR": fx = (1 - easeOut(Math.min(1, p / 0.25))); break;
-    case "pulse": s = 1 + 0.05 * Math.sin(p * Math.PI * 6); break;
-    case "shake": fx = 0.012 * Math.sin(tt * 40); fy = 0.012 * Math.cos(tt * 37); break;
-  }
-  return { s, fx, fy };
-}
 
 export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [clips, setClips] = useState<EditClip[]>([]);
@@ -217,7 +194,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     try {
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: clips.map((c) => ({ id: c.id, track: c.track, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx })),
+        clips: clips.map((c) => ({ id: c.id, track: c.track, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -283,11 +260,16 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const onClipContext = (e: React.MouseEvent, c: EditClip) => { e.preventDefault(); e.stopPropagation(); setSelected(c.id); setMenu({ x: e.clientX, y: e.clientY, id: c.id }); };
 
   const t = playhead;
-  const transformOf = (c: EditClip) => {
-    const a = computeAnim(c, t);
-    const tx = (c.x || 0) + a.fx * previewSize.w;
-    const ty = (c.y || 0) + a.fy * previewSize.h;
-    return `translate(${tx}px, ${ty}px) scale(${(c.scale || 1) * a.s})`;
+  const visualOf = (c: EditClip) => clipVisual(c as CompClip, t, clips as CompClip[]);
+  const styleFromVisual = (c: EditClip, v: ReturnType<typeof clipVisual>): React.CSSProperties => {
+    const tx = (c.x || 0) + v.offX * previewSize.w;
+    const ty = (c.y || 0) + v.offY * previewSize.h;
+    return {
+      opacity: v.opacity,
+      transform: `translate(${tx}px, ${ty}px) scale(${(c.scale || 1) * v.scaleMul})`,
+      transformOrigin: "center",
+      clipPath: v.reveal != null ? `inset(0 ${Math.round((1 - v.reveal) * 100)}% 0 0)` : undefined,
+    };
   };
   const fxStyle = (kind?: string): React.CSSProperties =>
     kind === "flash" ? { background: "#fff" }
@@ -349,9 +331,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               {clips.filter((c) => c.kind === "video" || c.kind === "image" || c.kind === "text").map((c) => {
                 const active = isActive(c, t);
                 const isSel = selected === c.id;
+                const v = visualOf(c);
                 return (
                   <div key={c.id} className="absolute inset-0"
-                    style={{ opacity: alphaAt(c, t), transform: transformOf(c), transformOrigin: "center", pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
+                    style={{ ...styleFromVisual(c, v), pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
                     onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}>
                     {c.kind === "image" && (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -414,6 +397,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                       style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
                       className={`absolute top-1.5 h-9 rounded px-2 text-[10px] leading-9 truncate cursor-grab active:cursor-grabbing border touch-none ${selected === c.id ? "border-brand bg-brand/20 text-brand z-10" : c.kind === "fx" ? "border-purple-500/50 bg-purple-500/15 text-purple-300" : "border-border bg-bg-card text-fg-muted"}`}>
                       {c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "text" ? (c.text || "Text") : c.label}
+                      {c.transType && (
+                        <span title={`transition: ${c.transType}`} className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rotate-45 bg-amber-400 border border-amber-200 z-10" />
+                      )}
                       <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r" />
                     </div>
                   ))}
@@ -436,6 +422,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <label className="flex items-center gap-1 text-fg-muted">anim
                   <select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
                 <label className="flex items-center gap-1 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => update(sel.id, { scale: Number(e.target.value) })} className="w-16" /></label>
+                <label className="flex items-center gap-1 text-fg-muted">trans
+                  <select value={sel.transType ?? ""} onChange={(e) => update(sel.id, { transType: e.target.value })} className="bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{TRANSITIONS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
               </>
             )}
             <label className="flex items-center gap-1 text-fg-muted">in<input type="number" min={0} step={0.1} value={sel.fadeIn} onChange={(e) => update(sel.id, { fadeIn: Math.max(0, Number(e.target.value) || 0) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
@@ -459,6 +447,18 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <div className="grid grid-cols-2 gap-1 px-1 pb-1.5">
                   {ANIMS.map((a) => (
                     <button key={a.v} onClick={() => apply({ anim: a.v })} className={`px-1.5 py-1 rounded text-left ${(c.anim ?? "") === a.v ? "bg-brand/20 text-brand" : "hover:bg-white/5 text-fg-muted"}`}>{a.l}</button>
+                  ))}
+                </div>
+                <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Transition (into previous)</div>
+                <div className="grid grid-cols-2 gap-1 px-1 pb-1.5">
+                  {TRANSITIONS.map((a) => (
+                    <button key={a.v} onClick={() => {
+                      // ensure ~0.5s overlap with the previous clip on this track so the transition is visible
+                      const prev = clips.filter((x) => x.track === c.track && x.kind !== "audio" && x.kind !== "fx" && x.start < c.start).sort((p, q) => q.start - p.start)[0];
+                      const patch: Partial<EditClip> = { transType: a.v };
+                      if (a.v && prev) { const ov = 0.5; const ns = +(prev.start + prev.duration - ov).toFixed(2); if (ns >= 0 && ns < c.start) patch.start = ns; }
+                      apply(patch);
+                    }} className={`px-1.5 py-1 rounded text-left ${(c.transType ?? "") === a.v ? "bg-amber-400/20 text-amber-300" : "hover:bg-white/5 text-fg-muted"}`}>{a.l}</button>
                   ))}
                 </div>
               </>

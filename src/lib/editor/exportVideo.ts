@@ -9,6 +9,8 @@
 // the elements are loaded with crossOrigin="anonymous". On failure we surface a
 // clear error instead of silently producing a black/broken file.
 
+import { alphaAt, clipVisual, type CompClip } from "./compositor";
+
 export type ExportClip = {
   id: string;
   track: "video" | "audio" | "text";
@@ -24,35 +26,8 @@ export type ExportClip = {
   fadeOut: number;
   anim?: string;
   fx?: string;
+  transType?: string;
 };
-
-function easeOut(x: number) { return 1 - (1 - x) * (1 - x); }
-// Animation preset → scale multiplier + translation as a fraction of the frame.
-function computeAnim(c: { start: number; duration: number; anim?: string }, tt: number): { s: number; fx: number; fy: number } {
-  const dur = Math.max(0.001, c.duration);
-  const p = Math.min(1, Math.max(0, (tt - c.start) / dur));
-  let s = 1, fx = 0, fy = 0;
-  switch (c.anim) {
-    case "kenBurns": s = 1 + 0.12 * p; fx = -0.04 * p; fy = -0.02 * p; break;
-    case "zoomIn": s = 1 + 0.25 * p; break;
-    case "zoomOut": s = 1.25 - 0.25 * p; break;
-    case "slideL": fx = -(1 - easeOut(Math.min(1, p / 0.25))); break;
-    case "slideR": fx = (1 - easeOut(Math.min(1, p / 0.25))); break;
-    case "pulse": s = 1 + 0.05 * Math.sin(p * Math.PI * 6); break;
-    case "shake": fx = 0.012 * Math.sin(tt * 40); fy = 0.012 * Math.cos(tt * 37); break;
-  }
-  return { s, fx, fy };
-}
-
-function alphaAt(c: { start: number; duration: number; fadeIn: number; fadeOut: number }, tt: number): number {
-  if (tt < c.start || tt >= c.start + c.duration) return 0;
-  const into = tt - c.start;
-  const toEnd = c.start + c.duration - tt;
-  let a = 1;
-  if (c.fadeIn > 0) a = Math.min(a, into / c.fadeIn);
-  if (c.fadeOut > 0) a = Math.min(a, toEnd / c.fadeOut);
-  return Math.max(0, Math.min(1, a));
-}
 
 type Params = {
   clips: ExportClip[];
@@ -195,32 +170,36 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
       ctx.fillRect(0, 0, W, H);
       for (const c of clips) {
         if (!(tt >= c.start && tt < c.start + c.duration)) continue;
-        const alpha = alphaAt(c, tt);
-        ctx.globalAlpha = alpha;
-        const a = computeAnim(c, tt);
+        if (c.kind === "fx") continue;
+        const v = clipVisual(c as CompClip, tt, clips as CompClip[]);
+        if (v.opacity <= 0.001) continue;
+        ctx.save();
+        ctx.globalAlpha = v.opacity;
+        if (v.reveal != null) { ctx.beginPath(); ctx.rect(0, 0, W * v.reveal, H); ctx.clip(); }
         if (c.kind === "video" || c.kind === "image") {
           const el: HTMLVideoElement | HTMLImageElement | undefined = c.kind === "video" ? videos.get(c.id) : images.get(c.id);
-          if (!el) continue;
-          const mw = c.kind === "video" ? (el as HTMLVideoElement).videoWidth : (el as HTMLImageElement).naturalWidth;
-          const mh = c.kind === "video" ? (el as HTMLVideoElement).videoHeight : (el as HTMLImageElement).naturalHeight;
-          if (!mw || !mh) continue;
-          const fit = Math.min(W / mw, H / mh) * (c.scale || 1) * a.s;
-          const dw = mw * fit, dh = mh * fit;
-          const dx = (W - dw) / 2 + (c.x || 0) * sx + a.fx * W;
-          const dy = (H - dh) / 2 + (c.y || 0) * sx + a.fy * H;
-          try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ }
+          if (el) {
+            const mw = c.kind === "video" ? (el as HTMLVideoElement).videoWidth : (el as HTMLImageElement).naturalWidth;
+            const mh = c.kind === "video" ? (el as HTMLVideoElement).videoHeight : (el as HTMLImageElement).naturalHeight;
+            if (mw && mh) {
+              const fit = Math.min(W / mw, H / mh) * (c.scale || 1) * v.scaleMul;
+              const dw = mw * fit, dh = mh * fit;
+              const dx = (W - dw) / 2 + (c.x || 0) * sx + v.offX * W;
+              const dy = (H - dh) / 2 + (c.y || 0) * sx + v.offY * H;
+              try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ }
+            }
+          }
         } else if (c.kind === "text") {
-          ctx.save();
-          const fontPx = Math.max(14, W / 16) * (c.scale || 1) * a.s;
+          const fontPx = Math.max(14, W / 16) * (c.scale || 1) * v.scaleMul;
           ctx.font = `bold ${Math.round(fontPx)}px sans-serif`;
           ctx.fillStyle = "#fff";
           ctx.textAlign = "center";
           ctx.textBaseline = "bottom";
           ctx.shadowColor = "#000";
           ctx.shadowBlur = 8;
-          ctx.fillText(c.text || "", W / 2 + (c.x || 0) * sx + a.fx * W, H * 0.88 + (c.y || 0) * sx + a.fy * H);
-          ctx.restore();
+          ctx.fillText(c.text || "", W / 2 + (c.x || 0) * sx + v.offX * W, H * 0.88 + (c.y || 0) * sx + v.offY * H);
         }
+        ctx.restore();
       }
       ctx.globalAlpha = 1;
 
