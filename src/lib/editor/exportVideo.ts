@@ -89,6 +89,21 @@ function pickMime(): { type: string; mp4: boolean } {
   return { type: "", mp4: false };
 }
 
+function drawFx(ctx: CanvasRenderingContext2D, fx: string | undefined, W: number, H: number) {
+  switch (fx) {
+    case "flash": ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H); break;
+    case "tint": ctx.fillStyle = "rgba(255,120,40,0.25)"; ctx.fillRect(0, 0, W, H); break;
+    case "coolTint": ctx.fillStyle = "rgba(40,120,255,0.22)"; ctx.fillRect(0, 0, W, H); break;
+    case "fadeBlack": ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); break;
+    case "blackbars": { const bar = H * 0.12; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, bar); ctx.fillRect(0, H - bar, W, bar); break; }
+    default: { // vignette
+      const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.72);
+      g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.78)");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+  }
+}
+
 export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: string; mp4: boolean }> {
   const { clips, width: W, height: H, previewWidth } = p;
   const total = Math.max(0.1, ...clips.map((c) => c.start + c.duration));
@@ -169,12 +184,32 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         } else if (!el.paused) el.pause();
       }
 
-      // draw frame
+      // draw frame — single bottom→top pass (clips arrive z-ordered)
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, W, H);
       for (const c of clips) {
+        if (c.kind === "audio") continue;
         if (!(tt >= c.start && tt < c.start + c.duration)) continue;
-        if (c.kind === "fx" || c.kind === "adjust") continue;
+
+        if (c.kind === "adjust") {
+          if (!c.fx) continue;
+          // filter only what's already drawn below this layer
+          tctx.clearRect(0, 0, W, H);
+          tctx.drawImage(canvas, 0, 0);
+          ctx.clearRect(0, 0, W, H);
+          ctx.filter = c.fx;
+          ctx.drawImage(tcanvas, 0, 0);
+          ctx.filter = "none";
+          continue;
+        }
+        if (c.kind === "fx") {
+          ctx.save();
+          ctx.globalAlpha = alphaAt(c, tt) || 1;
+          drawFx(ctx, c.fx, W, H);
+          ctx.restore();
+          continue;
+        }
+
         const v = clipVisual(c as CompClip, tt, clips as CompClip[]);
         if (v.opacity <= 0.001) continue;
         ctx.save();
@@ -206,33 +241,6 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         ctx.restore();
       }
       ctx.globalAlpha = 1;
-
-      // overlay FX on top
-      for (const c of clips) {
-        if (c.kind !== "fx" || !(tt >= c.start && tt < c.start + c.duration)) continue;
-        ctx.save();
-        ctx.globalAlpha = alphaAt(c, tt) || 1;
-        if (c.fx === "flash") { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H); }
-        else if (c.fx === "tint") { ctx.fillStyle = "rgba(255,120,40,0.25)"; ctx.fillRect(0, 0, W, H); }
-        else { // vignette
-          const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.72);
-          g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.75)");
-          ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-        }
-        ctx.restore();
-      }
-      ctx.globalAlpha = 1;
-
-      // adjustment layers: whole-frame CSS-style filter applied to the composite
-      const filt = clips.filter((c) => c.kind === "adjust" && tt >= c.start && tt < c.start + c.duration && c.fx).map((c) => c.fx).join(" ");
-      if (filt) {
-        tctx.clearRect(0, 0, W, H);
-        tctx.drawImage(canvas, 0, 0);
-        ctx.clearRect(0, 0, W, H);
-        ctx.filter = filt;
-        ctx.drawImage(tcanvas, 0, 0);
-        ctx.filter = "none";
-      }
 
       // taint check on first frame
       if (tt < 0.1) {

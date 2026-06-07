@@ -48,13 +48,20 @@ const MIN_DUR = 0.3;
 const ANIMS = [
   { v: "", l: "None" }, { v: "kenBurns", l: "Ken Burns" }, { v: "zoomIn", l: "Zoom In" },
   { v: "zoomOut", l: "Zoom Out" }, { v: "slideL", l: "Slide ←" }, { v: "slideR", l: "Slide →" },
-  { v: "pulse", l: "Pulse" }, { v: "shake", l: "Shake" },
+  { v: "pulse", l: "Pulse" }, { v: "shake", l: "Shake" }, { v: "panLeft", l: "Pan ←" },
+  { v: "panRight", l: "Pan →" }, { v: "drift", l: "Drift" }, { v: "breathe", l: "Breathe" },
 ];
-const FX = [{ v: "vignette", l: "Vignette" }, { v: "flash", l: "Flash" }, { v: "tint", l: "Warm tint" }];
+const FX = [
+  { v: "vignette", l: "Vignette" }, { v: "flash", l: "Flash" }, { v: "fadeBlack", l: "Fade black" },
+  { v: "tint", l: "Warm tint" }, { v: "coolTint", l: "Cool tint" }, { v: "blackbars", l: "Cinematic bars" },
+];
 const ADJUST = [
   { v: "grayscale(1)", l: "B&W" }, { v: "sepia(0.8)", l: "Sepia" }, { v: "invert(1)", l: "Invert" },
   { v: "blur(6px)", l: "Blur" }, { v: "brightness(1.35)", l: "Bright" }, { v: "brightness(0.6)", l: "Dark" },
   { v: "contrast(1.5)", l: "Contrast" }, { v: "saturate(1.9)", l: "Saturate" }, { v: "hue-rotate(90deg)", l: "Hue shift" },
+  { v: "sepia(0.4) contrast(1.2) saturate(1.3)", l: "Vintage" }, { v: "hue-rotate(-20deg) saturate(1.3)", l: "Cool" },
+  { v: "sepia(0.3) saturate(1.2) brightness(1.05)", l: "Warm" }, { v: "contrast(1.5) brightness(0.9) saturate(1.2)", l: "Dramatic" },
+  { v: "contrast(0.85) brightness(1.1) saturate(0.9)", l: "Faded" },
 ];
 
 let _id = 0, _l = 0;
@@ -114,9 +121,13 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     const at = start ?? Math.max(0, ...clips.filter((c) => c.layer === layer).map((c) => c.start + c.duration));
     setClips((p) => [...p, base(a.kind, layer, a.url, a.label, Math.max(0, at), duration)]);
   };
-  const addText = () => setClips((p) => [...p, base("text", topVisualId(), undefined, "Text", +playheadRef.current.toFixed(2), DEFAULTS.text, { text: "Your caption" })]);
-  const addFx = (type = "vignette") => setClips((p) => [...p, base("fx", topVisualId(), undefined, "FX", +playheadRef.current.toFixed(2), DEFAULTS.fx, { fx: type })]);
-  const addAdjust = (v = "grayscale(1)") => setClips((p) => [...p, base("adjust", topVisualId(), undefined, "Adjust", +playheadRef.current.toFixed(2), DEFAULTS.adjust, { fx: v })]);
+  const addOnNewTop = (kind: Kind, extra: Partial<EditClip>, dur: number, label: string) => {
+    const id = createLayerAt(0, "visual");
+    setClips((p) => [...p, base(kind, id, undefined, label, +playheadRef.current.toFixed(2), dur, extra)]);
+  };
+  const addText = () => addOnNewTop("text", { text: "Your caption" }, DEFAULTS.text, "Text");
+  const addFx = (type = "vignette") => addOnNewTop("fx", { fx: type }, DEFAULTS.fx, "FX");
+  const addAdjust = (v = "grayscale(1)") => addOnNewTop("adjust", { fx: v }, DEFAULTS.adjust, "Adjust");
   const update = (id: string, patch: Partial<EditClip>) => setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected((s) => (s === id ? null : s)); }, []);
   const duplicate = (id: string) => setClips((p) => { const c = p.find((x) => x.id === id); return c ? [...p, { ...c, id: uid(), start: c.start + 0.3 }] : p; });
@@ -202,13 +213,12 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   const exportMp4 = useCallback(async () => {
     if (exporting || !clips.length) return;
-    setExporting(true); setProgress(0); setStatus("Запись ролика…"); stop();
+    setExporting(true); setProgress(0); setStatus("Recording…"); stop();
     try {
       const vis = layers.filter((l) => l.type === "visual");
-      const drawOrder: EditClip[] = [];
-      for (let i = vis.length - 1; i >= 0; i--) drawOrder.push(...clips.filter((c) => c.layer === vis[i].id && (c.kind === "video" || c.kind === "image" || c.kind === "text")).sort((a, b) => a.start - b.start));
-      const rest = clips.filter((c) => !drawOrder.includes(c));
-      const ordered = [...drawOrder, ...rest];
+      const z: EditClip[] = [];
+      for (let i = vis.length - 1; i >= 0; i--) z.push(...clips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start));
+      const ordered = [...z, ...clips.filter((c) => !z.includes(c))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
         clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType })),
@@ -218,8 +228,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a"); a.href = url; a.download = `flowlab-${Date.now()}.${ext}`;
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-      setStatus(mp4 ? "Готово — MP4 скачан." : "Готово — WebM скачан (браузер не поддержал MP4-запись).");
-    } catch (e) { console.error(e); setStatus(`Экспорт не удался: ${e instanceof Error ? e.message : "см. консоль"}`); }
+      setStatus(mp4 ? "Done — MP4 downloaded." : "Done — WebM downloaded (browser doesn\u2019t support MP4 recording).");
+    } catch (e) { console.error(e); setStatus(`Export failed: ${e instanceof Error ? e.message : "see console"}`); }
     finally { setExporting(false); }
   }, [exporting, clips, layers, res, previewSize, stop]);
 
@@ -310,12 +320,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   };
   const fxStyle = (kind?: string): React.CSSProperties =>
     kind === "flash" ? { background: "#fff" }
+    : kind === "fadeBlack" ? { background: "#000" }
     : kind === "tint" ? { background: "rgba(255,120,40,0.25)" }
+    : kind === "coolTint" ? { background: "rgba(40,120,255,0.22)" }
+    : kind === "blackbars" ? { background: "linear-gradient(to bottom, #000 0, #000 12%, transparent 12%, transparent 88%, #000 88%, #000 100%)" }
     : { background: "radial-gradient(ellipse at center, rgba(0,0,0,0) 40%, rgba(0,0,0,0.78) 100%)" };
 
-  const drawList: EditClip[] = [];
-  for (let i = visualLayers.length - 1; i >= 0; i--) drawList.push(...onLayer(visualLayers[i].id).filter((c) => c.kind === "video" || c.kind === "image" || c.kind === "text"));
-  const activeFilter = clips.filter((c) => c.kind === "adjust" && isActive(c, t) && c.fx).map((c) => c.fx).join(" ");
+  // z-order (bottom → top) of all visual-layer clips
+  const zClips: EditClip[] = [];
+  for (let i = visualLayers.length - 1; i >= 0; i--) zClips.push(...onLayer(visualLayers[i].id));
 
   return (
     <div className="flex-1 flex min-h-0">
@@ -357,7 +370,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
         {panelTab === "effects" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <div className="text-[10px] text-fg-subtle px-1 pb-2">Overlay-эффект ложится клипом поверх на плейхеде.</div>
+            <div className="text-[10px] text-fg-subtle px-1 pb-2">Overlay effect — added as a clip on a new top layer.</div>
             <div className="grid grid-cols-2 gap-2">
               {FX.map((f) => (
                 <button key={f.v} onClick={() => addFx(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center group">
@@ -371,7 +384,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
         {panelTab === "filters" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <div className="text-[10px] text-fg-subtle px-1 pb-2">Фильтр ложится клипом и красит всё под собой на своём отрезке.</div>
+            <div className="text-[10px] text-fg-subtle px-1 pb-2">Filter — added as a clip; affects only layers below it.</div>
             <div className="grid grid-cols-2 gap-2">
               {ADJUST.map((f) => (
                 <button key={f.v} onClick={() => addAdjust(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-gradient-to-br from-bg-card to-bg-card/40 flex items-end justify-center">
@@ -386,7 +399,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         {panelTab === "text" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2">
             <button onClick={addText} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add text</button>
-            <div className="text-[10px] text-fg-subtle px-1 pt-2">Заголовок появится на плейхеде; текст и стиль — в инспекторе.</div>
+            <div className="text-[10px] text-fg-subtle px-1 pt-2">Adds a caption on a new top layer; edit text in the inspector.</div>
           </div>
         )}
       </aside>
@@ -410,8 +423,14 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           {clips.length > 0 ? (
             <div className="relative bg-black overflow-hidden ring-1 ring-white/20" style={{ width: previewSize.w, height: previewSize.h }}
               onPointerMove={onVpMove} onPointerUp={onVpUp} onPointerLeave={onVpUp}>
-              <div className="absolute inset-0" style={{ filter: activeFilter || undefined }}>
-                {drawList.map((c) => {
+              <div className="absolute inset-0">
+                {zClips.map((c) => {
+                  if (c.kind === "fx") return isActive(c, t)
+                    ? <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ ...fxStyle(c.fx), opacity: alphaAt(c, t) || 1 }} />
+                    : null;
+                  if (c.kind === "adjust") return isActive(c, t) && c.fx
+                    ? <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ backdropFilter: c.fx, WebkitBackdropFilter: c.fx as string, opacity: alphaAt(c, t) || 1 }} />
+                    : null;
                   const active = isActive(c, t);
                   const isSel = selected === c.id;
                   const v = clipVisual(c as CompClip, t, clips as CompClip[]);
@@ -436,9 +455,6 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     </div>
                   );
                 })}
-                {clips.filter((c) => c.kind === "fx" && isActive(c, t)).map((c) => (
-                  <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ ...fxStyle(c.fx), opacity: alphaAt(c, t) || 1 }} />
-                ))}
               </div>
               {clips.filter((c) => c.kind === "audio").map((c) => (
                 <audio key={c.id} src={c.url} preload="auto" ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }} />
@@ -511,9 +527,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                         const a = lc[idx - 1];
                         if (b.start > a.start + a.duration + 0.3) return null;
                         return (
-                          <button key={`tr-${b.id}`} onClick={(e) => { e.stopPropagation(); setTransMenu({ x: e.clientX, y: e.clientY, id: b.id }); }}
-                            style={{ left: b.start * pxPerSec - 9 }} title="Transition"
-                            className={`absolute top-1/2 -translate-y-1/2 z-30 w-[18px] h-[18px] rounded-full flex items-center justify-center text-[11px] leading-none border ${b.transType ? "bg-amber-400 text-black border-amber-200" : "bg-bg-card text-fg-muted border-border hover:border-brand hover:text-brand"}`}>
+                          <button key={`tr-${b.id}`}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => { e.stopPropagation(); setTransMenu({ x: e.clientX, y: e.clientY, id: b.id }); }}
+                            style={{ left: b.start * pxPerSec - 12 }} title="Transition"
+                            className={`absolute top-1/2 -translate-y-1/2 z-40 grid place-items-center w-6 h-6 rounded-full text-[12px] leading-none border shadow ${b.transType ? "bg-amber-400 text-black border-amber-200" : "bg-bg-card text-fg-muted border-border hover:border-brand hover:text-brand hover:bg-bg-card"}`}>
                             {b.transType ? "◆" : "+"}
                           </button>
                         );

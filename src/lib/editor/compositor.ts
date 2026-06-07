@@ -34,6 +34,7 @@ export const TRANSITIONS: { v: string; l: string }[] = [
   { v: "slideL", l: "Slide ←" },
   { v: "slideR", l: "Slide →" },
   { v: "slideUp", l: "Slide ↑" },
+  { v: "slideDown", l: "Slide ↓" },
   { v: "zoom", l: "Zoom" },
   { v: "wipe", l: "Wipe" },
 ];
@@ -60,6 +61,10 @@ export function computeAnim(c: { start: number; duration: number; anim?: string 
     case "slideR": fx = (1 - easeOut(Math.min(1, p / 0.25))); break;
     case "pulse": s = 1 + 0.05 * Math.sin(p * Math.PI * 6); break;
     case "shake": fx = 0.012 * Math.sin(tt * 40); fy = 0.012 * Math.cos(tt * 37); break;
+    case "panLeft": s = 1.08; fx = -0.06 * p; break;
+    case "panRight": s = 1.08; fx = 0.06 * p; break;
+    case "drift": s = 1.06; fx = 0.03 * p; fy = -0.03 * p; break;
+    case "breathe": s = 1 + 0.04 * Math.sin(p * Math.PI * 4); break;
   }
   return { s, fx, fy };
 }
@@ -108,6 +113,7 @@ export function clipVisual(c: CompClip, tt: number, all: CompClip[]): Visual {
           case "slideL": offX += (1 - p); break;
           case "slideR": offX += -(1 - p); break;
           case "slideUp": offY += (1 - p); break;
+          case "slideDown": offY += -(1 - p); break;
           case "zoom": scaleMul *= 0.2 + 0.8 * p; opacity *= p; break;
           case "wipe": reveal = p; break;
         }
