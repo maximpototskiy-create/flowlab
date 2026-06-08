@@ -303,26 +303,51 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   const [viewZoom, setViewZoom] = useState(1);
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
+  const [snap, setSnap] = useState<{ v: boolean; h: boolean }>({ v: false, h: false });
   const viewZoomRef = useRef(1); viewZoomRef.current = viewZoom;
   const fitView = () => { setViewZoom(1); setViewPan({ x: 0, y: 0 }); };
-  const onViewWheel = (e: React.WheelEvent) => { if (!clips.length) return; e.preventDefault(); const f = e.deltaY < 0 ? 1.1 : 1 / 1.1; setViewZoom((z) => Math.min(8, Math.max(0.1, +(z * f).toFixed(3)))); };
+  const onViewWheel = (e: React.WheelEvent) => {
+    if (!clips.length) return; e.preventDefault();
+    const el = containerRef.current; if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const cx = e.clientX - (rect.left + rect.width / 2);
+    const cy = e.clientY - (rect.top + rect.height / 2);
+    const z = viewZoomRef.current || 1;
+    const f = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    const nz = Math.min(8, Math.max(0.1, +(z * f).toFixed(3)));
+    const ratio = nz / z;
+    setViewPan((p) => ({ x: cx - (cx - p.x) * ratio, y: cy - (cy - p.y) * ratio }));
+    setViewZoom(nz);
+  };
   const onPanDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    setSelected(null);
+    if (e.button !== 0 && e.button !== 1) return;
+    if (e.button === 0) setSelected(null);
     const s = { x: e.clientX, y: e.clientY, ox: viewPan.x, oy: viewPan.y };
     const move = (ev: PointerEvent) => setViewPan({ x: s.ox + (ev.clientX - s.x), y: s.oy + (ev.clientY - s.y) });
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
   const onVpDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "scale") => {
+    if (e.button === 1) return; // middle button → let the viewport pan
     e.stopPropagation(); setSelected(c.id);
     const s = { sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y, os: c.scale };
+    const TH = 10; // snap threshold in composition pixels
+    const STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3];
     const move = (ev: PointerEvent) => {
       const z = viewZoomRef.current || 1; const dx = (ev.clientX - s.sx) / z, dy = (ev.clientY - s.sy) / z;
-      if (mode === "move") update(c.id, { x: Math.round(s.ox + dx), y: Math.round(s.oy + dy) });
-      else update(c.id, { scale: Math.min(8, Math.max(0.05, +(s.os + (dx + dy) / 250).toFixed(2))) });
+      if (mode === "move") {
+        let nx = s.ox + dx, ny = s.oy + dy;
+        const v = Math.abs(nx) < TH; if (v) nx = 0;
+        const h = Math.abs(ny) < TH; if (h) ny = 0;
+        setSnap({ v, h });
+        update(c.id, { x: Math.round(nx), y: Math.round(ny) });
+      } else {
+        let ns = +(s.os + (dx + dy) / 250).toFixed(2);
+        const hit = STEPS.find((st) => Math.abs(ns - st) < 0.05); if (hit) ns = hit;
+        update(c.id, { scale: Math.min(8, Math.max(0.05, ns)) });
+      }
     };
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    const up = () => { setSnap({ v: false, h: false }); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
   const resetTransform = (id: string) => update(id, { x: 0, y: 0, scale: 1 });
@@ -514,6 +539,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                   <div className="absolute inset-0 pointer-events-none z-10" style={{ boxShadow: "0 0 0 99999px rgba(0,0,0,0.55)" }} />
                   <div className="absolute inset-0 ring-1 ring-white/30 pointer-events-none z-10" />
                   <div className="absolute inset-[5%] border border-white/10 pointer-events-none z-10" />
+                  {snap.v && <div className="absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 bg-fuchsia-400 pointer-events-none z-20" />}
+                  {snap.h && <div className="absolute top-1/2 left-0 right-0 h-px -translate-y-1/2 bg-fuchsia-400 pointer-events-none z-20" />}
                 </div>
               </div>
               {clips.filter((c) => c.kind === "audio").map((c) => (
