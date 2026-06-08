@@ -58,6 +58,7 @@ type EditClip = {
   anim?: string;
   fx?: string;
   transType?: string;
+  autoDur?: boolean;
 };
 
 const RESOLUTIONS = [
@@ -96,7 +97,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
   const [clips, setClips] = useState<EditClip[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const selected = selectedIds.length ? selectedIds[selectedIds.length - 1] : null;
+  const selectClip = (id: string, additive: boolean) =>
+    setSelectedIds((prev) => (additive ? (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]) : prev.includes(id) && prev.length > 1 ? prev : [id]));
   const [binFilter, setBinFilter] = useState<"all" | "video" | "image" | "audio">("all");
   const [library, setLibrary] = useState<EditorAsset[]>(assets);
   const [binQuery, setBinQuery] = useState("");
@@ -143,9 +147,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const playingRef = useRef(false);
   const playheadRef = useRef(0);
   const clipsRef = useRef<EditClip[]>([]);
-  const selectedRef = useRef<string | null>(null);
+  const selectedRef = useRef<string[]>([]);
   clipsRef.current = clips;
-  selectedRef.current = selected;
+  selectedRef.current = selectedIds;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
   const bin = library.filter((a) => (binFilter === "all" || a.kind === binFilter) && (binCategory === "all" || a.category === binCategory));
@@ -237,9 +241,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   };
   const addAssetAt = (a: { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null }, layerId?: string, start?: number) => {
     const layer = layerId ?? layerForKind(clipLayerType(a.kind));
-    const duration = a.duration ?? DEFAULTS[a.kind];
+    const known = a.duration != null && a.duration > 0;
+    const duration = known ? (a.duration as number) : DEFAULTS[a.kind];
     const at = start ?? Math.max(0, ...clips.filter((c) => c.layer === layer).map((c) => c.start + c.duration));
-    setClips((p) => [...p, base(a.kind, layer, a.url, a.label, Math.max(0, at), duration)]);
+    setClips((p) => [...p, base(a.kind, layer, a.url, a.label, Math.max(0, at), duration, known ? {} : { autoDur: true })]);
+  };
+  // when a video/audio's real duration loads, snap the clip length to it (unless already trimmed)
+  const onMeta = (id: string, dur: number) => {
+    if (!isFinite(dur) || dur <= 0) return;
+    setClips((prev) => prev.map((c) => (c.id === id && c.autoDur ? { ...c, duration: +dur.toFixed(2), autoDur: false } : c)));
   };
   const addClipKind = (kind: Kind, extra: Partial<EditClip>, dur: number, label: string) => {
     const id = layerForKind(clipLayerType(kind));
@@ -281,7 +291,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     } finally { setSubBusy(false); }
   };
   const update = (id: string, patch: Partial<EditClip>) => setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected((s) => (s === id ? null : s)); }, []);
+  const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelectedIds((s) => s.filter((x) => x !== id)); }, []);
+  const removeMany = useCallback((ids: string[]) => { const set = new Set(ids); setClips((p) => p.filter((c) => !set.has(c.id))); setSelectedIds([]); }, []);
   const duplicate = (id: string) => setClips((p) => { const c = p.find((x) => x.id === id); return c ? [...p, { ...c, id: uid(), start: c.start + 0.3 }] : p; });
   const layerType = (c: { kind: Kind }): LayerType => clipLayerType(c.kind);
   const createLayerAt = (index: number, type: LayerType): string => {
@@ -372,10 +383,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       const tg = e.target as HTMLElement | null;
       if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT" || tg.isContentEditable)) return;
       if (e.code === "Space") { e.preventDefault(); play(); }
-      else if (e.key === "Delete" || e.key === "Backspace") { if (selectedRef.current) { e.preventDefault(); remove(selectedRef.current); } }
+      else if (e.key === "Delete" || e.key === "Backspace") { if (selectedRef.current.length) { e.preventDefault(); removeMany(selectedRef.current); } }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
-  }, [play, remove]);
+  }, [play, removeMany]);
 
   useEffect(() => {
     if (!menu && !transMenu) return;
@@ -406,7 +417,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     finally { setExporting(false); }
   }, [exporting, clips, layers, res, previewSize, stop]);
 
-  const dragRef = useRef<{ id: string; mode: "move" | "trim"; startX: number; origStart: number; origDur: number; type: LayerType } | null>(null);
+  const dragRef = useRef<{ id: string; mode: "move" | "trim"; startX: number; origDur: number; type: LayerType; moveIds: string[]; origStarts: Map<string, number> } | null>(null);
   const hitTest = (clientY: number, type: LayerType): { type: "lane" | "strip"; id: string } | null => {
     for (const [id, el] of stripRefs.current) { const r = el.getBoundingClientRect(); if (clientY >= r.top - 3 && clientY <= r.bottom + 3) return { type: "strip", id }; }
     for (const [id, el] of laneRefs.current) { const r = el.getBoundingClientRect(); if (clientY >= r.top && clientY <= r.bottom) { const lane = layers.find((l) => l.id === id); return lane && lane.type === type ? { type: "lane", id } : null; } }
@@ -414,17 +425,24 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   };
   const onClipPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim") => {
     e.stopPropagation(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    dragRef.current = { id: c.id, mode, startX: e.clientX, origStart: c.start, origDur: c.duration, type: layerType(c) }; setSelected(c.id);
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    const ids = additive ? (selectedRef.current.includes(c.id) ? selectedRef.current.filter((x) => x !== c.id) : [...selectedRef.current, c.id]) : (selectedRef.current.includes(c.id) ? selectedRef.current : [c.id]);
+    setSelectedIds(ids);
+    const moveIds = mode === "move" ? (ids.length ? ids : [c.id]) : [c.id];
+    const origStarts = new Map(moveIds.map((id) => [id, clipsRef.current.find((x) => x.id === id)?.start ?? 0]));
+    dragRef.current = { id: c.id, mode, startX: e.clientX, origDur: c.duration, type: layerType(c), moveIds, origStarts };
   };
   const onClipPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current; if (!d) return; const dx = (e.clientX - d.startX) / pxPerSec;
-    if (d.mode === "move") { update(d.id, { start: Math.max(0, +(d.origStart + dx).toFixed(2)) }); setDropHint(hitTest(e.clientY, d.type)); }
-    else update(d.id, { duration: Math.max(MIN_DUR, +(d.origDur + dx).toFixed(2)) });
+    if (d.mode === "move") {
+      setClips((prev) => prev.map((x) => (d.moveIds.includes(x.id) ? { ...x, start: Math.max(0, +((d.origStarts.get(x.id) ?? x.start) + dx).toFixed(2)) } : x)));
+      setDropHint(d.moveIds.length > 1 ? null : hitTest(e.clientY, d.type)); // layer change only for a single clip
+    } else update(d.id, { duration: Math.max(MIN_DUR, +(d.origDur + dx).toFixed(2)) });
   };
   const onClipPointerUp = () => {
     const d = dragRef.current; dragRef.current = null;
     const hint = dropHintRef.current; setDropHint(null);
-    if (!d || d.mode !== "move" || !hint) return;
+    if (!d || d.mode !== "move" || !hint || d.moveIds.length > 1) return;
     const clip = clipsRef.current.find((c) => c.id === d.id); if (!clip) return;
     if (hint.type === "lane") { if (hint.id !== clip.layer) update(d.id, { layer: hint.id }); }
     else { const index = Number(hint.id.split("-")[1]); const id = createLayerAt(index, d.type); update(d.id, { layer: id }); }
@@ -456,7 +474,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   };
   const onPanDown = (e: React.PointerEvent) => {
     if (e.button !== 0 && e.button !== 1) return;
-    if (e.button === 0) setSelected(null);
+    if (e.button === 0) setSelectedIds([]);
     const s = { x: e.clientX, y: e.clientY, ox: viewPan.x, oy: viewPan.y };
     const move = (ev: PointerEvent) => setViewPan({ x: s.ox + (ev.clientX - s.x), y: s.oy + (ev.clientY - s.y) });
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
@@ -464,20 +482,26 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   };
   const onVpDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "scale") => {
     if (e.button === 1) return; // middle button → let the viewport pan
-    e.stopPropagation(); setSelected(c.id);
+    e.stopPropagation();
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    const ids = additive ? (selectedRef.current.includes(c.id) ? selectedRef.current.filter((x) => x !== c.id) : [...selectedRef.current, c.id]) : (selectedRef.current.includes(c.id) ? selectedRef.current : [c.id]);
+    setSelectedIds(ids);
+    const TH = 10; const STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3];
+    const groupIds = mode === "move" ? (ids.length ? ids : [c.id]) : [c.id];
+    const orig = new Map(groupIds.map((id) => { const cc = clipsRef.current.find((x) => x.id === id); return [id, { x: cc?.x ?? 0, y: cc?.y ?? 0 }]; }));
     const s = { sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y, os: c.scale };
-    const TH = 10; // snap threshold in composition pixels
-    const STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3];
     const move = (ev: PointerEvent) => {
-      const z = viewZoomRef.current || 1; const dx = (ev.clientX - s.sx) / z, dy = (ev.clientY - s.sy) / z;
+      const z = viewZoomRef.current || 1; const dxr = (ev.clientX - s.sx) / z, dyr = (ev.clientY - s.sy) / z;
       if (mode === "move") {
-        let nx = s.ox + dx, ny = s.oy + dy;
+        // snap based on the grabbed clip, apply the same (snapped) delta to the whole selection
+        let nx = s.ox + dxr, ny = s.oy + dyr;
         const v = Math.abs(nx) < TH; if (v) nx = 0;
         const h = Math.abs(ny) < TH; if (h) ny = 0;
         setSnap({ v, h });
-        update(c.id, { x: Math.round(nx), y: Math.round(ny) });
+        const ddx = nx - s.ox, ddy = ny - s.oy;
+        setClips((prev) => prev.map((x) => { const o = orig.get(x.id); return o ? { ...x, x: Math.round(o.x + ddx), y: Math.round(o.y + ddy) } : x; }));
       } else {
-        let ns = +(s.os + (dx + dy) / 250).toFixed(2);
+        let ns = +(s.os + (dxr + dyr) / 250).toFixed(2);
         const hit = STEPS.find((st) => Math.abs(ns - st) < 0.05); if (hit) ns = hit;
         update(c.id, { scale: Math.min(8, Math.max(0.05, ns)) });
       }
@@ -508,7 +532,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     addAssetAt(a, id, Math.max(0, (e.clientX - r.left) / pxPerSec));
   };
 
-  const onClipContext = (e: React.MouseEvent, c: EditClip) => { e.preventDefault(); e.stopPropagation(); setSelected(c.id); setMenu({ x: e.clientX, y: e.clientY, id: c.id }); };
+  const onClipContext = (e: React.MouseEvent, c: EditClip) => { e.preventDefault(); e.stopPropagation(); if (!selectedRef.current.includes(c.id)) setSelectedIds([c.id]); setMenu({ x: e.clientX, y: e.clientY, id: c.id }); };
 
   // transition applied via the "+" between two adjacent clips (CapCut-style)
   const applyTransition = (bId: string, v: string) => {
@@ -637,7 +661,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                         ? <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ backdropFilter: c.fx, WebkitBackdropFilter: c.fx as string, opacity: alphaAt(c, t) || 1 }} />
                         : null;
                       const active = isActive(c, t);
-                      const isSel = selected === c.id;
+                      const isSel = selectedIds.includes(c.id);
                       const v = clipVisual(c as CompClip, t, clips as CompClip[]);
                       return (
                         <div key={c.id} className="absolute inset-0"
@@ -648,15 +672,16 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                             <img src={c.url} alt="" draggable={false} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
                           )}
                           {c.kind === "video" && (
-                            <video src={c.url} playsInline preload="auto" ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
+                            <video src={c.url} playsInline preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
                               className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
                           )}
                           {c.kind === "text" && (
                             <div className="absolute inset-x-0 px-4 text-center font-bold text-white pointer-events-none"
                               style={{ bottom: "12%", fontSize: Math.max(14, previewSize.w / 16), textShadow: "0 2px 8px #000, 0 0 4px #000" }}>{c.text}</div>
                           )}
-                          {isSel && active && (<><div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />
-                            <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} /></>)}
+                          {isSel && active && <div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />}
+                          {selected === c.id && active && (
+                            <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} />)}
                         </div>
                       );
                     })}
@@ -670,7 +695,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 </div>
               </div>
               {clips.filter((c) => c.kind === "audio").map((c) => (
-                <audio key={c.id} src={c.url} preload="auto" ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }} />
+                <audio key={c.id} src={c.url} preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }} />
               ))}
             </div>
           ) : (<div className="text-fg-subtle text-[12px]">Add or drag assets from the left to start.</div>)}
@@ -747,10 +772,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     onDrop={(e) => onLaneDrop(e, layer)}>
                     <div className="absolute top-0 bottom-0 w-0.5 bg-brand/60 pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
                     {onLayer(layer.id).map((c) => (
-                      <div key={c.id} onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={(e) => { e.stopPropagation(); setSelected(c.id); }} onContextMenu={(e) => onClipContext(e, c)}
+                      <div key={c.id} onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={(e) => { e.stopPropagation(); selectClip(c.id, e.shiftKey || e.metaKey || e.ctrlKey); }} onContextMenu={(e) => onClipContext(e, c)}
                         style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
                         className={`absolute top-1.5 h-9 rounded text-[10px] cursor-grab active:cursor-grabbing border touch-none overflow-hidden flex items-center ${
-                          selected === c.id ? "border-brand bg-brand/20 text-brand z-10"
+                          selectedIds.includes(c.id) ? "border-brand bg-brand/20 text-brand z-10"
                           : c.kind === "fx" ? "border-purple-500/50 bg-purple-500/15 text-purple-300"
                           : c.kind === "adjust" ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
                           : "border-border bg-bg-card text-fg-muted"}`}>
