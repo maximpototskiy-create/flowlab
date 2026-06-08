@@ -13,6 +13,7 @@ export type EditorAsset = {
   kind: "video" | "image" | "audio";
   label: string;
   duration: number | null;
+  category?: string;
 };
 
 type LayerType = "video" | "image" | "text" | "effect" | "audio";
@@ -21,6 +22,7 @@ type Kind = "video" | "image" | "audio" | "text" | "fx" | "adjust";
 const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3, audio: 4 };
 const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
 const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" ? "text" : k === "image" ? "image" : "video");
+const CAT_LABEL: Record<string, string> = { logo: "Logo", ui: "UI", store: "Store", graphic: "Graphic", overlay: "Overlay", music: "Music", sound: "Sound", reference: "Reference", hook: "Hook", body: "Body", packshot: "Packshot", other: "Other" };
 
 type Word = { text: string; start: number; end: number }; // ms
 // group transcript words into caption segments per mode → {text, start(s), dur(s)}
@@ -101,6 +103,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [binBrand, setBinBrand] = useState("");
   const [binProject, setBinProject] = useState("");
   const [binSource, setBinSource] = useState("");
+  const [binCategory, setBinCategory] = useState("all");
   const [brands, setBrands] = useState<{ value: string; label: string }[]>([]);
   const [projects, setProjects] = useState<{ value: string; label: string }[]>([]);
   const [binLoading, setBinLoading] = useState(false);
@@ -144,7 +147,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   selectedRef.current = selected;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
-  const bin = library.filter((a) => binFilter === "all" || a.kind === binFilter);
+  const bin = library.filter((a) => (binFilter === "all" || a.kind === binFilter) && (binCategory === "all" || a.category === binCategory));
+  const libCats = Array.from(new Set(library.map((a) => a.category).filter((c): c is string => !!c)));
 
   const loadLibrary = async (over: Partial<{ q: string; brand: string; project: string; source: string }> = {}) => {
     const q = over.q ?? binQuery, brand = over.brand ?? binBrand, project = over.project ?? binProject, source = over.source ?? binSource;
@@ -155,14 +159,29 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       if (brand) p.set("brand", brand);
       if (project) p.set("project", project);
       if (source) p.set("source", source);
-      const r = await fetch(`/api/assets?${p.toString()}`);
-      const j = (await r.json()) as { assets?: { id: string; cdnUrl: string; kind: string; prompt: string | null; brandName: string | null; durationSec: number | null }[]; brands?: { value: string; label: string }[]; projects?: { value: string; label: string }[] };
-      const items: EditorAsset[] = (j.assets || [])
-        .filter((a) => a.kind === "video" || a.kind === "image" || a.kind === "audio")
-        .map((a) => ({ id: a.id, url: a.cdnUrl, kind: a.kind as EditorAsset["kind"], label: a.prompt || a.brandName || a.kind, duration: a.durationSec ?? null }));
+      // brand-assets (canvas library: hook/body/packshot/logo/…) — fetched unless filtering to uploads only
+      const wantBrand = source !== "upload" && !project && !q.trim();
+      const bp = new URLSearchParams(); bp.set("limit", "200"); if (brand) bp.set("brandId", brand);
+      const [aR, bR] = await Promise.all([
+        fetch(`/api/assets?${p.toString()}`).then((r) => r.json()).catch(() => ({})),
+        wantBrand ? fetch(`/api/brand-assets/browse?${bp.toString()}`).then((r) => r.json()).catch(() => ({})) : Promise.resolve({}),
+      ]);
+      const aj = aR as { assets?: { id: string; cdnUrl: string; kind: string; prompt: string | null; brandName: string | null; durationSec: number | null }[]; brands?: { value: string; label: string }[]; projects?: { value: string; label: string }[] };
+      const bj = bR as { assets?: { id: string; url: string; kind: string; category: string; label: string | null }[] };
+      const seen = new Set<string>();
+      const items: EditorAsset[] = [];
+      for (const a of aj.assets || []) {
+        if (!a.cdnUrl || seen.has(a.cdnUrl)) continue; if (!(a.kind === "video" || a.kind === "image" || a.kind === "audio")) continue;
+        seen.add(a.cdnUrl); items.push({ id: a.id, url: a.cdnUrl, kind: a.kind as EditorAsset["kind"], label: a.prompt || a.brandName || a.kind, duration: a.durationSec ?? null });
+      }
+      for (const r of bj.assets || []) {
+        if (!r.url?.startsWith("http") || seen.has(r.url)) continue;
+        seen.add(r.url); const kind: EditorAsset["kind"] = r.kind === "video" ? "video" : r.kind === "audio" ? "audio" : "image";
+        items.push({ id: `ba-${r.id}`, url: r.url, kind, label: r.label || CAT_LABEL[r.category] || r.category || "asset", duration: null, category: r.category });
+      }
       setLibrary(items);
-      if (Array.isArray(j.brands)) setBrands(j.brands);
-      if (Array.isArray(j.projects)) setProjects(j.projects);
+      if (Array.isArray(aj.brands)) setBrands(aj.brands);
+      if (Array.isArray(aj.projects)) setProjects(aj.projects);
     } catch { /* keep current */ } finally { setBinLoading(false); }
   };
   useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -537,6 +556,14 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <option value="upload">Uploads</option>
             <option value="brand_kit">Brand kit</option>
           </select>
+          {libCats.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap text-[10px]">
+              <button onClick={() => setBinCategory("all")} className={`px-2 py-0.5 rounded ${binCategory === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
+              {libCats.map((c) => (
+                <button key={c} onClick={() => setBinCategory(c)} className={`px-2 py-0.5 rounded ${binCategory === c ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{CAT_LABEL[c] ?? c}</button>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-1 text-[10px]">
             {(["all", "video", "image", "audio"] as const).map((f) => (
               <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
