@@ -21,6 +21,24 @@ type Kind = "video" | "image" | "audio" | "text" | "fx" | "adjust";
 const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3, audio: 4 };
 const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
 const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" ? "text" : k === "image" ? "image" : "video");
+
+type Word = { text: string; start: number; end: number }; // ms
+// group transcript words into caption segments per mode → {text, start(s), dur(s)}
+function groupWords(words: Word[], mode: "word" | "two" | "smart"): { text: string; start: number; dur: number }[] {
+  const out: { text: string; start: number; dur: number }[] = [];
+  const push = (ws: Word[]) => { if (!ws.length) return; const s = ws[0].start / 1000, e = ws[ws.length - 1].end / 1000; out.push({ text: ws.map((w) => w.text).join(" "), start: +s.toFixed(3), dur: Math.max(0.3, +(e - s).toFixed(3)) }); };
+  if (mode === "word") { for (const w of words) push([w]); return out; }
+  if (mode === "two") { for (let i = 0; i < words.length; i += 2) push(words.slice(i, i + 2)); return out; }
+  // smart: accumulate up to ~25 chars, break on sentence punctuation
+  let buf: Word[] = [], len = 0;
+  for (const w of words) {
+    buf.push(w); len += w.text.length + 1;
+    const ends = /[.!?,…]$/.test(w.text);
+    if (len >= 25 || ends) { push(buf); buf = []; len = 0; }
+  }
+  push(buf);
+  return out;
+}
 type EditClip = {
   id: string;
   layer: string;
@@ -88,7 +106,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [progress, setProgress] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
-  const [panelTab, setPanelTab] = useState<"media" | "effects" | "filters" | "text">("media");
+  const [panelTab, setPanelTab] = useState<"media" | "effects" | "filters" | "text" | "subs">("media");
+  const [subSource, setSubSource] = useState<string>("");
+  const [subMode, setSubMode] = useState<"word" | "two" | "smart">("smart");
+  const [subBusy, setSubBusy] = useState(false);
+  const [subStatus, setSubStatus] = useState("");
   const [transMenu, setTransMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [timelineH, setTimelineH] = useState(208);
   const resizeRef = useRef<{ startY: number; startH: number } | null>(null);
@@ -147,6 +169,38 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const addText = () => addClipKind("text", { text: "Your caption" }, DEFAULTS.text, "Text");
   const addFx = (type = "vignette") => addClipKind("fx", { fx: type }, DEFAULTS.fx, "FX");
   const addAdjust = (v = "grayscale(1)") => addClipKind("adjust", { fx: v }, DEFAULTS.adjust, "Adjust");
+
+  // sources that have audio to transcribe
+  const subSources = clips.filter((c) => (c.kind === "video" || c.kind === "audio") && c.url);
+  const generateSubtitles = async () => {
+    const src = subSources.find((c) => c.id === subSource) || subSources[0];
+    if (!src?.url) { setSubStatus("Add a video or audio clip first."); return; }
+    setSubBusy(true); setSubStatus("Submitting…");
+    try {
+      const sub = await fetch("/api/subtitles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audioUrl: src.url, language: "auto" }) });
+      const sj = await sub.json();
+      if (!sub.ok || !sj.id) throw new Error(sj.error || "submit failed");
+      setSubStatus("Transcribing…");
+      let words: Word[] | null = null;
+      for (let i = 0; i < 240; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const pr = await fetch(`/api/subtitles?id=${sj.id}`);
+        const pj = await pr.json();
+        if (pj.status === "completed") { words = pj.words || []; break; }
+        if (pj.status === "error") throw new Error(pj.error || "transcription error");
+        setSubStatus(`Transcribing… ${i * 2}s`);
+      }
+      if (!words) throw new Error("Timed out");
+      if (!words.length) throw new Error("No speech detected");
+      const segs = groupWords(words, subMode);
+      const base0 = src.start; // align captions to where the source sits on the timeline
+      const layerId = layerForKind("text");
+      setClips((p) => [...p, ...segs.map((sg) => base("text", layerId, undefined, "Caption", +(base0 + sg.start).toFixed(3), sg.dur, { text: sg.text }))]);
+      setSubStatus(`Done — ${segs.length} captions added.`);
+    } catch (e) {
+      setSubStatus(`Failed: ${e instanceof Error ? e.message : "error"}`);
+    } finally { setSubBusy(false); }
+  };
   const update = (id: string, patch: Partial<EditClip>) => setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected((s) => (s === id ? null : s)); }, []);
   const duplicate = (id: string) => setClips((p) => { const c = p.find((x) => x.id === id); return c ? [...p, { ...c, id: uid(), start: c.start + 0.3 }] : p; });
@@ -412,7 +466,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       {/* Library panel */}
       <aside className="w-60 shrink-0 border-r border-border flex flex-col min-h-0">
         <div className="h-11 shrink-0 border-b border-border flex items-center gap-1 px-2 text-[11px]">
-          {([["media", "Media"], ["effects", "Effects"], ["filters", "Filters"], ["text", "Text"]] as const).map(([k, l]) => (
+          {([["media", "Media"], ["effects", "Effects"], ["filters", "Filters"], ["text", "Text"], ["subs", "Subtitles"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setPanelTab(k)} className={`px-2 py-1 rounded ${panelTab === k ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}>{l}</button>
           ))}
         </div>
@@ -477,6 +531,31 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           <div className="flex-1 min-h-0 overflow-y-auto p-2">
             <button onClick={addText} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add text</button>
             <div className="text-[10px] text-fg-subtle px-1 pt-2">Adds a caption on a new top layer; edit text in the inspector.</div>
+          </div>
+        )}
+
+        {panelTab === "subs" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2 text-[11px]">
+            <div className="text-fg-subtle">Auto-generate captions from speech (AssemblyAI).</div>
+            <label className="block text-fg-muted">Source
+              <select value={subSource} onChange={(e) => setSubSource(e.target.value)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+                {subSources.length === 0 && <option value="">No video/audio on timeline</option>}
+                {subSources.map((c) => <option key={c.id} value={c.id}>{c.label} ({c.kind})</option>)}
+              </select>
+            </label>
+            <label className="block text-fg-muted">Split
+              <select value={subMode} onChange={(e) => setSubMode(e.target.value as "word" | "two" | "smart")} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+                <option value="word">One word</option>
+                <option value="two">Two words</option>
+                <option value="smart">Smart (phrases)</option>
+              </select>
+            </label>
+            <button onClick={generateSubtitles} disabled={subBusy || subSources.length === 0}
+              className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md bg-brand text-white text-[12px] font-medium disabled:opacity-50">
+              {subBusy ? <><Loader2 size={14} className="animate-spin" /> Working…</> : <><Sparkles size={14} /> Generate subtitles</>}
+            </button>
+            {subStatus && <div className="text-fg-subtle">{subStatus}</div>}
+            <div className="text-[10px] text-fg-subtle pt-1 border-t border-border/40">Captions land on a Text track, synced to speech. Requires ASSEMBLYAI_API_KEY on the server.</div>
           </div>
         )}
       </aside>
