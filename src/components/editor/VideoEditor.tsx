@@ -15,9 +15,12 @@ export type EditorAsset = {
   duration: number | null;
 };
 
-type LayerType = "visual" | "audio";
-type Layer = { id: string; name: string; type: LayerType };
+type LayerType = "video" | "image" | "text" | "effect" | "audio";
+type Layer = { id: string; name?: string; type: LayerType };
 type Kind = "video" | "image" | "audio" | "text" | "fx" | "adjust";
+const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3, audio: 4 };
+const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
+const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" ? "text" : k === "image" ? "image" : "video");
 type EditClip = {
   id: string;
   layer: string;
@@ -69,7 +72,9 @@ const uid = () => `c${Date.now()}_${_id++}`;
 const fmt = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
 
 export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
-  const [layers, setLayers] = useState<Layer[]>([{ id: "v1", name: "V1", type: "visual" }, { id: "a1", name: "A1", type: "audio" }]);
+  const [layers, setLayers] = useState<Layer[]>([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]);
+  const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
+  const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
   const [clips, setClips] = useState<EditClip[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [binFilter, setBinFilter] = useState<"all" | "video" | "image" | "audio">("all");
@@ -109,9 +114,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
   const bin = assets.filter((a) => binFilter === "all" || a.kind === binFilter);
-  const visualLayers = layers.filter((l) => l.type === "visual");
-  const topVisualId = () => visualLayers[0]?.id ?? "v1";
-  const firstAudioId = () => layers.find((l) => l.type === "audio")?.id ?? "a1";
+  const visualLayers = layers.filter((l) => l.type !== "audio");
   const onLayer = (id: string) => clips.filter((c) => c.layer === id).sort((a, b) => a.start - b.start);
   const totalDur = Math.max(0.1, ...clips.map((c) => c.start + c.duration));
   const sel = clips.find((c) => c.id === selected) ?? null;
@@ -120,37 +123,47 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   const base = (kind: Kind, layer: string, url: string | undefined, label: string, start: number, duration: number, extra: Partial<EditClip> = {}): EditClip =>
     ({ id: uid(), layer, kind, url, label, start, duration, scale: 1, x: 0, y: 0, fadeIn: 0, fadeOut: 0, ...extra });
+  const createLayerForType = (type: LayerType): string => {
+    const id = `${type[0]}${Date.now()}_${_l++}`;
+    setLayers((p) => { const idx = p.findIndex((l) => PRIO[l.type] > PRIO[type]); const at = idx === -1 ? p.length : idx; const n = [...p]; n.splice(at, 0, { id, type }); return n; });
+    return id;
+  };
+  // route an added clip: into the selected layer (if compatible), else the first row of its type, else a new row
+  const layerForKind = (type: LayerType): string => {
+    if (selectedLayer) { const sl = layers.find((l) => l.id === selectedLayer); if (sl && sl.type === type) return sl.id; }
+    const existing = layers.find((l) => l.type === type);
+    return existing ? existing.id : createLayerForType(type);
+  };
   const addAssetAt = (a: { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null }, layerId?: string, start?: number) => {
-    const layer = layerId ?? (a.kind === "audio" ? firstAudioId() : topVisualId());
+    const layer = layerId ?? layerForKind(clipLayerType(a.kind));
     const duration = a.duration ?? DEFAULTS[a.kind];
     const at = start ?? Math.max(0, ...clips.filter((c) => c.layer === layer).map((c) => c.start + c.duration));
     setClips((p) => [...p, base(a.kind, layer, a.url, a.label, Math.max(0, at), duration)]);
   };
-  const addOnNewTop = (kind: Kind, extra: Partial<EditClip>, dur: number, label: string) => {
-    const id = createLayerAt(0, "visual");
+  const addClipKind = (kind: Kind, extra: Partial<EditClip>, dur: number, label: string) => {
+    const id = layerForKind(clipLayerType(kind));
     setClips((p) => [...p, base(kind, id, undefined, label, +playheadRef.current.toFixed(2), dur, extra)]);
   };
-  const addText = () => addOnNewTop("text", { text: "Your caption" }, DEFAULTS.text, "Text");
-  const addFx = (type = "vignette") => addOnNewTop("fx", { fx: type }, DEFAULTS.fx, "FX");
-  const addAdjust = (v = "grayscale(1)") => addOnNewTop("adjust", { fx: v }, DEFAULTS.adjust, "Adjust");
+  const addText = () => addClipKind("text", { text: "Your caption" }, DEFAULTS.text, "Text");
+  const addFx = (type = "vignette") => addClipKind("fx", { fx: type }, DEFAULTS.fx, "FX");
+  const addAdjust = (v = "grayscale(1)") => addClipKind("adjust", { fx: v }, DEFAULTS.adjust, "Adjust");
   const update = (id: string, patch: Partial<EditClip>) => setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelected((s) => (s === id ? null : s)); }, []);
   const duplicate = (id: string) => setClips((p) => { const c = p.find((x) => x.id === id); return c ? [...p, { ...c, id: uid(), start: c.start + 0.3 }] : p; });
-  const layerType = (c: { kind: Kind }): LayerType => (c.kind === "audio" ? "audio" : "visual");
+  const layerType = (c: { kind: Kind }): LayerType => clipLayerType(c.kind);
   const createLayerAt = (index: number, type: LayerType): string => {
-    const id = `${type === "visual" ? "v" : "a"}${Date.now()}_${_l++}`;
-    const name = `${type === "visual" ? "V" : "A"}${layers.filter((l) => l.type === type).length + 1}`;
-    setLayers((p) => { const n = [...p]; n.splice(Math.max(0, Math.min(index, n.length)), 0, { id, name, type }); return n; });
+    const id = `${type[0]}${Date.now()}_${_l++}`;
+    setLayers((p) => { const n = [...p]; n.splice(Math.max(0, Math.min(index, n.length)), 0, { id, type }); return n; });
     return id;
   };
-  // auto-prune empty layers (keep ≥1 visual and ≥1 audio) — never while dragging
+  // auto-prune empty layers (keep ≥1 video + ≥1 audio baseline) — never while dragging
   useEffect(() => {
     if (dragRef.current) return;
     setLayers((prev) => {
       const used = new Set(clips.map((c) => c.layer));
       const kept = prev.filter((l) => used.has(l.id));
-      if (!kept.some((l) => l.type === "visual")) { const v = prev.find((l) => l.type === "visual"); if (v) kept.unshift(v); }
-      if (!kept.some((l) => l.type === "audio")) { const a = prev.find((l) => l.type === "audio"); if (a) kept.push(a); }
+      if (!kept.some((l) => l.type === "video")) { const v = prev.find((l) => l.type === "video") ?? { id: `v${Date.now()}_${_l++}`, type: "video" as LayerType }; const ai = kept.findIndex((l) => l.type === "audio"); if (ai === -1) kept.push(v); else kept.splice(ai, 0, v); }
+      if (!kept.some((l) => l.type === "audio")) { const a = prev.find((l) => l.type === "audio") ?? { id: `a${Date.now()}_${_l++}`, type: "audio" as LayerType }; kept.push(a); }
       const same = kept.length === prev.length && kept.every((l, i) => l.id === prev[i].id);
       return same ? prev : kept;
     });
@@ -161,15 +174,17 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     if (!clips.some((c) => !ids.has(c.layer))) return;
     setClips((prev) => prev.map((c) => {
       if (ids.has(c.layer)) return c;
-      const t: LayerType = c.kind === "audio" ? "audio" : "visual";
-      const fb = layers.find((l) => l.type === t) ?? layers[0];
+      const t = clipLayerType(c.kind);
+      const fb = layers.find((l) => l.type === t) ?? layers.find((l) => l.type !== "audio") ?? layers[0];
       return fb ? { ...c, layer: fb.id } : c;
     }));
   }, [layers, clips]);
-  // display label derived from position (always unique, no collisions)
+  const renameLayer = (id: string, value: string) => setLayers((p) => p.map((l) => (l.id === id ? { ...l, name: value.trim() || undefined } : l)));
+  // display label: custom name, else type-prefixed number counted top→down
   const labelFor = (layer: Layer): string => {
-    if (layer.type === "visual") { const v = layers.filter((l) => l.type === "visual"); return `V${v.length - v.indexOf(layer)}`; }
-    const a = layers.filter((l) => l.type === "audio"); return `A${a.indexOf(layer) + 1}`;
+    if (layer.name) return layer.name;
+    const same = layers.filter((l) => l.type === layer.type);
+    return `${TYPE_PREFIX[layer.type]}${same.indexOf(layer) + 1}`;
   };
 
   useEffect(() => {
@@ -238,7 +253,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     if (exporting || !clips.length) return;
     setExporting(true); setProgress(0); setStatus("Recording…"); stop();
     try {
-      const vis = layers.filter((l) => l.type === "visual");
+      const vis = layers.filter((l) => l.type !== "audio");
       const z: EditClip[] = [];
       for (let i = vis.length - 1; i >= 0; i--) z.push(...clips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start));
       const ordered = [...z, ...clips.filter((c) => !z.includes(c))];
@@ -306,7 +321,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     e.preventDefault(); setDropHint(null);
     const raw = e.dataTransfer.getData("application/x-flowlab-asset"); if (!raw) return;
     const a = JSON.parse(raw) as { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null };
-    if ((a.kind === "audio" ? "audio" : "visual") !== layer.type) return;
+    if (clipLayerType(a.kind) !== layer.type) return;
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     addAssetAt(a, layer.id, Math.max(0, (e.clientX - r.left) / pxPerSec));
   };
@@ -314,7 +329,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     e.preventDefault(); setDropHint(null);
     const raw = e.dataTransfer.getData("application/x-flowlab-asset"); if (!raw) return;
     const a = JSON.parse(raw) as { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null };
-    const id = createLayerAt(index, a.kind === "audio" ? "audio" : "visual");
+    const id = createLayerAt(index, clipLayerType(a.kind));
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     addAssetAt(a, id, Math.max(0, (e.clientX - r.left) / pxPerSec));
   };
@@ -527,24 +542,41 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     className={`flex-1 rounded transition-all ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "h-2.5 bg-brand/50 ring-1 ring-brand" : "h-0.5 bg-border/30"}`} />
                 </div>
                 <div className="flex items-stretch border-b border-border/40 min-h-[48px]">
-                  <div className="w-20 shrink-0 flex items-center justify-between px-1.5 text-[9px] uppercase tracking-wider text-fg-subtle border-r border-border/40">
-                    <span>{labelFor(layer)}</span>
+                  <div onClick={() => setSelectedLayer(layer.id)} onDoubleClick={() => setRenamingLayer(layer.id)}
+                    className={`w-20 shrink-0 flex items-center px-1.5 text-[9px] uppercase tracking-wider border-r border-border/40 cursor-pointer ${selectedLayer === layer.id ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>
+                    {renamingLayer === layer.id ? (
+                      <input autoFocus defaultValue={labelFor(layer)} onClick={(e) => e.stopPropagation()}
+                        onBlur={(e) => { renameLayer(layer.id, e.target.value); setRenamingLayer(null); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { renameLayer(layer.id, (e.target as HTMLInputElement).value); setRenamingLayer(null); } if (e.key === "Escape") setRenamingLayer(null); }}
+                        className="w-full bg-bg border border-brand rounded px-1 py-0.5 text-fg outline-none normal-case" />
+                    ) : (
+                      <span className="truncate" title="Click to select · double-click to rename">{labelFor(layer)}</span>
+                    )}
                   </div>
                   <div ref={(el) => { if (el) laneRefs.current.set(layer.id, el); else laneRefs.current.delete(layer.id); }}
-                    className={`relative flex-1 h-12 ${dropHint?.type === "lane" && dropHint.id === layer.id ? "bg-brand/10 ring-1 ring-inset ring-brand/50" : ""}`}
+                    className={`relative flex-1 h-12 ${dropHint?.type === "lane" && dropHint.id === layer.id ? "bg-brand/10 ring-1 ring-inset ring-brand/50" : selectedLayer === layer.id ? "bg-brand/[0.04]" : ""}`}
+                    onClick={() => setSelectedLayer(layer.id)}
                     onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "lane", id: layer.id }); }}
                     onDragLeave={() => setDropHint((h) => (h?.type === "lane" && h.id === layer.id ? null : h))}
                     onDrop={(e) => onLaneDrop(e, layer)}>
                     <div className="absolute top-0 bottom-0 w-0.5 bg-brand/60 pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
                     {onLayer(layer.id).map((c) => (
-                      <div key={c.id} onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={() => setSelected(c.id)} onContextMenu={(e) => onClipContext(e, c)}
+                      <div key={c.id} onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={(e) => { e.stopPropagation(); setSelected(c.id); }} onContextMenu={(e) => onClipContext(e, c)}
                         style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
-                        className={`absolute top-1.5 h-9 rounded px-2 text-[10px] leading-9 truncate cursor-grab active:cursor-grabbing border touch-none ${
+                        className={`absolute top-1.5 h-9 rounded text-[10px] cursor-grab active:cursor-grabbing border touch-none overflow-hidden flex items-center ${
                           selected === c.id ? "border-brand bg-brand/20 text-brand z-10"
                           : c.kind === "fx" ? "border-purple-500/50 bg-purple-500/15 text-purple-300"
                           : c.kind === "adjust" ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
                           : "border-border bg-bg-card text-fg-muted"}`}>
-                        {c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}
+                        {(c.kind === "video" || c.kind === "image") && c.url && (
+                          <span className="h-full w-8 shrink-0 overflow-hidden border-r border-black/40 bg-black">
+                            {c.kind === "image"
+                              // eslint-disable-next-line @next/next/no-img-element
+                              ? <img src={c.url} alt="" draggable={false} className="w-full h-full object-cover pointer-events-none" />
+                              : <video src={c.url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" />}
+                          </span>
+                        )}
+                        <span className="px-2 truncate leading-9">{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r" />
                       </div>
                     ))}
@@ -591,6 +623,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           {!sel && <span className="text-fg-subtle">Select a clip to edit its properties.</span>}
           {sel && (<>
             <span className="text-fg-subtle uppercase tracking-wider">{sel.kind}</span>
+            <input value={sel.label} onChange={(e) => update(sel.id, { label: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-28 outline-none focus:border-brand" placeholder="Name" title="Element name" />
             {sel.kind === "text" && (<input value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-40 outline-none focus:border-brand" placeholder="Caption" />)}
             {sel.kind === "fx" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{FX.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
             {sel.kind === "adjust" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{ADJUST.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
