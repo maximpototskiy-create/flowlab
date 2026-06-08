@@ -96,6 +96,12 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [clips, setClips] = useState<EditClip[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [binFilter, setBinFilter] = useState<"all" | "video" | "image" | "audio">("all");
+  const [library, setLibrary] = useState<EditorAsset[]>(assets);
+  const [binQuery, setBinQuery] = useState("");
+  const [binBrand, setBinBrand] = useState("");
+  const [brands, setBrands] = useState<{ value: string; label: string }[]>([]);
+  const [binLoading, setBinLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [resKey, setResKey] = useState("9:16");
   const [pxPerSec, setPxPerSec] = useState(60);
   const [playing, setPlaying] = useState(false);
@@ -135,7 +141,39 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   selectedRef.current = selected;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
-  const bin = assets.filter((a) => binFilter === "all" || a.kind === binFilter);
+  const bin = library.filter((a) => binFilter === "all" || a.kind === binFilter);
+
+  const loadLibrary = async (q = binQuery, brand = binBrand) => {
+    setBinLoading(true);
+    try {
+      const p = new URLSearchParams(); p.set("limit", "400");
+      if (q.trim()) p.set("q", q.trim());
+      if (brand) p.set("brand", brand);
+      const r = await fetch(`/api/assets?${p.toString()}`);
+      const j = (await r.json()) as { assets?: { id: string; cdnUrl: string; kind: string; prompt: string | null; brandName: string | null; durationSec: number | null }[]; brands?: { value: string; label: string }[] };
+      const items: EditorAsset[] = (j.assets || [])
+        .filter((a) => a.kind === "video" || a.kind === "image" || a.kind === "audio")
+        .map((a) => ({ id: a.id, url: a.cdnUrl, kind: a.kind as EditorAsset["kind"], label: a.prompt || a.brandName || a.kind, duration: a.durationSec ?? null }));
+      setLibrary(items);
+      if (Array.isArray(j.brands)) setBrands(j.brands);
+    } catch { /* keep current */ } finally { setBinLoading(false); }
+  };
+  useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const onUpload = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBinLoading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const fd = new FormData(); fd.append("file", file);
+        const r = await fetch("/api/upload", { method: "POST", body: fd });
+        const j = (await r.json()) as { id?: string; cdnUrl?: string; kind?: string };
+        if (r.ok && j.cdnUrl && j.id) {
+          const kind: EditorAsset["kind"] = j.kind === "video" || j.kind === "audio" ? j.kind : "image";
+          setLibrary((p) => [{ id: j.id!, url: j.cdnUrl!, kind, label: file.name, duration: null }, ...p]);
+        }
+      }
+    } catch { /* ignore */ } finally { setBinLoading(false); }
+  };
   const visualLayers = layers.filter((l) => l.type !== "audio");
   const onLayer = (id: string) => clips.filter((c) => c.layer === id).sort((a, b) => a.start - b.start);
   const totalDur = Math.max(0.1, ...clips.map((c) => c.start + c.duration));
@@ -473,10 +511,24 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
         {panelTab === "media" && (
           <>
-            <div className="shrink-0 flex items-center gap-1 px-2 py-1.5 text-[10px] border-b border-border/50">
-              {(["all", "video", "image", "audio"] as const).map((f) => (
-                <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
-              ))}
+            <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
+              <div className="flex gap-1.5">
+                <button onClick={() => fileInputRef.current?.click()} className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]"><Plus size={12} /> Upload</button>
+                <button onClick={() => loadLibrary()} disabled={binLoading} className="px-2 rounded border border-border text-fg-muted hover:text-fg text-[11px] disabled:opacity-50">{binLoading ? "…" : "Refresh"}</button>
+              </div>
+              <input ref={fileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ""; }} />
+              <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") loadLibrary(); }} placeholder="Search library…" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
+              {brands.length > 0 && (
+                <select value={binBrand} onChange={(e) => { setBinBrand(e.target.value); loadLibrary(binQuery, e.target.value); }} className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none">
+                  <option value="">All brands</option>
+                  {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </select>
+              )}
+              <div className="flex items-center gap-1 text-[10px]">
+                {(["all", "video", "image", "audio"] as const).map((f) => (
+                  <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
+                ))}
+              </div>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-2">
               <div className="grid grid-cols-2 gap-2">
