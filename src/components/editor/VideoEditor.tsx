@@ -99,7 +99,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [library, setLibrary] = useState<EditorAsset[]>(assets);
   const [binQuery, setBinQuery] = useState("");
   const [binBrand, setBinBrand] = useState("");
+  const [binProject, setBinProject] = useState("");
+  const [binSource, setBinSource] = useState("");
   const [brands, setBrands] = useState<{ value: string; label: string }[]>([]);
+  const [projects, setProjects] = useState<{ value: string; label: string }[]>([]);
   const [binLoading, setBinLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [resKey, setResKey] = useState("9:16");
@@ -112,7 +115,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [progress, setProgress] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
-  const [panelTab, setPanelTab] = useState<"media" | "effects" | "filters" | "text" | "subs">("media");
+  const [panelTab, setPanelTab] = useState<"effects" | "filters" | "text" | "subs">("effects");
   const [subSource, setSubSource] = useState<string>("");
   const [subMode, setSubMode] = useState<"word" | "two" | "smart">("smart");
   const [subBusy, setSubBusy] = useState(false);
@@ -143,19 +146,23 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
   const bin = library.filter((a) => binFilter === "all" || a.kind === binFilter);
 
-  const loadLibrary = async (q = binQuery, brand = binBrand) => {
+  const loadLibrary = async (over: Partial<{ q: string; brand: string; project: string; source: string }> = {}) => {
+    const q = over.q ?? binQuery, brand = over.brand ?? binBrand, project = over.project ?? binProject, source = over.source ?? binSource;
     setBinLoading(true);
     try {
-      const p = new URLSearchParams(); p.set("limit", "400");
+      const p = new URLSearchParams(); p.set("limit", "600");
       if (q.trim()) p.set("q", q.trim());
       if (brand) p.set("brand", brand);
+      if (project) p.set("project", project);
+      if (source) p.set("source", source);
       const r = await fetch(`/api/assets?${p.toString()}`);
-      const j = (await r.json()) as { assets?: { id: string; cdnUrl: string; kind: string; prompt: string | null; brandName: string | null; durationSec: number | null }[]; brands?: { value: string; label: string }[] };
+      const j = (await r.json()) as { assets?: { id: string; cdnUrl: string; kind: string; prompt: string | null; brandName: string | null; durationSec: number | null }[]; brands?: { value: string; label: string }[]; projects?: { value: string; label: string }[] };
       const items: EditorAsset[] = (j.assets || [])
         .filter((a) => a.kind === "video" || a.kind === "image" || a.kind === "audio")
         .map((a) => ({ id: a.id, url: a.cdnUrl, kind: a.kind as EditorAsset["kind"], label: a.prompt || a.brandName || a.kind, duration: a.durationSec ?? null }));
       setLibrary(items);
       if (Array.isArray(j.brands)) setBrands(j.brands);
+      if (Array.isArray(j.projects)) setProjects(j.projects);
     } catch { /* keep current */ } finally { setBinLoading(false); }
   };
   useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -501,115 +508,59 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   return (
     <div className="flex-1 flex min-h-0">
-      {/* Library panel */}
+      {/* Library (left) */}
       <aside className="w-60 shrink-0 border-r border-border flex flex-col min-h-0">
-        <div className="h-11 shrink-0 border-b border-border flex items-center gap-1 px-2 text-[11px]">
-          {([["media", "Media"], ["effects", "Effects"], ["filters", "Filters"], ["text", "Text"], ["subs", "Subtitles"]] as const).map(([k, l]) => (
-            <button key={k} onClick={() => setPanelTab(k)} className={`px-2 py-1 rounded ${panelTab === k ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}>{l}</button>
-          ))}
+        <div className="h-11 shrink-0 border-b border-border flex items-center px-3 text-[12px] font-medium text-fg">Library</div>
+        <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
+          <div className="flex gap-1.5">
+            <button onClick={() => fileInputRef.current?.click()} className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]"><Plus size={12} /> Upload</button>
+            <button onClick={() => loadLibrary()} disabled={binLoading} className="px-2 rounded border border-border text-fg-muted hover:text-fg text-[11px] disabled:opacity-50">{binLoading ? "…" : "Refresh"}</button>
+          </div>
+          <input ref={fileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ""; }} />
+          <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") loadLibrary(); }} placeholder="Search library…" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
+          <div className="grid grid-cols-2 gap-1.5">
+            {projects.length > 0 && (
+              <select value={binProject} onChange={(e) => { setBinProject(e.target.value); loadLibrary({ project: e.target.value }); }} className="bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
+                <option value="">All projects</option>
+                {projects.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            )}
+            {brands.length > 0 && (
+              <select value={binBrand} onChange={(e) => { setBinBrand(e.target.value); loadLibrary({ brand: e.target.value }); }} className="bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
+                <option value="">All brands</option>
+                {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </select>
+            )}
+          </div>
+          <select value={binSource} onChange={(e) => { setBinSource(e.target.value); loadLibrary({ source: e.target.value }); }} className="w-full bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
+            <option value="">All sources</option>
+            <option value="upload">Uploads</option>
+            <option value="brand_kit">Brand kit</option>
+          </select>
+          <div className="flex items-center gap-1 text-[10px]">
+            {(["all", "video", "image", "audio"] as const).map((f) => (
+              <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
+            ))}
+          </div>
         </div>
-
-        {panelTab === "media" && (
-          <>
-            <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
-              <div className="flex gap-1.5">
-                <button onClick={() => fileInputRef.current?.click()} className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]"><Plus size={12} /> Upload</button>
-                <button onClick={() => loadLibrary()} disabled={binLoading} className="px-2 rounded border border-border text-fg-muted hover:text-fg text-[11px] disabled:opacity-50">{binLoading ? "…" : "Refresh"}</button>
-              </div>
-              <input ref={fileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ""; }} />
-              <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") loadLibrary(); }} placeholder="Search library…" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
-              {brands.length > 0 && (
-                <select value={binBrand} onChange={(e) => { setBinBrand(e.target.value); loadLibrary(binQuery, e.target.value); }} className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none">
-                  <option value="">All brands</option>
-                  {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
-                </select>
-              )}
-              <div className="flex items-center gap-1 text-[10px]">
-                {(["all", "video", "image", "audio"] as const).map((f) => (
-                  <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
-                ))}
-              </div>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-2">
-              <div className="grid grid-cols-2 gap-2">
-                {bin.map((a) => (
-                  <button key={a.id} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={a.label}
-                    className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
-                    {a.kind === "image" ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
-                    ) : a.kind === "video" ? (
-                      <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
-                    ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
-                    <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
-                    <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
-                  </button>
-                ))}
-                {bin.length === 0 && <div className="col-span-2 text-fg-subtle text-[11px] p-3">No assets.</div>}
-              </div>
-            </div>
-          </>
-        )}
-
-        {panelTab === "effects" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <div className="text-[10px] text-fg-subtle px-1 pb-2">Overlay effect — added as a clip on a new top layer.</div>
-            <div className="grid grid-cols-2 gap-2">
-              {FX.map((f) => (
-                <button key={f.v} onClick={() => addFx(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center group">
-                  <div className="absolute inset-0" style={fxStyle(f.v)} />
-                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Sparkles size={11} /> {f.l}</span>
-                </button>
-              ))}
-            </div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-2">
+          <div className="grid grid-cols-2 gap-2">
+            {bin.map((a) => (
+              <button key={a.id} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={a.label}
+                className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
+                {a.kind === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
+                ) : a.kind === "video" ? (
+                  <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
+                ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
+                <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
+                <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
+              </button>
+            ))}
+            {bin.length === 0 && <div className="col-span-2 text-fg-subtle text-[11px] p-3">{binLoading ? "Loading…" : "No assets. Upload or pick a different category."}</div>}
           </div>
-        )}
-
-        {panelTab === "filters" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <div className="text-[10px] text-fg-subtle px-1 pb-2">Filter — added as a clip; affects only layers below it.</div>
-            <div className="grid grid-cols-2 gap-2">
-              {ADJUST.map((f) => (
-                <button key={f.v} onClick={() => addAdjust(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-gradient-to-br from-bg-card to-bg-card/40 flex items-end justify-center">
-                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-400/30 via-fuchsia-400/20 to-amber-300/30" style={{ filter: f.v }} />
-                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Wand2 size={11} /> {f.l}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {panelTab === "text" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <button onClick={addText} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add text</button>
-            <div className="text-[10px] text-fg-subtle px-1 pt-2">Adds a caption on a new top layer; edit text in the inspector.</div>
-          </div>
-        )}
-
-        {panelTab === "subs" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2 text-[11px]">
-            <div className="text-fg-subtle">Auto-generate captions from speech (AssemblyAI).</div>
-            <label className="block text-fg-muted">Source
-              <select value={subSource} onChange={(e) => setSubSource(e.target.value)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
-                {subSources.length === 0 && <option value="">No video/audio on timeline</option>}
-                {subSources.map((c) => <option key={c.id} value={c.id}>{c.label} ({c.kind})</option>)}
-              </select>
-            </label>
-            <label className="block text-fg-muted">Split
-              <select value={subMode} onChange={(e) => setSubMode(e.target.value as "word" | "two" | "smart")} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
-                <option value="word">One word</option>
-                <option value="two">Two words</option>
-                <option value="smart">Smart (phrases)</option>
-              </select>
-            </label>
-            <button onClick={generateSubtitles} disabled={subBusy || subSources.length === 0}
-              className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md bg-brand text-white text-[12px] font-medium disabled:opacity-50">
-              {subBusy ? <><Loader2 size={14} className="animate-spin" /> Working…</> : <><Sparkles size={14} /> Generate subtitles</>}
-            </button>
-            {subStatus && <div className="text-fg-subtle">{subStatus}</div>}
-            <div className="text-[10px] text-fg-subtle pt-1 border-t border-border/40">Captions land on a Text track, synced to speech. Requires ASSEMBLYAI_API_KEY on the server.</div>
-          </div>
-        )}
+        </div>
       </aside>
 
       {/* Main */}
@@ -833,6 +784,75 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           </>)}
         </div>
       </div>
+
+      {/* Tools (right) */}
+      <aside className="w-64 shrink-0 border-l border-border flex flex-col min-h-0">
+        <div className="h-11 shrink-0 border-b border-border flex items-center gap-1 px-2 text-[11px]">
+          {([["effects", "Effects"], ["filters", "Filters"], ["text", "Text"], ["subs", "Subtitles"]] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setPanelTab(k)} className={`px-2 py-1 rounded ${panelTab === k ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}>{l}</button>
+          ))}
+        </div>
+
+        {panelTab === "effects" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <div className="text-[10px] text-fg-subtle px-1 pb-2">Overlay effect — added as a clip on a new top layer.</div>
+            <div className="grid grid-cols-2 gap-2">
+              {FX.map((f) => (
+                <button key={f.v} onClick={() => addFx(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center group">
+                  <div className="absolute inset-0" style={fxStyle(f.v)} />
+                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Sparkles size={11} /> {f.l}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {panelTab === "filters" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <div className="text-[10px] text-fg-subtle px-1 pb-2">Filter — added as a clip; affects only layers below it.</div>
+            <div className="grid grid-cols-2 gap-2">
+              {ADJUST.map((f) => (
+                <button key={f.v} onClick={() => addAdjust(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-gradient-to-br from-bg-card to-bg-card/40 flex items-end justify-center">
+                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-400/30 via-fuchsia-400/20 to-amber-300/30" style={{ filter: f.v }} />
+                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Wand2 size={11} /> {f.l}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {panelTab === "text" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <button onClick={addText} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add text</button>
+            <div className="text-[10px] text-fg-subtle px-1 pt-2">Adds a caption on a new top layer; edit text in the inspector.</div>
+          </div>
+        )}
+
+        {panelTab === "subs" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2 text-[11px]">
+            <div className="text-fg-subtle">Auto-generate captions from speech (AssemblyAI).</div>
+            <label className="block text-fg-muted">Source
+              <select value={subSource} onChange={(e) => setSubSource(e.target.value)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+                {subSources.length === 0 && <option value="">No video/audio on timeline</option>}
+                {subSources.map((c) => <option key={c.id} value={c.id}>{c.label} ({c.kind})</option>)}
+              </select>
+            </label>
+            <label className="block text-fg-muted">Split
+              <select value={subMode} onChange={(e) => setSubMode(e.target.value as "word" | "two" | "smart")} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+                <option value="word">One word</option>
+                <option value="two">Two words</option>
+                <option value="smart">Smart (phrases)</option>
+              </select>
+            </label>
+            <button onClick={generateSubtitles} disabled={subBusy || subSources.length === 0}
+              className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md bg-brand text-white text-[12px] font-medium disabled:opacity-50">
+              {subBusy ? <><Loader2 size={14} className="animate-spin" /> Working…</> : <><Sparkles size={14} /> Generate subtitles</>}
+            </button>
+            {subStatus && <div className="text-fg-subtle">{subStatus}</div>}
+            <div className="text-[10px] text-fg-subtle pt-1 border-t border-border/40">Captions land on a Text track, synced to speech. Requires ASSEMBLYAI_API_KEY on the server.</div>
+          </div>
+        )}
+      </aside>
 
       {/* Context menu */}
       {menu && (() => {
