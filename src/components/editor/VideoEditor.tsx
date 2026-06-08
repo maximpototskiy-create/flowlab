@@ -143,16 +143,34 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     setLayers((p) => { const n = [...p]; n.splice(Math.max(0, Math.min(index, n.length)), 0, { id, name, type }); return n; });
     return id;
   };
-  // auto-prune empty layers (keep ≥1 visual and ≥1 audio) — tracks appear/disappear like CapCut
+  // auto-prune empty layers (keep ≥1 visual and ≥1 audio) — never while dragging
   useEffect(() => {
+    if (dragRef.current) return;
     setLayers((prev) => {
       const used = new Set(clips.map((c) => c.layer));
-      const next = prev.filter((l) => used.has(l.id));
-      if (!next.some((l) => l.type === "visual")) { const v = prev.find((l) => l.type === "visual"); if (v) next.unshift(v); }
-      if (!next.some((l) => l.type === "audio")) { const a = prev.find((l) => l.type === "audio"); if (a) next.push(a); }
-      return next.length === prev.length ? prev : next;
+      const kept = prev.filter((l) => used.has(l.id));
+      if (!kept.some((l) => l.type === "visual")) { const v = prev.find((l) => l.type === "visual"); if (v) kept.unshift(v); }
+      if (!kept.some((l) => l.type === "audio")) { const a = prev.find((l) => l.type === "audio"); if (a) kept.push(a); }
+      const same = kept.length === prev.length && kept.every((l, i) => l.id === prev[i].id);
+      return same ? prev : kept;
     });
   }, [clips]);
+  // safety: a clip whose layer no longer exists is re-attached (never vanishes)
+  useEffect(() => {
+    const ids = new Set(layers.map((l) => l.id));
+    if (!clips.some((c) => !ids.has(c.layer))) return;
+    setClips((prev) => prev.map((c) => {
+      if (ids.has(c.layer)) return c;
+      const t: LayerType = c.kind === "audio" ? "audio" : "visual";
+      const fb = layers.find((l) => l.type === t) ?? layers[0];
+      return fb ? { ...c, layer: fb.id } : c;
+    }));
+  }, [layers, clips]);
+  // display label derived from position (always unique, no collisions)
+  const labelFor = (layer: Layer): string => {
+    if (layer.type === "visual") { const v = layers.filter((l) => l.type === "visual"); return `V${v.length - v.indexOf(layer)}`; }
+    const a = layers.filter((l) => l.type === "audio"); return `A${a.indexOf(layer) + 1}`;
+  };
 
   useEffect(() => {
     const c = containerRef.current; if (!c) return;
@@ -510,7 +528,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 </div>
                 <div className="flex items-stretch border-b border-border/40 min-h-[48px]">
                   <div className="w-20 shrink-0 flex items-center justify-between px-1.5 text-[9px] uppercase tracking-wider text-fg-subtle border-r border-border/40">
-                    <span>{layer.name}</span>
+                    <span>{labelFor(layer)}</span>
                   </div>
                   <div ref={(el) => { if (el) laneRefs.current.set(layer.id, el); else laneRefs.current.delete(layer.id); }}
                     className={`relative flex-1 h-12 ${dropHint?.type === "lane" && dropHint.id === layer.id ? "bg-brand/10 ring-1 ring-inset ring-brand/50" : ""}`}
@@ -568,9 +586,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           </div>
         </div>
 
-        {/* Inspector */}
-        {sel && (
-          <div className="shrink-0 border-t border-border p-2 flex items-center gap-3 text-[11px] flex-wrap">
+        {/* Inspector — always present (no layout jump) */}
+        <div className="shrink-0 border-t border-border p-2 flex items-center gap-3 text-[11px] flex-wrap min-h-[44px]">
+          {!sel && <span className="text-fg-subtle">Select a clip to edit its properties.</span>}
+          {sel && (<>
             <span className="text-fg-subtle uppercase tracking-wider">{sel.kind}</span>
             {sel.kind === "text" && (<input value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-40 outline-none focus:border-brand" placeholder="Caption" />)}
             {sel.kind === "fx" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{FX.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
@@ -587,8 +606,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <label className="flex items-center gap-1 text-fg-muted">out<input type="number" min={0} step={0.1} value={sel.fadeOut} onChange={(e) => update(sel.id, { fadeOut: Math.max(0, Number(e.target.value) || 0) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
             <button onClick={() => duplicate(sel.id)} className="text-fg-muted hover:text-fg inline-flex items-center gap-1"><Copy size={12} /> dup</button>
             <button onClick={() => remove(sel.id)} className="text-red-400 hover:text-red-300 inline-flex items-center gap-1 ml-auto"><Trash2 size={13} /> delete</button>
-          </div>
-        )}
+          </>)}
+        </div>
       </div>
 
       {/* Context menu */}
