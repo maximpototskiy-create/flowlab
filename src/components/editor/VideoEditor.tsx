@@ -301,17 +301,31 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const onRulerMove = (e: React.PointerEvent) => { if (scrubRef.current) seekFromRuler(e.clientX, e.currentTarget as HTMLElement); };
   const onRulerUp = () => { scrubRef.current = false; };
 
-  const vpRef = useRef<{ id: string; mode: "move" | "scale"; sx: number; sy: number; ox: number; oy: number; os: number } | null>(null);
+  const [viewZoom, setViewZoom] = useState(1);
+  const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
+  const viewZoomRef = useRef(1); viewZoomRef.current = viewZoom;
+  const fitView = () => { setViewZoom(1); setViewPan({ x: 0, y: 0 }); };
+  const onViewWheel = (e: React.WheelEvent) => { if (!clips.length) return; e.preventDefault(); const f = e.deltaY < 0 ? 1.1 : 1 / 1.1; setViewZoom((z) => Math.min(8, Math.max(0.1, +(z * f).toFixed(3)))); };
+  const onPanDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    setSelected(null);
+    const s = { x: e.clientX, y: e.clientY, ox: viewPan.x, oy: viewPan.y };
+    const move = (ev: PointerEvent) => setViewPan({ x: s.ox + (ev.clientX - s.x), y: s.oy + (ev.clientY - s.y) });
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
   const onVpDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "scale") => {
     e.stopPropagation(); setSelected(c.id);
-    vpRef.current = { id: c.id, mode, sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y, os: c.scale };
+    const s = { sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y, os: c.scale };
+    const move = (ev: PointerEvent) => {
+      const z = viewZoomRef.current || 1; const dx = (ev.clientX - s.sx) / z, dy = (ev.clientY - s.sy) / z;
+      if (mode === "move") update(c.id, { x: Math.round(s.ox + dx), y: Math.round(s.oy + dy) });
+      else update(c.id, { scale: Math.min(8, Math.max(0.05, +(s.os + (dx + dy) / 250).toFixed(2))) });
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
-  const onVpMove = (e: React.PointerEvent) => {
-    const d = vpRef.current; if (!d) return; const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
-    if (d.mode === "move") update(d.id, { x: Math.round(d.ox + dx), y: Math.round(d.oy + dy) });
-    else update(d.id, { scale: Math.min(5, Math.max(0.2, +(d.os + (dx + dy) / 250).toFixed(2))) });
-  };
-  const onVpUp = () => { vpRef.current = null; };
+  const resetTransform = (id: string) => update(id, { x: 0, y: 0, scale: 1 });
 
   const onBinDragStart = (e: React.DragEvent, a: EditorAsset) => {
     e.dataTransfer.setData("application/x-flowlab-asset", JSON.stringify({ kind: a.kind, url: a.url, label: a.label, duration: a.duration }));
@@ -457,49 +471,65 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         </div>
 
         {/* Preview */}
-        <div ref={containerRef} className="flex-1 min-h-0 bg-black flex items-center justify-center overflow-hidden relative">
+        <div ref={containerRef} className="flex-1 min-h-0 bg-black flex items-center justify-center overflow-hidden relative"
+          onWheel={onViewWheel} onPointerDown={onPanDown}>
           {clips.length > 0 ? (
-            <div className="relative bg-black overflow-hidden ring-1 ring-white/20" style={{ width: previewSize.w, height: previewSize.h }}
-              onPointerMove={onVpMove} onPointerUp={onVpUp} onPointerLeave={onVpUp}>
-              <div className="absolute inset-0">
-                {zClips.map((c) => {
-                  if (c.kind === "fx") return isActive(c, t)
-                    ? <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ ...fxStyle(c.fx), opacity: alphaAt(c, t) || 1 }} />
-                    : null;
-                  if (c.kind === "adjust") return isActive(c, t) && c.fx
-                    ? <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ backdropFilter: c.fx, WebkitBackdropFilter: c.fx as string, opacity: alphaAt(c, t) || 1 }} />
-                    : null;
-                  const active = isActive(c, t);
-                  const isSel = selected === c.id;
-                  const v = clipVisual(c as CompClip, t, clips as CompClip[]);
-                  return (
-                    <div key={c.id} className="absolute inset-0"
-                      style={{ ...styleFromVisual(c, v), pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
-                      onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}>
-                      {c.kind === "image" && (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={c.url} alt="" draggable={false} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
-                      )}
-                      {c.kind === "video" && (
-                        <video src={c.url} playsInline preload="auto" ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
-                          className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
-                      )}
-                      {c.kind === "text" && (
-                        <div className="absolute inset-x-0 px-4 text-center font-bold text-white pointer-events-none"
-                          style={{ bottom: "12%", fontSize: Math.max(14, previewSize.w / 16), textShadow: "0 2px 8px #000, 0 0 4px #000" }}>{c.text}</div>
-                      )}
-                      {isSel && active && (<><div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />
-                        <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} /></>)}
-                    </div>
-                  );
-                })}
+            <div className="absolute inset-0 flex items-center justify-center" style={{ overflow: "visible" }}>
+              <div style={{ transform: `translate(${viewPan.x}px, ${viewPan.y}px) scale(${viewZoom})`, transformOrigin: "center" }}>
+                <div className="relative bg-black ring-1 ring-white/20" style={{ width: previewSize.w, height: previewSize.h, overflow: "visible" }}>
+                  <div className="absolute inset-0" style={{ overflow: "visible" }}>
+                    {zClips.map((c) => {
+                      if (c.kind === "fx") return isActive(c, t)
+                        ? <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ ...fxStyle(c.fx), opacity: alphaAt(c, t) || 1 }} />
+                        : null;
+                      if (c.kind === "adjust") return isActive(c, t) && c.fx
+                        ? <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ backdropFilter: c.fx, WebkitBackdropFilter: c.fx as string, opacity: alphaAt(c, t) || 1 }} />
+                        : null;
+                      const active = isActive(c, t);
+                      const isSel = selected === c.id;
+                      const v = clipVisual(c as CompClip, t, clips as CompClip[]);
+                      return (
+                        <div key={c.id} className="absolute inset-0"
+                          style={{ ...styleFromVisual(c, v), pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
+                          onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}>
+                          {c.kind === "image" && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={c.url} alt="" draggable={false} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                          )}
+                          {c.kind === "video" && (
+                            <video src={c.url} playsInline preload="auto" ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
+                              className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                          )}
+                          {c.kind === "text" && (
+                            <div className="absolute inset-x-0 px-4 text-center font-bold text-white pointer-events-none"
+                              style={{ bottom: "12%", fontSize: Math.max(14, previewSize.w / 16), textShadow: "0 2px 8px #000, 0 0 4px #000" }}>{c.text}</div>
+                          )}
+                          {isSel && active && (<><div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />
+                            <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} /></>)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* dim everything outside the composition (pasteboard), content stays visible & grabbable */}
+                  <div className="absolute inset-0 pointer-events-none z-10" style={{ boxShadow: "0 0 0 99999px rgba(0,0,0,0.55)" }} />
+                  <div className="absolute inset-0 ring-1 ring-white/30 pointer-events-none z-10" />
+                  <div className="absolute inset-[5%] border border-white/10 pointer-events-none z-10" />
+                </div>
               </div>
               {clips.filter((c) => c.kind === "audio").map((c) => (
                 <audio key={c.id} src={c.url} preload="auto" ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }} />
               ))}
-              <div className="absolute inset-[5%] border border-white/10 pointer-events-none" />
             </div>
           ) : (<div className="text-fg-subtle text-[12px]">Add or drag assets from the left to start.</div>)}
+
+          {clips.length > 0 && (
+            <div onPointerDown={(e) => e.stopPropagation()} className="absolute bottom-2 right-2 z-30 flex items-center gap-1 bg-bg-card/90 border border-border rounded px-1.5 py-1 text-[11px] text-fg-muted">
+              <button onClick={() => setViewZoom((z) => Math.max(0.1, +(z / 1.2).toFixed(3)))} className="hover:text-fg" title="Zoom out"><ZoomOut size={13} /></button>
+              <span className="tabular-nums w-9 text-center">{Math.round(viewZoom * 100)}%</span>
+              <button onClick={() => setViewZoom((z) => Math.min(8, +(z * 1.2).toFixed(3)))} className="hover:text-fg" title="Zoom in"><ZoomIn size={13} /></button>
+              <button onClick={fitView} className="hover:text-fg ml-1">Fit</button>
+            </div>
+          )}
         </div>
 
         {/* Transport */}
@@ -524,11 +554,14 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         <div className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
           onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
-            <div className="h-6 relative border-b border-border/60 ml-20 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
-              {Array.from({ length: Math.ceil(totalDur) + 1 }).map((_, s) => (
-                <div key={s} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pointer-events-none" style={{ left: s * pxPerSec }}>{s}s</div>
-              ))}
-              <div className="absolute top-0 bottom-0 w-0.5 bg-brand pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
+            <div className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
+              <div className="w-20 shrink-0 border-r border-border/40" />
+              <div className="relative flex-1 h-6 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
+                {Array.from({ length: Math.ceil(totalDur) + 1 }).map((_, s) => (
+                  <div key={s} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pointer-events-none" style={{ left: s * pxPerSec }}>{s}s</div>
+                ))}
+                <div className="absolute top-0 bottom-0 w-0.5 bg-brand pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
+              </div>
             </div>
             {layers.map((layer, li) => (
               <div key={layer.id}>
@@ -667,6 +700,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               <button onClick={() => apply({ fadeIn: 0, fadeOut: 0 })} className="px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">None</button>
             </div>
             <div className="border-t border-border my-1" />
+            {isMedia && <button onClick={() => { resetTransform(menu.id); setMenu(null); }} className="w-full px-1.5 py-1.5 rounded hover:bg-white/5 text-fg-muted text-left inline-flex items-center gap-2"><Clapperboard size={12} /> Reset transform</button>}
             <button onClick={() => { duplicate(menu.id); setMenu(null); }} className="w-full px-1.5 py-1.5 rounded hover:bg-white/5 text-fg-muted text-left inline-flex items-center gap-2"><Copy size={12} /> Duplicate</button>
             <button onClick={() => { remove(menu.id); setMenu(null); }} className="w-full px-1.5 py-1.5 rounded hover:bg-red-500/10 text-red-400 text-left inline-flex items-center gap-2"><Trash2 size={12} /> Delete</button>
           </div>
