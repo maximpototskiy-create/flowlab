@@ -85,6 +85,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
   const [panelTab, setPanelTab] = useState<"media" | "effects" | "filters" | "text">("media");
   const [transMenu, setTransMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [timelineH, setTimelineH] = useState(208);
+  const resizeRef = useRef<{ startY: number; startH: number } | null>(null);
+  const onResizeDown = (e: React.PointerEvent) => { e.preventDefault(); resizeRef.current = { startY: e.clientY, startH: timelineH }; (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId); };
+  const onResizeMove = (e: React.PointerEvent) => { const r = resizeRef.current; if (!r) return; const dh = r.startY - e.clientY; setTimelineH(Math.max(140, Math.min(typeof window !== "undefined" ? window.innerHeight * 0.7 : 700, r.startH + dh))); };
+  const onResizeUp = () => { resizeRef.current = null; };
 
   const laneRefs = useRef<Map<string, HTMLElement>>(new Map());
   const stripRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -476,8 +481,14 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           {status && <span className="text-fg-subtle truncate max-w-[35%]">· {status}</span>}
         </div>
 
+        {/* Resize handle — drag up to make the timeline taller (see more layers) */}
+        <div onPointerDown={onResizeDown} onPointerMove={onResizeMove} onPointerUp={onResizeUp}
+          className="h-2 shrink-0 cursor-ns-resize bg-border/40 hover:bg-brand/50 border-t border-border flex items-center justify-center group" title="Drag to resize timeline">
+          <span className="w-8 h-0.5 rounded bg-fg-subtle/40 group-hover:bg-brand/70" />
+        </div>
+
         {/* Timeline */}
-        <div className="h-52 shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none"
+        <div className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
           onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div className="h-6 relative border-b border-border/60 ml-20 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
@@ -530,9 +541,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                           <button key={`tr-${b.id}`}
                             onPointerDown={(e) => e.stopPropagation()}
                             onClick={(e) => { e.stopPropagation(); setTransMenu({ x: e.clientX, y: e.clientY, id: b.id }); }}
-                            style={{ left: b.start * pxPerSec - 12 }} title="Transition"
-                            className={`absolute top-1/2 -translate-y-1/2 z-40 grid place-items-center w-6 h-6 rounded-full text-[12px] leading-none border shadow ${b.transType ? "bg-amber-400 text-black border-amber-200" : "bg-bg-card text-fg-muted border-border hover:border-brand hover:text-brand hover:bg-bg-card"}`}>
-                            {b.transType ? "◆" : "+"}
+                            style={{ left: b.start * pxPerSec - 14 }} title="Transition"
+                            className="absolute top-0 h-full z-40 grid place-items-center w-7 group">
+                            <span className={`grid place-items-center w-6 h-6 rounded-full text-[12px] leading-none border shadow ${b.transType ? "bg-amber-400 text-black border-amber-200" : "bg-bg-card text-fg-muted border-border group-hover:border-brand group-hover:text-brand"}`}>
+                              {b.transType ? "◆" : "+"}
+                            </span>
                           </button>
                         );
                       });
