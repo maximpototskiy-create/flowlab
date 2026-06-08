@@ -138,6 +138,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mediaRefs = useRef<Map<string, HTMLVideoElement | HTMLAudioElement>>(new Map());
   const rafRef = useRef<number | null>(null);
+  const lastRenderRef = useRef(0);
   const lastTsRef = useRef(0);
   const playingRef = useRef(false);
   const playheadRef = useRef(0);
@@ -185,6 +186,20 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     } catch { /* keep current */ } finally { setBinLoading(false); }
   };
   useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const runSearch = async () => {
+    const q = binQuery.trim();
+    if (!q) { loadLibrary(); return; }
+    setBinLoading(true);
+    try {
+      const r = await fetch("/api/semantic-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: q, brandId: binBrand || undefined, modality: binFilter !== "all" ? binFilter : undefined, limit: 60 }) });
+      const j = (await r.json()) as { results?: { assetId: string | null; url: string; modality: string; category: string | null }[]; error?: string };
+      if (!r.ok) throw new Error(j.error || "search failed");
+      const items: EditorAsset[] = (j.results || [])
+        .filter((x) => x.url && (x.modality === "video" || x.modality === "image" || x.modality === "audio"))
+        .map((x) => ({ id: x.assetId || x.url, url: x.url, kind: x.modality as EditorAsset["kind"], label: x.category || "result", duration: null, category: x.category || undefined }));
+      setLibrary(items);
+    } catch { setLibrary([]); } finally { setBinLoading(false); }
+  };
   const onUpload = async (files: FileList | null) => {
     if (!files?.length) return;
     setBinLoading(true);
@@ -337,7 +352,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     const dt = (now - lastTsRef.current) / 1000; lastTsRef.current = now;
     let tt = playheadRef.current + dt; const end = endOf(clipsRef.current);
     if (tt >= end) { tt = end; playheadRef.current = tt; setPlayhead(tt); syncMedia(tt); stop(); return; }
-    playheadRef.current = tt; setPlayhead(tt); syncMedia(tt);
+    playheadRef.current = tt; syncMedia(tt);
+    // throttle React re-renders (~22fps); the <video> elements still play natively at full fps
+    if (now - lastRenderRef.current > 45) { lastRenderRef.current = now; setPlayhead(tt); }
     if (playingRef.current) rafRef.current = requestAnimationFrame(loop);
   }, [syncMedia, stop]);
   const play = useCallback(() => {
@@ -536,7 +553,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <button onClick={() => loadLibrary()} disabled={binLoading} className="px-2 rounded border border-border text-fg-muted hover:text-fg text-[11px] disabled:opacity-50">{binLoading ? "…" : "Refresh"}</button>
           </div>
           <input ref={fileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ""; }} />
-          <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") loadLibrary(); }} placeholder="Search library…" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
+          <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} placeholder="Semantic search… (Enter)" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
           <div className="grid grid-cols-2 gap-1.5">
             {projects.length > 0 && (
               <select value={binProject} onChange={(e) => { setBinProject(e.target.value); loadLibrary({ project: e.target.value }); }} className="bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
