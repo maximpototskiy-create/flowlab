@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
+import type { TextStyle, CapWord } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
@@ -23,12 +24,48 @@ const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3
 const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
 const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" ? "text" : k === "image" ? "image" : "video");
 const CAT_LABEL: Record<string, string> = { logo: "Logo", ui: "UI", store: "Store", graphic: "Graphic", overlay: "Overlay", music: "Music", sound: "Sound", reference: "Reference", hook: "Hook", body: "Body", packshot: "Packshot", other: "Other" };
+function renderCapWords(words: string[], activeIdx: number, st: TextStyle, fontPx: number, strokePx: number) {
+  const shadow = st.shadow !== false ? "0 2px 8px rgba(0,0,0,0.85), 0 0 4px rgba(0,0,0,0.6)" : "none";
+  const strokeCss = strokePx > 0 && st.stroke ? { WebkitTextStroke: `${strokePx}px ${st.stroke}`, paintOrder: "stroke fill" as const } : {};
+  return (
+    <span style={{ fontSize: fontPx, fontWeight: st.weight ?? 800, fontFamily: st.font || "inherit", color: st.color || "#fff", textShadow: shadow, lineHeight: 1.22, ...strokeCss }}>
+      {words.map((w, i) => {
+        const active = i === activeIdx;
+        const wordPlate = st.plate === "word" && active;
+        return (
+          <span key={i} style={{
+            ...(wordPlate ? { background: st.plateColor || "#FFD60A", color: "#111", borderRadius: fontPx * 0.18, padding: `${fontPx * 0.06}px ${fontPx * 0.16}px` } : {}),
+            ...(active && st.highlight ? { color: st.highlight } : {}),
+          }}>{w}{i < words.length - 1 ? " " : ""}</span>
+        );
+      })}
+    </span>
+  );
+}
+
+const CAP_PRESETS: { key: string; label: string; style: TextStyle }[] = [
+  { key: "plain", label: "Plain", style: { color: "#fff", shadow: true, plate: "none", enter: "" } },
+  { key: "stroke", label: "Stroke", style: { color: "#fff", stroke: "#000", strokeW: 7, shadow: false, plate: "none", upper: true, weight: 900, enter: "scale" } },
+  { key: "plate", label: "Plate", style: { color: "#fff", plate: "full", plateColor: "rgba(0,0,0,0.78)", shadow: false, enter: "fade" } },
+  { key: "highlight", label: "Highlight", style: { color: "#fff", plate: "word", plateColor: "#FFD60A", shadow: true, weight: 900, upper: true, enter: "" } },
+  { key: "karaoke", label: "Karaoke", style: { color: "#fff", highlight: "#FFD60A", stroke: "#000", strokeW: 6, shadow: false, weight: 900, upper: true, enter: "" } },
+  { key: "typewriter", label: "Typewriter", style: { color: "#fff", shadow: true, plate: "none", font: "ui-monospace, monospace", weight: 700, enter: "typewriter" } },
+];
 
 type Word = { text: string; start: number; end: number }; // ms
-// group transcript words into caption segments per mode → {text, start(s), dur(s)}
-function groupWords(words: Word[], mode: "word" | "two" | "smart"): { text: string; start: number; dur: number }[] {
-  const out: { text: string; start: number; dur: number }[] = [];
-  const push = (ws: Word[]) => { if (!ws.length) return; const s = ws[0].start / 1000, e = ws[ws.length - 1].end / 1000; out.push({ text: ws.map((w) => w.text).join(" "), start: +s.toFixed(3), dur: Math.max(0.3, +(e - s).toFixed(3)) }); };
+// group transcript words into caption segments per mode → {text, start(s), dur(s), words(rel)}
+function groupWords(words: Word[], mode: "word" | "two" | "smart"): { text: string; start: number; dur: number; words: CapWord[] }[] {
+  const out: { text: string; start: number; dur: number; words: CapWord[] }[] = [];
+  const push = (ws: Word[]) => {
+    if (!ws.length) return;
+    const s = ws[0].start / 1000, e = ws[ws.length - 1].end / 1000;
+    out.push({
+      text: ws.map((w) => w.text).join(" "),
+      start: +s.toFixed(3),
+      dur: Math.max(0.3, +(e - s).toFixed(3)),
+      words: ws.map((w) => ({ text: w.text, t: +((w.start / 1000) - s).toFixed(3), d: Math.max(0.08, +((w.end - w.start) / 1000).toFixed(3)) })),
+    });
+  };
   if (mode === "word") { for (const w of words) push([w]); return out; }
   if (mode === "two") { for (let i = 0; i < words.length; i += 2) push(words.slice(i, i + 2)); return out; }
   // smart: accumulate up to ~25 chars, break on sentence punctuation
@@ -59,6 +96,8 @@ type EditClip = {
   fx?: string;
   transType?: string;
   autoDur?: boolean;
+  tstyle?: TextStyle;
+  words?: CapWord[];
 };
 
 const RESOLUTIONS = [
@@ -127,6 +166,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [subMode, setSubMode] = useState<"word" | "two" | "smart">("smart");
   const [subBusy, setSubBusy] = useState(false);
   const [subStatus, setSubStatus] = useState("");
+  const [capPreset, setCapPreset] = useState("highlight");
+  const [capStyle, setCapStyle] = useState<TextStyle>(CAP_PRESETS.find((p) => p.key === "highlight")!.style);
   const [transMenu, setTransMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [timelineH, setTimelineH] = useState(208);
   const resizeRef = useRef<{ startY: number; startH: number } | null>(null);
@@ -255,7 +296,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     const id = layerForKind(clipLayerType(kind));
     setClips((p) => [...p, base(kind, id, undefined, label, +playheadRef.current.toFixed(2), dur, extra)]);
   };
-  const addText = () => addClipKind("text", { text: "Your caption" }, DEFAULTS.text, "Text");
+  const addText = () => addClipKind("text", { text: "Your caption", tstyle: { ...capStyle } }, DEFAULTS.text, "Text");
+  const applyStyleTo = (ids: string[]) => { const set = new Set(ids); setClips((p) => p.map((c) => (set.has(c.id) && c.kind === "text" ? { ...c, tstyle: { ...capStyle } } : c))); };
+  const applyStyleToAll = () => setClips((p) => p.map((c) => (c.kind === "text" ? { ...c, tstyle: { ...capStyle } } : c)));
   const addFx = (type = "vignette") => addClipKind("fx", { fx: type }, DEFAULTS.fx, "FX");
   const addAdjust = (v = "grayscale(1)") => addClipKind("adjust", { fx: v }, DEFAULTS.adjust, "Adjust");
 
@@ -284,7 +327,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       const segs = groupWords(words, subMode);
       const base0 = src.start; // align captions to where the source sits on the timeline
       const layerId = layerForKind("text");
-      setClips((p) => [...p, ...segs.map((sg) => base("text", layerId, undefined, "Caption", +(base0 + sg.start).toFixed(3), sg.dur, { text: sg.text }))]);
+      setClips((p) => [...p, ...segs.map((sg) => base("text", layerId, undefined, "Caption", +(base0 + sg.start).toFixed(3), sg.dur, { text: sg.text, words: sg.words, tstyle: { ...capStyle } }))]);
       setSubStatus(`Done — ${segs.length} captions added.`);
     } catch (e) {
       setSubStatus(`Failed: ${e instanceof Error ? e.message : "error"}`);
@@ -708,10 +751,35 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                             <video src={c.url} playsInline preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
                               className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
                           )}
-                          {c.kind === "text" && (
-                            <div className="absolute inset-x-0 px-4 text-center font-bold text-white pointer-events-none"
-                              style={{ bottom: "12%", fontSize: Math.max(14, previewSize.w / 16), textShadow: "0 2px 8px #000, 0 0 4px #000" }}>{c.text}</div>
-                          )}
+                          {c.kind === "text" && (() => {
+                            const st = c.tstyle || {};
+                            let text = c.text || ""; if (st.upper) text = text.toUpperCase();
+                            const local = t - c.start;
+                            const fontPx = Math.max(14, previewSize.w / 16) * (st.size ?? 1);
+                            const ep = Math.min(1, local / 0.28);
+                            let alpha = 1, scl = 1;
+                            if (st.enter === "fade") alpha = ep;
+                            else if (st.enter === "scale") scl = 0.6 + 0.4 * (1 - Math.pow(1 - ep, 3));
+                            else if (st.enter === "bounce") { const c1 = 1.70158, c3 = c1 + 1; scl = Math.max(0.01, 1 + c3 * Math.pow(ep - 1, 3) + c1 * Math.pow(ep - 1, 2)); }
+                            if (st.enter === "typewriter") { const td = Math.min(0.9, c.duration * 0.6); text = text.slice(0, Math.max(1, Math.floor(Math.min(1, local / td) * text.length))); }
+                            const raw = (c.text || "").split(/\s+/).filter(Boolean);
+                            const wm: CapWord[] = c.words && c.words.length === raw.length ? c.words : raw.map((w, i) => ({ text: w, t: (c.duration / raw.length) * i, d: c.duration / raw.length }));
+                            const activeIdx = wm.findIndex((w) => local >= w.t && local < w.t + w.d);
+                            const shownWords = text.split(/\s+/).filter(Boolean);
+                            const posStyle: React.CSSProperties = (st.pos || "bottom") === "bottom" ? { bottom: "10%" } : st.pos === "center" ? { top: "50%", transform: "translateY(-50%)" } : { top: "8%" };
+                            const strokePx = st.stroke ? Math.max(1, (st.strokeW ?? 6) * (fontPx / 67)) : 0;
+                            return (
+                              <div className="absolute inset-x-0 px-4 text-center pointer-events-none" style={{ ...posStyle, opacity: alpha }}>
+                                <span style={{ display: "inline-block", transform: `scale(${scl})`, transformOrigin: "center bottom", maxWidth: "88%" }}>
+                                  {(st.plate === "full") ? (
+                                    <span style={{ background: st.plateColor || "rgba(0,0,0,0.78)", borderRadius: fontPx * 0.22, padding: `${fontPx * 0.14}px ${fontPx * 0.3}px`, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" }}>
+                                      {renderCapWords(shownWords, activeIdx, st, fontPx, strokePx)}
+                                    </span>
+                                  ) : renderCapWords(shownWords, activeIdx, st, fontPx, strokePx)}
+                                </span>
+                              </div>
+                            );
+                          })()}
                           {isSel && active && <div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />}
                           {selected === c.id && active && (
                             <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} />)}
@@ -951,6 +1019,48 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               {subBusy ? <><Loader2 size={14} className="animate-spin" /> Working…</> : <><Sparkles size={14} /> Generate subtitles</>}
             </button>
             {subStatus && <div className="text-fg-subtle">{subStatus}</div>}
+
+            <div className="pt-2 border-t border-border/40 space-y-2">
+              <div className="text-fg-muted font-medium">Caption style</div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {CAP_PRESETS.map((p) => (
+                  <button key={p.key} onClick={() => { setCapPreset(p.key); setCapStyle({ ...p.style }); }}
+                    className={`rounded border px-1 py-2 text-[10px] ${capPreset === p.key ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <label className="text-fg-muted">Position
+                  <select value={capStyle.pos || "bottom"} onChange={(e) => setCapStyle((s) => ({ ...s, pos: e.target.value as TextStyle["pos"] }))} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                    <option value="bottom">Bottom</option><option value="center">Center</option><option value="top">Top</option>
+                  </select>
+                </label>
+                <label className="text-fg-muted">Animation
+                  <select value={capStyle.enter || ""} onChange={(e) => setCapStyle((s) => ({ ...s, enter: e.target.value as TextStyle["enter"] }))} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                    <option value="">None</option><option value="scale">Scale</option><option value="bounce">Bounce</option><option value="fade">Fade</option><option value="typewriter">Typewriter</option>
+                  </select>
+                </label>
+                <label className="text-fg-muted">Size
+                  <input type="range" min={0.5} max={2} step={0.05} value={capStyle.size ?? 1} onChange={(e) => setCapStyle((s) => ({ ...s, size: Number(e.target.value) }))} className="mt-1 w-full" />
+                </label>
+                <label className="text-fg-muted flex items-end gap-1.5 pb-0.5">
+                  <input type="checkbox" checked={!!capStyle.upper} onChange={(e) => setCapStyle((s) => ({ ...s, upper: e.target.checked }))} /> UPPERCASE
+                </label>
+                <label className="text-fg-muted">Text color
+                  <input type="color" value={capStyle.color || "#ffffff"} onChange={(e) => setCapStyle((s) => ({ ...s, color: e.target.value }))} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded" />
+                </label>
+                <label className="text-fg-muted">Accent / plate
+                  <input type="color" value={(capStyle.plate === "word" ? capStyle.plateColor : capStyle.highlight) || "#FFD60A"} onChange={(e) => setCapStyle((s) => (s.plate === "word" ? { ...s, plateColor: e.target.value } : { ...s, highlight: e.target.value }))} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded" />
+                </label>
+              </div>
+              <div className="flex gap-1.5">
+                <button onClick={() => applyStyleTo(selectedIds)} disabled={!selectedIds.length} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40">Apply to selected</button>
+                <button onClick={applyStyleToAll} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Apply to all captions</button>
+              </div>
+              <div className="text-[10px] text-fg-subtle">New captions use this style. Highlight/Karaoke follow word timings from the transcript.</div>
+            </div>
+
             <div className="text-[10px] text-fg-subtle pt-1 border-t border-border/40">Captions land on a Text track, synced to speech. Requires ASSEMBLYAI_API_KEY on the server.</div>
           </div>
         )}

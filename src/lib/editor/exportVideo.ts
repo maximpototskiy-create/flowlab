@@ -11,6 +11,23 @@
 
 import { alphaAt, clipVisual, type CompClip } from "./compositor";
 
+export type TextStyle = {
+  size?: number;                       // multiplier of base font (W/16), default 1
+  color?: string;                      // text color, default #fff
+  weight?: number;                     // 400..900, default 800
+  font?: string;                       // css font-family, default sans-serif
+  stroke?: string;                     // stroke color ("" = none)
+  strokeW?: number;                    // stroke width at 1080p, default 6
+  shadow?: boolean;                    // soft drop shadow, default true
+  plate?: "none" | "full" | "word";    // background plate: none / full line / active word
+  plateColor?: string;                 // plate color
+  highlight?: string;                  // active-word text color (karaoke)
+  pos?: "bottom" | "center" | "top";
+  enter?: "" | "scale" | "bounce" | "fade" | "typewriter";
+  upper?: boolean;                     // uppercase
+};
+export type CapWord = { text: string; t: number; d: number }; // relative to clip start (s)
+
 export type ExportClip = {
   id: string;
   layer: string;
@@ -27,6 +44,8 @@ export type ExportClip = {
   anim?: string;
   fx?: string;
   transType?: string;
+  tstyle?: TextStyle;
+  words?: CapWord[];
 };
 
 type Params = {
@@ -102,6 +121,93 @@ function drawFx(ctx: CanvasRenderingContext2D, fx: string | undefined, W: number
       ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
     }
   }
+}
+
+function easeOutCubic(p: number) { return 1 - Math.pow(1 - p, 3); }
+function easeOutBack(p: number) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
+
+// Draw a styled caption (plate / word-highlight / karaoke / stroke / shadow / enter animations).
+function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W: number, H: number, sx: number, v: { opacity: number; scaleMul: number; offX: number; offY: number }) {
+  const st = c.tstyle || {};
+  let text = c.text || ""; if (st.upper) text = text.toUpperCase();
+  if (!text.trim()) return;
+  const local = tt - c.start;
+  const fontPx = Math.max(14, W / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul;
+  const family = st.font || "sans-serif";
+  const weight = st.weight ?? 800;
+  ctx.font = `${weight} ${Math.round(fontPx)}px ${family}`;
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+
+  // entrance
+  let alpha = 1, scl = 1, typeChars = Infinity;
+  const ep = Math.min(1, local / 0.28);
+  if (st.enter === "fade") alpha = ep;
+  else if (st.enter === "scale") scl = 0.6 + 0.4 * easeOutCubic(ep);
+  else if (st.enter === "bounce") scl = Math.max(0.01, easeOutBack(ep));
+  else if (st.enter === "typewriter") { const td = Math.min(0.9, c.duration * 0.6); typeChars = Math.max(1, Math.floor((Math.min(1, local / td)) * text.length)); }
+
+  // words (for word plate / karaoke); fall back to splitting evenly
+  const rawWords = text.split(/\s+/).filter(Boolean);
+  const wordsMeta: CapWord[] = (c.words && c.words.length === rawWords.length)
+    ? c.words
+    : rawWords.map((w, i) => ({ text: w, t: (c.duration / rawWords.length) * i, d: c.duration / rawWords.length }));
+  const activeIdx = wordsMeta.findIndex((w) => local >= w.t && local < w.t + w.d);
+
+  // typewriter cut
+  let shown = text; if (typeChars !== Infinity) shown = text.slice(0, typeChars);
+  const shownWords = shown.split(/\s+/).filter(Boolean);
+
+  // wrap into lines (greedy, ~86% width)
+  const maxW = W * 0.86; const space = ctx.measureText(" ").width;
+  type WLine = { words: { w: string; idx: number; width: number }[]; width: number };
+  const lines: WLine[] = [{ words: [], width: 0 }];
+  shownWords.forEach((w, idx) => {
+    const ww = ctx.measureText(w).width;
+    const ln = lines[lines.length - 1];
+    const add = ln.words.length ? space + ww : ww;
+    if (ln.width + add > maxW && ln.words.length) lines.push({ words: [{ w, idx, width: ww }], width: ww });
+    else { ln.words.push({ w, idx, width: ww }); ln.width += add; }
+  });
+
+  const lineH = fontPx * 1.22;
+  const total = lines.length * lineH;
+  const cx = W / 2 + (c.x || 0) * sx + v.offX * W;
+  const pos = st.pos || "bottom";
+  const baseBottom = pos === "bottom" ? H * 0.9 : pos === "center" ? H / 2 + total / 2 : H * 0.12 + total;
+  const cy = baseBottom + (c.y || 0) * sx + v.offY * H;
+
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, alpha * v.opacity));
+  ctx.translate(cx, cy - total / 2); ctx.scale(scl, scl); ctx.translate(-cx, -(cy - total / 2));
+
+  const padX = fontPx * 0.32, padY = fontPx * 0.18, rad = fontPx * 0.22;
+  const rrect = (x: number, y: number, w: number, h: number, r: number) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
+
+  lines.forEach((ln, li) => {
+    const lw = ln.words.reduce((s, w, i) => s + w.width + (i ? space : 0), 0);
+    let x = cx - lw / 2;
+    const yBottom = cy - (lines.length - 1 - li) * lineH;
+    // full plate behind the line
+    if (st.plate === "full") {
+      ctx.save(); ctx.shadowColor = "transparent";
+      ctx.fillStyle = st.plateColor || "rgba(0,0,0,0.75)";
+      rrect(x - padX, yBottom - fontPx - padY, lw + padX * 2, fontPx + padY * 2, rad); ctx.fill(); ctx.restore();
+    }
+    for (const wo of ln.words) {
+      const isActive = wo.idx === activeIdx;
+      if (st.plate === "word" && isActive) {
+        ctx.save(); ctx.shadowColor = "transparent";
+        ctx.fillStyle = st.plateColor || "#FFD60A";
+        rrect(x - padX * 0.5, yBottom - fontPx - padY * 0.6, wo.width + padX, fontPx + padY * 1.2, rad); ctx.fill(); ctx.restore();
+      }
+      if (st.shadow !== false) { ctx.shadowColor = "rgba(0,0,0,0.85)"; ctx.shadowBlur = fontPx * 0.18; ctx.shadowOffsetY = fontPx * 0.05; } else ctx.shadowColor = "transparent";
+      if (st.stroke) { ctx.lineJoin = "round"; ctx.lineWidth = (st.strokeW ?? 6) * (W / 1080) * (fontPx / (W / 16)); ctx.strokeStyle = st.stroke; ctx.strokeText(wo.w, x, yBottom); }
+      ctx.fillStyle = isActive && st.highlight ? st.highlight : (st.plate === "word" && isActive ? "#111" : (st.color || "#fff"));
+      ctx.fillText(wo.w, x, yBottom);
+      x += wo.width + space;
+    }
+  });
+  ctx.restore();
 }
 
 export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: string; mp4: boolean }> {
@@ -229,14 +335,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
             }
           }
         } else if (c.kind === "text") {
-          const fontPx = Math.max(14, W / 16) * (c.scale || 1) * v.scaleMul;
-          ctx.font = `bold ${Math.round(fontPx)}px sans-serif`;
-          ctx.fillStyle = "#fff";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "bottom";
-          ctx.shadowColor = "#000";
-          ctx.shadowBlur = 8;
-          ctx.fillText(c.text || "", W / 2 + (c.x || 0) * sx + v.offX * W, H * 0.88 + (c.y || 0) * sx + v.offY * H);
+          drawCaption(ctx, c, tt, W, H, sx, v);
         }
         ctx.restore();
       }
