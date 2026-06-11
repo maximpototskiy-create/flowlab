@@ -195,6 +195,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
   const bin = library.filter((a) => (binFilter === "all" || a.kind === binFilter) && (binCategory === "all" || a.category === binCategory));
   const libCats = Array.from(new Set(library.map((a) => a.category).filter((c): c is string => !!c)));
+  const selTextCount = selectedIds.filter((id) => clips.find((c) => c.id === id)?.kind === "text").length;
 
   const loadLibrary = async (over: Partial<{ q: string; brand: string; project: string; source: string }> = {}) => {
     const q = over.q ?? binQuery, brand = over.brand ?? binBrand, project = over.project ?? binProject, source = over.source ?? binSource;
@@ -304,6 +305,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     const ids = sel.length ? new Set(sel) : null;
     setClips((prev) => prev.map((c) => (c.kind === "text" && (!ids || ids.has(c.id)) ? { ...c, tstyle: { ...next } } : c)));
   };
+  // explicit buttons — restyle existing captions with the current style, no re-transcription
+  const applyStyleAll = () => setClips((prev) => prev.map((c) => (c.kind === "text" ? { ...c, tstyle: { ...capStyle } } : c)));
+  const applyStyleSelected = () => { const ids = new Set(selectedRef.current); setClips((prev) => prev.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...capStyle } } : c))); };
   const addFx = (type = "vignette") => addClipKind("fx", { fx: type }, DEFAULTS.fx, "FX");
   const addAdjust = (v = "grayscale(1)") => addClipKind("adjust", { fx: v }, DEFAULTS.adjust, "Adjust");
 
@@ -1060,6 +1064,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
                 </label>
               </div>
+              <div className="flex gap-1.5 pt-0.5">
+                <button onClick={applyStyleAll} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Apply to all captions</button>
+                <button onClick={applyStyleSelected} disabled={!selTextCount} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40">Apply to selected{selTextCount ? ` (${selTextCount})` : ""}</button>
+              </div>
+              <div className="text-[10px] text-fg-subtle">Change preset/colors → applies live (selected, or all). Buttons re-apply to existing captions without re-transcribing.</div>
             </div>
           </div>
         )}
