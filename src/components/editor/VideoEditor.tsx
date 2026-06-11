@@ -99,8 +99,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [clips, setClips] = useState<EditClip[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selected = selectedIds.length ? selectedIds[selectedIds.length - 1] : null;
-  const selectClip = (id: string, additive: boolean) =>
-    setSelectedIds((prev) => (additive ? (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]) : prev.includes(id) && prev.length > 1 ? prev : [id]));
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const marqueeRef = useRef<{ x0: number; y0: number } | null>(null);
   const [binFilter, setBinFilter] = useState<"all" | "video" | "image" | "audio">("all");
   const [library, setLibrary] = useState<EditorAsset[]>(assets);
   const [binQuery, setBinQuery] = useState("");
@@ -448,6 +448,39 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     else { const index = Number(hint.id.split("-")[1]); const id = createLayerAt(index, d.type); update(d.id, { layer: id }); }
   };
 
+  const onMarqueeDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const el = e.target as HTMLElement;
+    if (el.closest("[data-clip],[data-ruler],[data-label]")) return; // only on empty background
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    marqueeRef.current = { x0: e.clientX, y0: e.clientY };
+    const baseSel = additive ? [...selectedRef.current] : [];
+    if (!additive) setSelectedIds([]);
+    const compute = (ev: PointerEvent) => {
+      const m = marqueeRef.current; if (!m) return;
+      const x0 = Math.min(ev.clientX, m.x0), x1 = Math.max(ev.clientX, m.x0);
+      const y0 = Math.min(ev.clientY, m.y0), y1 = Math.max(ev.clientY, m.y0);
+      const hits: string[] = [];
+      for (const c of clipsRef.current) {
+        const laneEl = laneRefs.current.get(c.layer); if (!laneEl) continue;
+        const lr = laneEl.getBoundingClientRect();
+        const cx0 = lr.left + c.start * pxPerSec, cx1 = lr.left + (c.start + c.duration) * pxPerSec;
+        if (cx1 >= x0 && cx0 <= x1 && lr.bottom >= y0 && lr.top <= y1) hits.push(c.id);
+      }
+      return { x0, y0, x1, y1, hits };
+    };
+    const move = (ev: PointerEvent) => {
+      const r = compute(ev); if (!r) return;
+      setMarquee({ x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0 });
+      setSelectedIds(additive ? Array.from(new Set([...baseSel, ...r.hits])) : r.hits);
+    };
+    const up = (ev: PointerEvent) => {
+      const r = compute(ev); if (r) setSelectedIds(additive ? Array.from(new Set([...baseSel, ...r.hits])) : r.hits);
+      marqueeRef.current = null; setMarquee(null);
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
   const scrubRef = useRef(false);
   const seekFromRuler = (clientX: number, el: HTMLElement) => { const r = el.getBoundingClientRect(); seek((clientX - r.left) / pxPerSec); };
   const onRulerDown = (e: React.PointerEvent) => { scrubRef.current = true; (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId); if (playingRef.current) stop(); seekFromRuler(e.clientX, e.currentTarget as HTMLElement); };
@@ -730,9 +763,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
         {/* Timeline */}
         <div className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
-          onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
+          onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
-            <div className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
+            <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
               <div className="w-20 shrink-0 border-r border-border/40" />
               <div className="relative flex-1 h-6 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
                 {Array.from({ length: Math.ceil(totalDur) + 1 }).map((_, s) => (
@@ -753,7 +786,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     className={`flex-1 rounded transition-all ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "h-2.5 bg-brand/50 ring-1 ring-brand" : "h-0.5 bg-border/30"}`} />
                 </div>
                 <div className="flex items-stretch border-b border-border/40 min-h-[48px]">
-                  <div onClick={() => setSelectedLayer(layer.id)} onDoubleClick={() => setRenamingLayer(layer.id)}
+                  <div data-label onClick={() => setSelectedLayer(layer.id)} onDoubleClick={() => setRenamingLayer(layer.id)}
                     className={`w-20 shrink-0 flex items-center px-1.5 text-[9px] uppercase tracking-wider border-r border-border/40 cursor-pointer ${selectedLayer === layer.id ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>
                     {renamingLayer === layer.id ? (
                       <input autoFocus defaultValue={labelFor(layer)} onClick={(e) => e.stopPropagation()}
@@ -772,7 +805,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     onDrop={(e) => onLaneDrop(e, layer)}>
                     <div className="absolute top-0 bottom-0 w-0.5 bg-brand/60 pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
                     {onLayer(layer.id).map((c) => (
-                      <div key={c.id} onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={(e) => { e.stopPropagation(); selectClip(c.id, e.shiftKey || e.metaKey || e.ctrlKey); }} onContextMenu={(e) => onClipContext(e, c)}
+                      <div key={c.id} data-clip onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => onClipContext(e, c)}
                         style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
                         className={`absolute top-1.5 h-9 rounded text-[10px] cursor-grab active:cursor-grabbing border touch-none overflow-hidden flex items-center ${
                           selectedIds.includes(c.id) ? "border-brand bg-brand/20 text-brand z-10"
@@ -968,6 +1001,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           </div>
         );
       })()}
+      {marquee && marquee.w > 1 && marquee.h > 1 && (
+        <div className="fixed z-50 border border-brand bg-brand/15 pointer-events-none" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
+      )}
     </div>
   );
 }
