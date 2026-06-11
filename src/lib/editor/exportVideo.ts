@@ -170,15 +170,21 @@ function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W
   });
 
   const lineH = fontPx * 1.22;
-  const total = lines.length * lineH;
+  const ascent = fontPx * 0.8, descent = fontPx * 0.2;
+  const n = lines.length;
   const cx = W / 2 + (c.x || 0) * sx + v.offX * W;
   const pos = st.pos || "bottom";
-  const baseBottom = pos === "bottom" ? H * 0.9 : pos === "center" ? H / 2 + total / 2 : H * 0.12 + total;
-  const cy = baseBottom + (c.y || 0) * sx + v.offY * H;
+  // last-line baseline so the text block matches the preview anchor
+  let lastBaseline: number;
+  if (pos === "top") lastBaseline = H * 0.10 + ascent + (n - 1) * lineH;
+  else if (pos === "center") lastBaseline = H * 0.5 + (n * lineH) / 2 - descent;
+  else lastBaseline = H * 0.90 - descent;
+  const cy = lastBaseline + (c.y || 0) * sx + v.offY * H;
 
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha * v.opacity));
-  ctx.translate(cx, cy - total / 2); ctx.scale(scl, scl); ctx.translate(-cx, -(cy - total / 2));
+  const blockH = n * lineH;
+  ctx.translate(cx, cy - blockH / 2); ctx.scale(scl, scl); ctx.translate(-cx, -(cy - blockH / 2));
 
   const padX = fontPx * 0.32, padY = fontPx * 0.18, rad = fontPx * 0.22;
   const rrect = (x: number, y: number, w: number, h: number, r: number) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
@@ -335,7 +341,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
             }
           }
         } else if (c.kind === "text") {
-          drawCaption(ctx, c, tt, W, H, sx, v);
+          drawCaption(ctx, c, tt, W, H, sx, { opacity: v.opacity, scaleMul: 1, offX: 0, offY: 0 });
         }
         ctx.restore();
       }

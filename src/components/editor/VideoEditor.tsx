@@ -297,8 +297,13 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     setClips((p) => [...p, base(kind, id, undefined, label, +playheadRef.current.toFixed(2), dur, extra)]);
   };
   const addText = () => addClipKind("text", { text: "Your caption", tstyle: { ...capStyle } }, DEFAULTS.text, "Text");
-  const applyStyleTo = (ids: string[]) => { const set = new Set(ids); setClips((p) => p.map((c) => (set.has(c.id) && c.kind === "text" ? { ...c, tstyle: { ...capStyle } } : c))); };
-  const applyStyleToAll = () => setClips((p) => p.map((c) => (c.kind === "text" ? { ...c, tstyle: { ...capStyle } } : c)));
+  // live style: update the template AND apply to selected captions (or all if none selected)
+  const applyStyle = (next: TextStyle) => {
+    setCapStyle(next);
+    const sel = selectedRef.current.filter((id) => clipsRef.current.find((c) => c.id === id)?.kind === "text");
+    const ids = sel.length ? new Set(sel) : null;
+    setClips((prev) => prev.map((c) => (c.kind === "text" && (!ids || ids.has(c.id)) ? { ...c, tstyle: { ...next } } : c)));
+  };
   const addFx = (type = "vignette") => addClipKind("fx", { fx: type }, DEFAULTS.fx, "FX");
   const addAdjust = (v = "grayscale(1)") => addClipKind("adjust", { fx: v }, DEFAULTS.adjust, "Adjust");
 
@@ -766,7 +771,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                             const wm: CapWord[] = c.words && c.words.length === raw.length ? c.words : raw.map((w, i) => ({ text: w, t: (c.duration / raw.length) * i, d: c.duration / raw.length }));
                             const activeIdx = wm.findIndex((w) => local >= w.t && local < w.t + w.d);
                             const shownWords = text.split(/\s+/).filter(Boolean);
-                            const posStyle: React.CSSProperties = (st.pos || "bottom") === "bottom" ? { bottom: "10%" } : st.pos === "center" ? { top: "50%", transform: "translateY(-50%)" } : { top: "8%" };
+                            const posStyle: React.CSSProperties = (st.pos || "bottom") === "bottom" ? { bottom: "10%" } : st.pos === "center" ? { top: "50%", transform: "translateY(-50%)" } : { top: "10%" };
                             const strokePx = st.stroke ? Math.max(1, (st.strokeW ?? 6) * (fontPx / 67)) : 0;
                             return (
                               <div className="absolute inset-x-0 px-4 text-center pointer-events-none" style={{ ...posStyle, opacity: alpha }}>
@@ -1000,7 +1005,6 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
         {panelTab === "subs" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2 text-[11px]">
-            <div className="text-fg-subtle">Auto-generate captions from speech (AssemblyAI).</div>
             <label className="block text-fg-muted">Source
               <select value={subSource} onChange={(e) => setSubSource(e.target.value)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
                 {subSources.length === 0 && <option value="">No video/audio on timeline</option>}
@@ -1021,10 +1025,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             {subStatus && <div className="text-fg-subtle">{subStatus}</div>}
 
             <div className="pt-2 border-t border-border/40 space-y-2">
-              <div className="text-fg-muted font-medium">Caption style</div>
+              <div className="text-fg-muted font-medium">Caption style <span className="text-fg-subtle font-normal">— applies to selected captions, or all if none selected</span></div>
               <div className="grid grid-cols-3 gap-1.5">
                 {CAP_PRESETS.map((p) => (
-                  <button key={p.key} onClick={() => { setCapPreset(p.key); setCapStyle({ ...p.style }); }}
+                  <button key={p.key} onClick={() => { setCapPreset(p.key); applyStyle({ ...p.style }); }}
                     className={`rounded border px-1 py-2 text-[10px] ${capPreset === p.key ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>
                     {p.label}
                   </button>
@@ -1032,36 +1036,31 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               </div>
               <div className="grid grid-cols-2 gap-1.5">
                 <label className="text-fg-muted">Position
-                  <select value={capStyle.pos || "bottom"} onChange={(e) => setCapStyle((s) => ({ ...s, pos: e.target.value as TextStyle["pos"] }))} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                  <select value={capStyle.pos || "bottom"} onChange={(e) => applyStyle({ ...capStyle, pos: e.target.value as TextStyle["pos"] })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
                     <option value="bottom">Bottom</option><option value="center">Center</option><option value="top">Top</option>
                   </select>
                 </label>
                 <label className="text-fg-muted">Animation
-                  <select value={capStyle.enter || ""} onChange={(e) => setCapStyle((s) => ({ ...s, enter: e.target.value as TextStyle["enter"] }))} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                  <select value={capStyle.enter || ""} onChange={(e) => applyStyle({ ...capStyle, enter: e.target.value as TextStyle["enter"] })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
                     <option value="">None</option><option value="scale">Scale</option><option value="bounce">Bounce</option><option value="fade">Fade</option><option value="typewriter">Typewriter</option>
                   </select>
                 </label>
-                <label className="text-fg-muted">Size
-                  <input type="range" min={0.5} max={2} step={0.05} value={capStyle.size ?? 1} onChange={(e) => setCapStyle((s) => ({ ...s, size: Number(e.target.value) }))} className="mt-1 w-full" />
+                <label className="text-fg-muted col-span-2">Size
+                  <input type="range" min={0.5} max={2} step={0.05} value={capStyle.size ?? 1} onChange={(e) => applyStyle({ ...capStyle, size: Number(e.target.value) })} className="mt-1 w-full" />
                 </label>
-                <label className="text-fg-muted flex items-end gap-1.5 pb-0.5">
-                  <input type="checkbox" checked={!!capStyle.upper} onChange={(e) => setCapStyle((s) => ({ ...s, upper: e.target.checked }))} /> UPPERCASE
-                </label>
+                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={!!capStyle.upper} onChange={(e) => applyStyle({ ...capStyle, upper: e.target.checked })} /> UPPERCASE</label>
+                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={capStyle.shadow !== false} onChange={(e) => applyStyle({ ...capStyle, shadow: e.target.checked })} /> Shadow</label>
                 <label className="text-fg-muted">Text color
-                  <input type="color" value={capStyle.color || "#ffffff"} onChange={(e) => setCapStyle((s) => ({ ...s, color: e.target.value }))} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded" />
+                  <input type="color" value={capStyle.color || "#ffffff"} onChange={(e) => applyStyle({ ...capStyle, color: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
                 </label>
-                <label className="text-fg-muted">Accent / plate
-                  <input type="color" value={(capStyle.plate === "word" ? capStyle.plateColor : capStyle.highlight) || "#FFD60A"} onChange={(e) => setCapStyle((s) => (s.plate === "word" ? { ...s, plateColor: e.target.value } : { ...s, highlight: e.target.value }))} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded" />
+                <label className="text-fg-muted">{capStyle.plate === "word" ? "Plate color" : capStyle.plate === "full" ? "Plate color" : "Highlight color"}
+                  <input type="color"
+                    value={(capStyle.plate === "word" || capStyle.plate === "full" ? capStyle.plateColor : capStyle.highlight) || "#FFD60A"}
+                    onChange={(e) => applyStyle(capStyle.plate === "word" || capStyle.plate === "full" ? { ...capStyle, plateColor: e.target.value } : { ...capStyle, highlight: e.target.value })}
+                    className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
                 </label>
               </div>
-              <div className="flex gap-1.5">
-                <button onClick={() => applyStyleTo(selectedIds)} disabled={!selectedIds.length} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40">Apply to selected</button>
-                <button onClick={applyStyleToAll} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Apply to all captions</button>
-              </div>
-              <div className="text-[10px] text-fg-subtle">New captions use this style. Highlight/Karaoke follow word timings from the transcript.</div>
             </div>
-
-            <div className="text-[10px] text-fg-subtle pt-1 border-t border-border/40">Captions land on a Text track, synced to speech. Requires ASSEMBLYAI_API_KEY on the server.</div>
           </div>
         )}
       </aside>
