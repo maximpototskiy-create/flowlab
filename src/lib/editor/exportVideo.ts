@@ -179,7 +179,7 @@ function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W
   let lastBaseline: number;
   if (pos === "top") lastBaseline = H * 0.10 + ascent + (n - 1) * lineH;
   else if (pos === "center") lastBaseline = H * 0.5 + (n * lineH) / 2 - descent;
-  else lastBaseline = H * 0.90 - descent;
+  else lastBaseline = H * 0.85 - descent;
   const cy = lastBaseline + (c.y || 0) * sx + v.offY * H;
 
   ctx.save();
@@ -187,10 +187,15 @@ function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W
   const blockH = n * lineH;
   ctx.translate(cx, cy - blockH / 2); ctx.scale(scl, scl); ctx.translate(-cx, -(cy - blockH / 2));
 
-  const padX = fontPx * 0.28, padY = fontPx * 0.12, rad = fontPx * (st.radius ?? 0.22);
+  const padX = fontPx * 0.28, padY = fontPx * 0.16, rad = fontPx * (st.radius ?? 0.22);
   const rrect = (x: number, y: number, w: number, h: number, r: number) => { const rr = Math.min(r, h / 2, w / 2); ctx.beginPath(); ctx.moveTo(x + rr, y); ctx.arcTo(x + w, y, x + w, y + h, rr); ctx.arcTo(x + w, y + h, x, y + h, rr); ctx.arcTo(x, y + h, x, y, rr); ctx.arcTo(x, y, x + w, y, rr); ctx.closePath(); };
-  const plateTop = (yb: number, p: number) => yb - ascent - p;
-  const plateH = (p: number) => ascent + descent + p * 2;
+  // plate sized to the REAL glyph box (actualBoundingBox), so it's vertically centered on the text
+  const boxFor = (txt: string, yb: number, p: number) => {
+    const m = ctx.measureText(txt);
+    const a = m.actualBoundingBoxAscent && isFinite(m.actualBoundingBoxAscent) ? m.actualBoundingBoxAscent : ascent;
+    const d = m.actualBoundingBoxDescent && isFinite(m.actualBoundingBoxDescent) ? m.actualBoundingBoxDescent : descent;
+    return { top: yb - a - p, h: a + d + p * 2 };
+  };
 
   lines.forEach((ln, li) => {
     const lw = ln.words.reduce((s, w, i) => s + w.width + (i ? space : 0), 0);
@@ -199,14 +204,16 @@ function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W
     if (st.plate === "full") {
       ctx.save(); ctx.shadowColor = "transparent";
       ctx.fillStyle = st.plateColor || "rgba(0,0,0,0.75)";
-      rrect(x - padX, plateTop(yBottom, padY), lw + padX * 2, plateH(padY), rad); ctx.fill(); ctx.restore();
+      const b = boxFor(ln.words.map((w) => w.w).join(" "), yBottom, padY);
+      rrect(x - padX, b.top, lw + padX * 2, b.h, rad); ctx.fill(); ctx.restore();
     }
     for (const wo of ln.words) {
       const isActive = wo.idx === activeIdx;
       if (st.plate === "word" && isActive) {
         ctx.save(); ctx.shadowColor = "transparent";
         ctx.fillStyle = st.plateColor || "#FFD60A";
-        rrect(x - padX * 0.5, plateTop(yBottom, padY * 0.8), wo.width + padX, plateH(padY * 0.8), rad); ctx.fill(); ctx.restore();
+        const b = boxFor(wo.w, yBottom, padY * 0.85);
+        rrect(x - padX * 0.5, b.top, wo.width + padX, b.h, rad); ctx.fill(); ctx.restore();
       }
       if (st.shadow !== false) { ctx.shadowColor = "rgba(0,0,0,0.85)"; ctx.shadowBlur = fontPx * 0.18; ctx.shadowOffsetY = fontPx * 0.05; } else ctx.shadowColor = "transparent";
       if (st.stroke) { ctx.lineJoin = "round"; ctx.lineWidth = fontPx * (st.strokeW ?? 0.08); ctx.strokeStyle = st.stroke; ctx.strokeText(wo.w, x, yBottom); }

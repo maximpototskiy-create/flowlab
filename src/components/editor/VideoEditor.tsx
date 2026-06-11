@@ -57,7 +57,7 @@ function renderCaptionLines(lines: { w: string; idx: number }[][], activeIdx: nu
     const wordPlate = st.plate === "word" && active;
     return (
       <span key={wo.idx} style={{
-        ...(wordPlate ? { background: st.plateColor || "#FFD60A", color: "#111", borderRadius: rad, padding: `${fontPx * 0.04}px ${fontPx * 0.14}px`, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" } : {}),
+        ...(wordPlate ? { background: st.plateColor || "#FFD60A", color: "#111", borderRadius: rad, boxShadow: `0 0 0 ${fontPx * 0.12}px ${st.plateColor || "#FFD60A"}` } : {}),
         ...(active && st.highlight && !wordPlate ? { color: st.highlight } : {}),
       }}>{wo.w}</span>
     );
@@ -828,7 +828,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                             const activeIdx = wm.findIndex((w) => local >= w.t && local < w.t + w.d);
                             const shownWords = text.split(/\s+/).filter(Boolean);
                             const lines = wrapCaption(shownWords, fontPx, st, previewSize.w * 0.86);
-                            const posStyle: React.CSSProperties = (st.pos || "bottom") === "bottom" ? { bottom: "10%" } : st.pos === "center" ? { top: "50%", transform: "translateY(-50%)" } : { top: "10%" };
+                            const posStyle: React.CSSProperties = (st.pos || "bottom") === "bottom" ? { bottom: "15%" } : st.pos === "center" ? { top: "50%", transform: "translateY(-50%)" } : { top: "10%" };
                             return (
                               <div className="absolute inset-x-0 flex justify-center pointer-events-none" style={{ ...posStyle, opacity: alpha }}>
                                 <div style={{ transform: `scale(${scl})`, transformOrigin: "center center" }}>
