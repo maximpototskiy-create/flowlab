@@ -24,32 +24,84 @@ const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3
 const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
 const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" ? "text" : k === "image" ? "image" : "video");
 const CAT_LABEL: Record<string, string> = { logo: "Logo", ui: "UI", store: "Store", graphic: "Graphic", overlay: "Overlay", music: "Music", sound: "Sound", reference: "Reference", hook: "Hook", body: "Body", packshot: "Packshot", other: "Other" };
-function renderCapWords(words: string[], activeIdx: number, st: TextStyle, fontPx: number, strokePx: number) {
+// shared text measurement so the preview wraps EXACTLY like the canvas export
+let _measCtx: CanvasRenderingContext2D | null = null;
+function measureCtx(): CanvasRenderingContext2D | null {
+  if (!_measCtx && typeof document !== "undefined") { const cv = document.createElement("canvas"); _measCtx = cv.getContext("2d"); }
+  return _measCtx;
+}
+function capFontStr(st: TextStyle, fontPx: number) { return `${st.weight ?? 800} ${Math.round(fontPx)}px ${st.font || "sans-serif"}`; }
+function wrapCaption(words: string[], fontPx: number, st: TextStyle, maxW: number): { w: string; idx: number }[][] {
+  const ctx = measureCtx();
+  if (!ctx) return words.length ? [words.map((w, i) => ({ w, idx: i }))] : [];
+  ctx.font = capFontStr(st, fontPx);
+  const space = ctx.measureText(" ").width;
+  const lines: { w: string; idx: number }[][] = [[]];
+  let lineW = 0;
+  words.forEach((w, idx) => {
+    const ww = ctx.measureText(w).width;
+    const cur = lines[lines.length - 1];
+    const add = cur.length ? space + ww : ww;
+    if (lineW + add > maxW && cur.length) { lines.push([{ w, idx }]); lineW = ww; }
+    else { cur.push({ w, idx }); lineW += add; }
+  });
+  return lines[0].length ? lines : [];
+}
+function renderCaptionLines(lines: { w: string; idx: number }[][], activeIdx: number, st: TextStyle, fontPx: number) {
   const shadow = st.shadow !== false ? "0 2px 8px rgba(0,0,0,0.85), 0 0 4px rgba(0,0,0,0.6)" : "none";
-  const strokeCss = strokePx > 0 && st.stroke ? { WebkitTextStroke: `${strokePx}px ${st.stroke}`, paintOrder: "stroke fill" as const } : {};
+  const strokePx = st.stroke ? fontPx * (st.strokeW ?? 0.08) : 0;
+  const strokeCss: React.CSSProperties = strokePx > 0 && st.stroke ? { WebkitTextStroke: `${strokePx}px ${st.stroke}`, paintOrder: "stroke fill" } : {};
+  const rad = fontPx * (st.radius ?? 0.22);
+  const word = (wo: { w: string; idx: number }) => {
+    const active = wo.idx === activeIdx;
+    const wordPlate = st.plate === "word" && active;
+    return (
+      <span key={wo.idx} style={{
+        ...(wordPlate ? { background: st.plateColor || "#FFD60A", color: "#111", borderRadius: rad, padding: `${fontPx * 0.04}px ${fontPx * 0.14}px`, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" } : {}),
+        ...(active && st.highlight && !wordPlate ? { color: st.highlight } : {}),
+      }}>{wo.w}</span>
+    );
+  };
   return (
-    <span style={{ fontSize: fontPx, fontWeight: st.weight ?? 800, fontFamily: st.font || "inherit", color: st.color || "#fff", textShadow: shadow, lineHeight: 1.22, ...strokeCss }}>
-      {words.map((w, i) => {
-        const active = i === activeIdx;
-        const wordPlate = st.plate === "word" && active;
-        return (
-          <span key={i} style={{
-            ...(wordPlate ? { background: st.plateColor || "#FFD60A", color: "#111", borderRadius: fontPx * 0.18, padding: `${fontPx * 0.06}px ${fontPx * 0.16}px` } : {}),
-            ...(active && st.highlight ? { color: st.highlight } : {}),
-          }}>{w}{i < words.length - 1 ? " " : ""}</span>
-        );
-      })}
-    </span>
+    <div style={{ fontSize: fontPx, fontWeight: st.weight ?? 800, fontFamily: st.font || "sans-serif", color: st.color || "#fff", textShadow: shadow, lineHeight: 1.22, ...strokeCss }}>
+      {lines.map((ln, li) => (
+        <div key={li} style={{ whiteSpace: "nowrap", textAlign: "center" }}>
+          {st.plate === "full" ? (
+            <span style={{ background: st.plateColor || "rgba(0,0,0,0.78)", borderRadius: rad, padding: `${fontPx * 0.12}px ${fontPx * 0.28}px`, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" }}>
+              {ln.map((wo, i) => <span key={wo.idx}>{word(wo)}{i < ln.length - 1 ? " " : ""}</span>)}
+            </span>
+          ) : ln.map((wo, i) => <span key={wo.idx}>{word(wo)}{i < ln.length - 1 ? " " : ""}</span>)}
+        </div>
+      ))}
+    </div>
   );
 }
 
+const CAP_FONTS: { label: string; value: string }[] = [
+  { label: "Sans", value: "sans-serif" },
+  { label: "System", value: "system-ui, sans-serif" },
+  { label: "Arial Black", value: "\"Arial Black\", sans-serif" },
+  { label: "Impact", value: "Impact, sans-serif" },
+  { label: "Trebuchet", value: "\"Trebuchet MS\", sans-serif" },
+  { label: "Verdana", value: "Verdana, sans-serif" },
+  { label: "Georgia", value: "Georgia, serif" },
+  { label: "Times", value: "\"Times New Roman\", serif" },
+  { label: "Mono", value: "ui-monospace, \"Courier New\", monospace" },
+  { label: "Comic", value: "\"Comic Sans MS\", cursive" },
+];
 const CAP_PRESETS: { key: string; label: string; style: TextStyle }[] = [
-  { key: "plain", label: "Plain", style: { color: "#fff", shadow: true, plate: "none", enter: "" } },
-  { key: "stroke", label: "Stroke", style: { color: "#fff", stroke: "#000", strokeW: 7, shadow: false, plate: "none", upper: true, weight: 900, enter: "scale" } },
-  { key: "plate", label: "Plate", style: { color: "#fff", plate: "full", plateColor: "rgba(0,0,0,0.78)", shadow: false, enter: "fade" } },
-  { key: "highlight", label: "Highlight", style: { color: "#fff", plate: "word", plateColor: "#FFD60A", shadow: true, weight: 900, upper: true, enter: "" } },
-  { key: "karaoke", label: "Karaoke", style: { color: "#fff", highlight: "#FFD60A", stroke: "#000", strokeW: 6, shadow: false, weight: 900, upper: true, enter: "" } },
-  { key: "typewriter", label: "Typewriter", style: { color: "#fff", shadow: true, plate: "none", font: "ui-monospace, monospace", weight: 700, enter: "typewriter" } },
+  { key: "plain", label: "Plain", style: { color: "#fff", shadow: true, plate: "none", enter: "", weight: 800 } },
+  { key: "stroke", label: "Stroke", style: { color: "#fff", stroke: "#000", strokeW: 0.11, shadow: false, plate: "none", upper: true, weight: 900, enter: "scale" } },
+  { key: "plate", label: "Plate", style: { color: "#fff", plate: "full", plateColor: "rgba(0,0,0,0.78)", radius: 0.22, shadow: false, enter: "fade", weight: 800 } },
+  { key: "highlight", label: "Highlight", style: { color: "#fff", plate: "word", plateColor: "#FFD60A", radius: 0.16, shadow: true, weight: 900, upper: true, enter: "" } },
+  { key: "karaoke", label: "Karaoke", style: { color: "#fff", highlight: "#FFD60A", stroke: "#000", strokeW: 0.08, shadow: false, weight: 900, upper: true, enter: "" } },
+  { key: "typewriter", label: "Typewriter", style: { color: "#fff", shadow: true, plate: "none", font: "ui-monospace, \"Courier New\", monospace", weight: 700, enter: "typewriter" } },
+  { key: "hormozi", label: "Hormozi", style: { color: "#fff", plate: "word", plateColor: "#22C55E", radius: 0.1, stroke: "#000", strokeW: 0.06, weight: 900, upper: true, shadow: false } },
+  { key: "boldYellow", label: "Bold Yellow", style: { color: "#FFD60A", stroke: "#000", strokeW: 0.12, weight: 900, upper: true, shadow: false, plate: "none" } },
+  { key: "pop", label: "Pop", style: { color: "#fff", stroke: "#000", strokeW: 0.1, weight: 900, upper: true, shadow: false, enter: "bounce", plate: "none" } },
+  { key: "boxed", label: "Boxed", style: { color: "#fff", plate: "full", plateColor: "#2563EB", radius: 0.4, weight: 800, shadow: false, enter: "scale" } },
+  { key: "neon", label: "Neon", style: { color: "#39FF14", weight: 900, upper: true, shadow: true, plate: "none" } },
+  { key: "minimal", label: "Minimal", style: { color: "#fff", weight: 600, shadow: false, plate: "none", size: 0.9 } },
 ];
 
 type Word = { text: string; start: number; end: number }; // ms
@@ -775,17 +827,13 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                             const wm: CapWord[] = c.words && c.words.length === raw.length ? c.words : raw.map((w, i) => ({ text: w, t: (c.duration / raw.length) * i, d: c.duration / raw.length }));
                             const activeIdx = wm.findIndex((w) => local >= w.t && local < w.t + w.d);
                             const shownWords = text.split(/\s+/).filter(Boolean);
+                            const lines = wrapCaption(shownWords, fontPx, st, previewSize.w * 0.86);
                             const posStyle: React.CSSProperties = (st.pos || "bottom") === "bottom" ? { bottom: "10%" } : st.pos === "center" ? { top: "50%", transform: "translateY(-50%)" } : { top: "10%" };
-                            const strokePx = st.stroke ? Math.max(1, (st.strokeW ?? 6) * (fontPx / 67)) : 0;
                             return (
-                              <div className="absolute inset-x-0 px-4 text-center pointer-events-none" style={{ ...posStyle, opacity: alpha }}>
-                                <span style={{ display: "inline-block", transform: `scale(${scl})`, transformOrigin: "center bottom", maxWidth: "88%" }}>
-                                  {(st.plate === "full") ? (
-                                    <span style={{ background: st.plateColor || "rgba(0,0,0,0.78)", borderRadius: fontPx * 0.22, padding: `${fontPx * 0.14}px ${fontPx * 0.3}px`, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" }}>
-                                      {renderCapWords(shownWords, activeIdx, st, fontPx, strokePx)}
-                                    </span>
-                                  ) : renderCapWords(shownWords, activeIdx, st, fontPx, strokePx)}
-                                </span>
+                              <div className="absolute inset-x-0 flex justify-center pointer-events-none" style={{ ...posStyle, opacity: alpha }}>
+                                <div style={{ transform: `scale(${scl})`, transformOrigin: "center center" }}>
+                                  {renderCaptionLines(lines, activeIdx, st, fontPx)}
+                                </div>
                               </div>
                             );
                           })()}
@@ -1052,8 +1100,27 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <label className="text-fg-muted col-span-2">Size
                   <input type="range" min={0.5} max={2} step={0.05} value={capStyle.size ?? 1} onChange={(e) => applyStyle({ ...capStyle, size: Number(e.target.value) })} className="mt-1 w-full" />
                 </label>
+                <label className="text-fg-muted col-span-2">Font
+                  <select value={capStyle.font || "sans-serif"} onChange={(e) => applyStyle({ ...capStyle, font: e.target.value })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                    {CAP_FONTS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                  </select>
+                </label>
                 <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={!!capStyle.upper} onChange={(e) => applyStyle({ ...capStyle, upper: e.target.checked })} /> UPPERCASE</label>
                 <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={capStyle.shadow !== false} onChange={(e) => applyStyle({ ...capStyle, shadow: e.target.checked })} /> Shadow</label>
+                <label className="text-fg-muted">Weight
+                  <select value={String(capStyle.weight ?? 800)} onChange={(e) => applyStyle({ ...capStyle, weight: Number(e.target.value) })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                    {[400, 600, 700, 800, 900].map((w) => <option key={w} value={w}>{w}</option>)}
+                  </select>
+                </label>
+                <label className="text-fg-muted">Corner radius
+                  <input type="range" min={0} max={0.5} step={0.02} value={capStyle.radius ?? 0.22} onChange={(e) => applyStyle({ ...capStyle, radius: Number(e.target.value) })} className="mt-1 w-full" />
+                </label>
+                <label className="text-fg-muted">Outline width
+                  <input type="range" min={0} max={0.2} step={0.01} value={capStyle.strokeW ?? 0} onChange={(e) => applyStyle({ ...capStyle, strokeW: Number(e.target.value), stroke: capStyle.stroke || "#000000" })} className="mt-1 w-full" />
+                </label>
+                <label className="text-fg-muted">Outline color
+                  <input type="color" value={capStyle.stroke || "#000000"} onChange={(e) => applyStyle({ ...capStyle, stroke: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
+                </label>
                 <label className="text-fg-muted">Text color
                   <input type="color" value={capStyle.color || "#ffffff"} onChange={(e) => applyStyle({ ...capStyle, color: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
                 </label>

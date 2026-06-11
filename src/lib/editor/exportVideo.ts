@@ -17,10 +17,11 @@ export type TextStyle = {
   weight?: number;                     // 400..900, default 800
   font?: string;                       // css font-family, default sans-serif
   stroke?: string;                     // stroke color ("" = none)
-  strokeW?: number;                    // stroke width at 1080p, default 6
+  strokeW?: number;                    // stroke width as fraction of font size (e.g. 0.08)
   shadow?: boolean;                    // soft drop shadow, default true
   plate?: "none" | "full" | "word";    // background plate: none / full line / active word
   plateColor?: string;                 // plate color
+  radius?: number;                     // plate corner radius as fraction of font size (default 0.22)
   highlight?: string;                  // active-word text color (karaoke)
   pos?: "bottom" | "center" | "top";
   enter?: "" | "scale" | "bounce" | "fade" | "typewriter";
@@ -186,28 +187,29 @@ function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W
   const blockH = n * lineH;
   ctx.translate(cx, cy - blockH / 2); ctx.scale(scl, scl); ctx.translate(-cx, -(cy - blockH / 2));
 
-  const padX = fontPx * 0.32, padY = fontPx * 0.18, rad = fontPx * 0.22;
-  const rrect = (x: number, y: number, w: number, h: number, r: number) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
+  const padX = fontPx * 0.28, padY = fontPx * 0.12, rad = fontPx * (st.radius ?? 0.22);
+  const rrect = (x: number, y: number, w: number, h: number, r: number) => { const rr = Math.min(r, h / 2, w / 2); ctx.beginPath(); ctx.moveTo(x + rr, y); ctx.arcTo(x + w, y, x + w, y + h, rr); ctx.arcTo(x + w, y + h, x, y + h, rr); ctx.arcTo(x, y + h, x, y, rr); ctx.arcTo(x, y, x + w, y, rr); ctx.closePath(); };
+  const plateTop = (yb: number, p: number) => yb - ascent - p;
+  const plateH = (p: number) => ascent + descent + p * 2;
 
   lines.forEach((ln, li) => {
     const lw = ln.words.reduce((s, w, i) => s + w.width + (i ? space : 0), 0);
     let x = cx - lw / 2;
     const yBottom = cy - (lines.length - 1 - li) * lineH;
-    // full plate behind the line
     if (st.plate === "full") {
       ctx.save(); ctx.shadowColor = "transparent";
       ctx.fillStyle = st.plateColor || "rgba(0,0,0,0.75)";
-      rrect(x - padX, yBottom - fontPx - padY, lw + padX * 2, fontPx + padY * 2, rad); ctx.fill(); ctx.restore();
+      rrect(x - padX, plateTop(yBottom, padY), lw + padX * 2, plateH(padY), rad); ctx.fill(); ctx.restore();
     }
     for (const wo of ln.words) {
       const isActive = wo.idx === activeIdx;
       if (st.plate === "word" && isActive) {
         ctx.save(); ctx.shadowColor = "transparent";
         ctx.fillStyle = st.plateColor || "#FFD60A";
-        rrect(x - padX * 0.5, yBottom - fontPx - padY * 0.6, wo.width + padX, fontPx + padY * 1.2, rad); ctx.fill(); ctx.restore();
+        rrect(x - padX * 0.5, plateTop(yBottom, padY * 0.8), wo.width + padX, plateH(padY * 0.8), rad); ctx.fill(); ctx.restore();
       }
       if (st.shadow !== false) { ctx.shadowColor = "rgba(0,0,0,0.85)"; ctx.shadowBlur = fontPx * 0.18; ctx.shadowOffsetY = fontPx * 0.05; } else ctx.shadowColor = "transparent";
-      if (st.stroke) { ctx.lineJoin = "round"; ctx.lineWidth = (st.strokeW ?? 6) * (W / 1080) * (fontPx / (W / 16)); ctx.strokeStyle = st.stroke; ctx.strokeText(wo.w, x, yBottom); }
+      if (st.stroke) { ctx.lineJoin = "round"; ctx.lineWidth = fontPx * (st.strokeW ?? 0.08); ctx.strokeStyle = st.stroke; ctx.strokeText(wo.w, x, yBottom); }
       ctx.fillStyle = isActive && st.highlight ? st.highlight : (st.plate === "word" && isActive ? "#111" : (st.color || "#fff"));
       ctx.fillText(wo.w, x, yBottom);
       x += wo.width + space;
