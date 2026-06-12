@@ -48,6 +48,8 @@ export type ExportClip = {
   fx?: string;
   transType?: string;
   inset?: number; // media in-point (s)
+  volume?: number; // 0..2, default 1
+  muted?: boolean;
   tstyle?: TextStyle;
   words?: CapWord[];
 };
@@ -119,6 +121,10 @@ function drawFx(ctx: CanvasRenderingContext2D, fx: string | undefined, W: number
     case "coolTint": ctx.fillStyle = "rgba(40,120,255,0.22)"; ctx.fillRect(0, 0, W, H); break;
     case "fadeBlack": ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); break;
     case "blackbars": { const bar = H * 0.12; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, bar); ctx.fillRect(0, H - bar, W, bar); break; }
+    case "glow": { const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.6); g.addColorStop(0, "rgba(255,255,255,0.28)"); g.addColorStop(1, "rgba(255,255,255,0)"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); break; }
+    case "dark": ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(0, 0, W, H); break;
+    case "topShade": { const g = ctx.createLinearGradient(0, 0, 0, H * 0.4); g.addColorStop(0, "rgba(0,0,0,0.7)"); g.addColorStop(1, "rgba(0,0,0,0)"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H * 0.4); break; }
+    case "bottomShade": { const g = ctx.createLinearGradient(0, H, 0, H * 0.6); g.addColorStop(0, "rgba(0,0,0,0.7)"); g.addColorStop(1, "rgba(0,0,0,0)"); ctx.fillStyle = g; ctx.fillRect(0, H * 0.6, W, H * 0.4); break; }
     default: { // vignette
       const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.72);
       g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.78)");
@@ -309,7 +315,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         if (active) {
           const loc = tt - c.start + (c.inset || 0);
           if (Math.abs(el.currentTime - loc) > 0.35) { try { el.currentTime = loc; } catch { /* */ } }
-          try { (el as HTMLMediaElement).volume = alphaAt(c, tt); } catch { /* */ }
+          try { (el as HTMLMediaElement).volume = Math.max(0, Math.min(1, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)))); } catch { /* */ }
           if (el.paused) el.play().catch(() => {});
         } else {
           if (!el.paused) el.pause();

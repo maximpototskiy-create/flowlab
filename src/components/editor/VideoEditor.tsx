@@ -137,6 +137,8 @@ type EditClip = {
   transType?: string;
   autoDur?: boolean;
   inset?: number; // media in-point (s) — used after razor splits
+  volume?: number; // 0..2, default 1
+  muted?: boolean;
   tstyle?: TextStyle;
   words?: CapWord[];
 };
@@ -158,6 +160,7 @@ const ANIMS = [
 const FX = [
   { v: "vignette", l: "Vignette" }, { v: "flash", l: "Flash" }, { v: "fadeBlack", l: "Fade black" },
   { v: "tint", l: "Warm tint" }, { v: "coolTint", l: "Cool tint" }, { v: "blackbars", l: "Cinematic bars" },
+  { v: "glow", l: "Glow" }, { v: "dark", l: "Darken" }, { v: "topShade", l: "Top shade" }, { v: "bottomShade", l: "Bottom shade" },
 ];
 const ADJUST = [
   { v: "grayscale(1)", l: "B&W" }, { v: "sepia(0.8)", l: "Sepia" }, { v: "invert(1)", l: "Invert" },
@@ -189,6 +192,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [binSource, setBinSource] = useState("");
   const [binCategory, setBinCategory] = useState("all");
   const [binSub, setBinSub] = useState("all");
+  const [binSort, setBinSort] = useState<"newest" | "name" | "kind">("newest");
   const [brands, setBrands] = useState<{ value: string; label: string }[]>([]);
   const [projects, setProjects] = useState<{ value: string; label: string }[]>([]);
   const [binLoading, setBinLoading] = useState(false);
@@ -256,12 +260,14 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   selectedRef.current = selectedIds;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
-  const mediaBin = library.filter((a) => binFilter === "all" || a.kind === binFilter);
-  const brandBin = brandLib.filter((a) =>
+  const sortBin = (arr: EditorAsset[]) => binSort === "newest" ? arr : [...arr].sort((a, b) => binSort === "name" ? a.label.localeCompare(b.label) : a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label));
+  const extOf = (url: string) => { const m = url.split("?")[0].match(/\.([a-z0-9]{2,4})$/i); return m ? m[1].toUpperCase() : ""; };
+  const mediaBin = sortBin(library.filter((a) => binFilter === "all" || a.kind === binFilter));
+  const brandBin = sortBin(brandLib.filter((a) =>
     (binFilter === "all" || a.kind === binFilter) &&
     (binCategory === "all" || a.category === binCategory) &&
-    (binSub === "all" || (a.subpath || "").split("/")[0] === binSub));
-  const audioBin = [...library, ...brandLib].filter((a) => a.kind === "audio");
+    (binSub === "all" || (a.subpath || "").split("/")[0] === binSub)));
+  const audioBin = sortBin([...library, ...brandLib].filter((a) => a.kind === "audio"));
   const libSubs = binCategory === "all" ? [] : Array.from(new Set(brandLib.filter((a) => a.category === binCategory && a.subpath).map((a) => (a.subpath as string).split("/")[0]))).sort();
   const libCats = Array.from(new Set(brandLib.map((a) => a.category).filter((c): c is string => !!c)));
   const selTextCount = selectedIds.filter((id) => clips.find((c) => c.id === id)?.kind === "text").length;
@@ -433,22 +439,33 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     return existing ? existing.id : createLayerForType(type);
   };
   const addAssetAt = (a: { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null }, layerId?: string, start?: number) => {
-    const layer = layerId ?? layerForKind(clipLayerType(a.kind));
     const known = a.duration != null && a.duration > 0;
     const duration = known ? (a.duration as number) : DEFAULTS[a.kind];
-    const at = start ?? Math.max(0, ...clips.filter((c) => c.layer === layer).map((c) => c.start + c.duration));
-    setClips((p) => [...p, base(a.kind, layer, a.url, a.label, Math.max(0, at), duration, known ? {} : { autoDur: true })]);
+    const at = Math.max(0, start ?? +playheadRef.current.toFixed(2));
+    const layer = layerId ?? layerWithRoom(clipLayerType(a.kind), at, duration);
+    setClips((p) => [...p, base(a.kind, layer, a.url, a.label, at, duration, known ? {} : { autoDur: true })]);
   };
   // when a video/audio's real duration loads, snap the clip length to it (unless already trimmed)
   const onMeta = (id: string, dur: number) => {
     if (!isFinite(dur) || dur <= 0) return;
     setClips((prev) => prev.map((c) => (c.id === id && c.autoDur ? { ...c, duration: +dur.toFixed(2), autoDur: false } : c)));
   };
-  const addClipKind = (kind: Kind, extra: Partial<EditClip>, dur: number, label: string) => {
-    const id = layerForKind(clipLayerType(kind));
-    setClips((p) => [...p, base(kind, id, undefined, label, +playheadRef.current.toFixed(2), dur, extra)]);
+  // CapCut-style placement: drop at the playhead; if every layer of this type is
+  // occupied there, create a new layer — otherwise reuse the first free one.
+  const layerWithRoom = (type: LayerType, start: number, dur: number): string => {
+    const overlaps = (lid: string) => clipsRef.current.some((c) => c.layer === lid && start < c.start + c.duration && start + dur > c.start);
+    const candidates = layers.filter((l) => l.type === type);
+    const free = candidates.find((l) => !overlaps(l.id));
+    return free ? free.id : createLayerForType(type);
   };
-  const addText = () => addClipKind("text", { text: "Your caption", tstyle: { ...capStyle } }, DEFAULTS.text, "Text");
+  const addClipKind = (kind: Kind, extra: Partial<EditClip>, dur: number, label: string) => {
+    const start = +playheadRef.current.toFixed(2);
+    const id = layerWithRoom(clipLayerType(kind), start, dur);
+    setClips((p) => [...p, base(kind, id, undefined, label, start, dur, extra)]);
+  };
+  const PLAIN_TEXT: TextStyle = { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 };
+  // plain text layer by default — animations/styles are applied afterwards (Captions tab / Properties)
+  const addText = (style?: TextStyle, label = "Text", text = "Your text") => addClipKind("text", { text, tstyle: { ...(style ?? PLAIN_TEXT) } }, DEFAULTS.text, label);
   // live style: update the template AND apply to selected captions (or all if none selected)
   const applyStyle = (next: TextStyle) => {
     setCapStyle(next);
@@ -627,7 +644,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       if (active) {
         const local = tt - c.start + (c.inset || 0);
         if (Math.abs(el.currentTime - local) > 0.3) { try { el.currentTime = local; } catch { /* */ } }
-        try { el.volume = alphaAt(c, tt); } catch { /* */ }
+        try { el.volume = Math.max(0, Math.min(1, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)))); } catch { /* */ }
         if (playingRef.current && el.paused) el.play().catch(() => {});
         if (!playingRef.current && !el.paused) el.pause();
       } else {
@@ -698,7 +715,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, tstyle: c.tstyle, words: c.words })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, tstyle: c.tstyle, words: c.words })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -912,18 +929,23 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     <div className="flex-1 min-h-0 overflow-y-auto p-2">
       <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(96px, 1fr))` }}>
         {items.map((a) => (
-          <button key={a.id} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={a.label}
-            className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
-            {a.kind === "image" ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
-            ) : a.kind === "video" ? (
-              <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
-            ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
-            <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
-            {a.subpath && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/80">{a.subpath.split("/")[0]}</span>}
-            <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
-          </button>
+          <div key={a.id} className="min-w-0">
+            <button draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={`${a.label}${extOf(a.url) ? ` · ${extOf(a.url)}` : ""}`}
+              className="group relative w-full aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
+              {a.kind === "image" ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
+              ) : a.kind === "video" ? (
+                <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
+              ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
+              <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
+              {extOf(a.url) && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[8px] text-white/70">{extOf(a.url)}</span>}
+              {a.subpath && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/80">{a.subpath.split("/")[0]}</span>}
+              {a.duration != null && a.duration > 0 && <span className="absolute bottom-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/70">{Math.round(a.duration)}s</span>}
+              <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
+            </button>
+            <div className="mt-0.5 text-[9px] text-fg-subtle truncate" title={a.label}>{a.label}</div>
+          </div>
         ))}
         {items.length === 0 && <div className="col-span-full text-fg-subtle text-[11px] p-3">{binLoading ? "Loading…" : "Nothing here yet."}</div>}
       </div>
@@ -947,6 +969,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     : kind === "tint" ? { background: "rgba(255,120,40,0.25)" }
     : kind === "coolTint" ? { background: "rgba(40,120,255,0.22)" }
     : kind === "blackbars" ? { background: "linear-gradient(to bottom, #000 0, #000 12%, transparent 12%, transparent 88%, #000 88%, #000 100%)" }
+    : kind === "glow" ? { background: "radial-gradient(ellipse at center, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0) 60%)" }
+    : kind === "dark" ? { background: "rgba(0,0,0,0.4)" }
+    : kind === "topShade" ? { background: "linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 40%)" }
+    : kind === "bottomShade" ? { background: "linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 40%)" }
     : { background: "radial-gradient(ellipse at center, rgba(0,0,0,0) 40%, rgba(0,0,0,0.78) 100%)" };
 
   // z-order (bottom → top) of all visual-layer clips
@@ -1010,6 +1036,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               {(["all", "video", "image", "audio"] as const).map((f) => (
                 <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
               ))}
+              <select value={binSort} onChange={(e) => setBinSort(e.target.value as typeof binSort)} className="ml-auto bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
+                <option value="newest">Newest</option><option value="name">Name</option><option value="kind">Type</option>
+              </select>
             </div>
           </div>
           {assetGrid(mediaBin)}
@@ -1049,6 +1078,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               {(["all", "video", "image", "audio"] as const).map((f) => (
                 <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
               ))}
+              <select value={binSort} onChange={(e) => setBinSort(e.target.value as typeof binSort)} className="ml-auto bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
+                <option value="newest">Newest</option><option value="name">Name</option><option value="kind">Type</option>
+              </select>
             </div>
           </div>
           {assetGrid(brandBin)}
@@ -1088,9 +1120,34 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         )}
 
         {railTab === "text" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <button onClick={addText} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add text</button>
-            <div className="text-[10px] text-fg-subtle px-1 pt-2">Adds a caption on a new top layer; edit text in the inspector.</div>
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
+            <button onClick={() => addText()} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add plain text</button>
+            <div className="text-fg-muted text-[11px] font-medium pt-1">Text presets</div>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                ["Title", { color: "#ffffff", weight: 900, size: 1.6, shadow: true, plate: "none", pos: "center", upper: true }, "TITLE"],
+                ["Heading", { color: "#ffffff", weight: 800, size: 1.2, shadow: true, plate: "none", pos: "top" }, "Heading"],
+                ["Body", { color: "#ffffff", weight: 600, size: 0.85, shadow: true, plate: "none", pos: "center" }, "Body text"],
+                ["Lower third", { color: "#ffffff", weight: 800, size: 0.8, plate: "full", plateColor: "rgba(0,0,0,0.78)", radius: 0.22, shadow: false, pos: "bottom" }, "Lower third"],
+                ["Outline", { color: "#ffffff", weight: 900, size: 1.2, stroke: "#000000", strokeW: 0.1, shadow: false, plate: "none", pos: "center", upper: true }, "OUTLINE"],
+                ["Accent box", { color: "#111111", weight: 900, size: 1, plate: "full", plateColor: "#FFD60A", radius: 0.3, shadow: false, pos: "center", upper: true }, "ACCENT"],
+              ] as const).map(([name, style, sample]) => (
+                <button key={name} onClick={() => addText(style as TextStyle, name, sample)}
+                  className="rounded-md border border-border hover:border-brand bg-black aspect-video flex items-center justify-center overflow-hidden">
+                  <span style={{
+                    color: (style as TextStyle).plate === "full" && (style as TextStyle).plateColor === "#FFD60A" ? "#111" : (style as TextStyle).color,
+                    fontWeight: (style as TextStyle).weight,
+                    fontSize: 12 * ((style as TextStyle).size ?? 1),
+                    background: (style as TextStyle).plate === "full" ? (style as TextStyle).plateColor : undefined,
+                    padding: (style as TextStyle).plate === "full" ? "2px 6px" : undefined,
+                    borderRadius: 4,
+                    WebkitTextStroke: (style as TextStyle).stroke ? `1px ${(style as TextStyle).stroke}` : undefined,
+                    textShadow: (style as TextStyle).shadow !== false ? "0 1px 4px rgba(0,0,0,0.8)" : undefined,
+                  }}>{sample}</span>
+                </button>
+              ))}
+            </div>
+            <div className="text-[10px] text-fg-subtle px-1">Plain text — no animation by default. Select it, then add an entrance animation and styling in <b>Captions → Caption style</b> or tweak it in Properties.</div>
           </div>
         )}
 
@@ -1443,26 +1500,50 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         <div className="flex-1 min-h-0 overflow-y-auto p-2 text-[11px]">
           {!sel && <div className="text-fg-subtle p-2">Select a clip on the timeline or in the viewport to edit its properties.</div>}
           {sel && (
-            <div className="flex flex-col gap-2 [&_label]:justify-between">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-fg-subtle uppercase tracking-wider text-[10px]">{sel.kind}</span>
+                <div className="flex gap-2">
+                  <button onClick={() => duplicate(sel.id)} title="Duplicate" className="text-fg-muted hover:text-fg"><Copy size={12} /></button>
+                  <button onClick={() => remove(sel.id)} title="Delete" className="text-red-400 hover:text-red-300"><Trash2 size={13} /></button>
+                </div>
+              </div>
 
-            <span className="text-fg-subtle uppercase tracking-wider">{sel.kind}</span>
-            <input value={sel.label} onChange={(e) => update(sel.id, { label: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-28 outline-none focus:border-brand" placeholder="Name" title="Element name" />
-            {sel.kind === "text" && (<input value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-40 outline-none focus:border-brand" placeholder="Caption" />)}
-            {sel.kind === "fx" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{FX.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
-            {sel.kind === "adjust" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{ADJUST.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
-            <label className="flex items-center gap-1 text-fg-muted">start<input type="number" min={0} step={0.1} value={sel.start} onChange={(e) => update(sel.id, { start: Math.max(0, Number(e.target.value) || 0) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-14 text-fg outline-none focus:border-brand" />s</label>
-            <label className="flex items-center gap-1 text-fg-muted">dur<input type="number" min={MIN_DUR} step={0.1} value={sel.duration} onChange={(e) => update(sel.id, { duration: Math.max(MIN_DUR, Number(e.target.value) || MIN_DUR) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-14 text-fg outline-none focus:border-brand" />s</label>
-            {(sel.kind === "video" || sel.kind === "image" || sel.kind === "text") && (
-              <>
-                <label className="flex items-center gap-1 text-fg-muted">anim<select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
-                <label className="flex items-center gap-1 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => updateSel(sel.id, { scale: Number(e.target.value) })} className="w-16" /></label>
-              </>
-            )}
-            <label className="flex items-center gap-1 text-fg-muted">in<input type="number" min={0} step={0.1} value={sel.fadeIn} onChange={(e) => update(sel.id, { fadeIn: Math.max(0, Number(e.target.value) || 0) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
-            <label className="flex items-center gap-1 text-fg-muted">out<input type="number" min={0} step={0.1} value={sel.fadeOut} onChange={(e) => update(sel.id, { fadeOut: Math.max(0, Number(e.target.value) || 0) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
-            <button onClick={() => duplicate(sel.id)} className="text-fg-muted hover:text-fg inline-flex items-center gap-1"><Copy size={12} /> dup</button>
-            <button onClick={() => remove(sel.id)} className="text-red-400 hover:text-red-300 inline-flex items-center gap-1 ml-auto"><Trash2 size={13} /> delete</button>
-          
+              <div className="space-y-1.5">
+                <div className="text-fg-muted font-medium">Basic</div>
+                <input value={sel.label} onChange={(e) => update(sel.id, { label: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" placeholder="Name" />
+                {sel.kind === "text" && (<textarea value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} rows={2} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand resize-y" placeholder="Text" />)}
+                {sel.kind === "text" && (<div className="text-[10px] text-fg-subtle">Style & entrance animation: <b>Captions → Caption style</b> (applies to the selected text).</div>)}
+                {sel.kind === "fx" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{FX.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
+                {sel.kind === "adjust" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{ADJUST.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="text-fg-muted font-medium">Timing</div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <label className="flex items-center gap-1 text-fg-muted">start<input type="number" min={0} step={0.1} value={sel.start} onChange={(e) => update(sel.id, { start: Math.max(0, Number(e.target.value) || 0) })} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none focus:border-brand" /></label>
+                  <label className="flex items-center gap-1 text-fg-muted">dur<input type="number" min={MIN_DUR} step={0.1} value={sel.duration} onChange={(e) => update(sel.id, { duration: Math.max(MIN_DUR, Number(e.target.value) || MIN_DUR) })} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none focus:border-brand" /></label>
+                  <label className="flex items-center gap-1 text-fg-muted">fade in<input type="number" min={0} step={0.1} value={sel.fadeIn} onChange={(e) => update(sel.id, { fadeIn: Math.max(0, Number(e.target.value) || 0) })} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none focus:border-brand" /></label>
+                  <label className="flex items-center gap-1 text-fg-muted">fade out<input type="number" min={0} step={0.1} value={sel.fadeOut} onChange={(e) => update(sel.id, { fadeOut: Math.max(0, Number(e.target.value) || 0) })} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none focus:border-brand" /></label>
+                </div>
+              </div>
+
+              {(sel.kind === "video" || sel.kind === "image" || sel.kind === "text") && (
+                <div className="space-y-1.5">
+                  <div className="text-fg-muted font-medium">Transform & motion</div>
+                  <label className="flex items-center gap-2 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => updateSel(sel.id, { scale: Number(e.target.value) })} className="flex-1" /><span className="w-9 text-right tabular-nums">{Math.round(sel.scale * 100)}%</span></label>
+                  <label className="flex items-center gap-2 text-fg-muted">animation<select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
+                  <button onClick={() => resetTransform(sel.id)} className="text-[10px] text-fg-subtle hover:text-fg underline underline-offset-2">Reset position & scale</button>
+                </div>
+              )}
+
+              {(sel.kind === "video" || sel.kind === "audio") && (
+                <div className="space-y-1.5">
+                  <div className="text-fg-muted font-medium">Audio</div>
+                  <label className="flex items-center gap-2 text-fg-muted">volume<input type="range" min={0} max={2} step={0.05} value={sel.volume ?? 1} onChange={(e) => updateSel(sel.id, { volume: Number(e.target.value) })} disabled={!!sel.muted} className="flex-1 disabled:opacity-40" /><span className="w-10 text-right tabular-nums">{Math.round((sel.volume ?? 1) * 100)}%</span></label>
+                  <label className="flex items-center gap-1.5 text-fg-muted"><input type="checkbox" checked={!!sel.muted} onChange={(e) => updateSel(sel.id, { muted: e.target.checked })} /> Mute</label>
+                </div>
+              )}
             </div>
           )}
         </div>
