@@ -50,6 +50,9 @@ export type ExportClip = {
   inset?: number; // media in-point (s)
   volume?: number; // 0..2, default 1
   muted?: boolean;
+  blend?: string;    // "" | "screen" (drop black) | "multiply" (drop white)
+  keyColor?: string; // chroma key color (hex), e.g. "#00ff00"
+  keyTol?: number;   // 0..1 tolerance (default 0.3)
   tstyle?: TextStyle;
   words?: CapWord[];
 };
@@ -114,6 +117,40 @@ function pickMime(): { type: string; mp4: boolean } {
   return { type: "", mp4: false };
 }
 
+function hexToRgb(hex: string): [number, number, number] {
+  const m = hex.replace("#", "");
+  const v = m.length === 3 ? m.split("").map((c) => c + c).join("") : m;
+  const n = parseInt(v, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+const keyScratch: { cv: HTMLCanvasElement | null } = { cv: null };
+// draws `el` keyed (keyColor pixels → transparent) at dx/dy/dw/dh; processing capped at 720px wide
+function drawKeyed(ctx: CanvasRenderingContext2D, el: CanvasImageSource, c: ExportClip, dx: number, dy: number, dw: number, dh: number) {
+  const [kr, kg, kb] = hexToRgb(c.keyColor || "#00ff00");
+  const tol = Math.max(0.02, Math.min(1, c.keyTol ?? 0.3)) * 255 * 1.5;
+  const pw = Math.max(2, Math.min(720, Math.round(dw)));
+  const ph = Math.max(2, Math.round(pw * (dh / Math.max(1, dw))));
+  if (!keyScratch.cv) keyScratch.cv = document.createElement("canvas");
+  const cv = keyScratch.cv;
+  if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+  const kctx = cv.getContext("2d", { willReadFrequently: true });
+  if (!kctx) return;
+  try {
+    kctx.clearRect(0, 0, pw, ph);
+    kctx.drawImage(el, 0, 0, pw, ph);
+    const img = kctx.getImageData(0, 0, pw, ph);
+    const d = img.data;
+    const soft = tol * 0.4;
+    for (let i = 0; i < d.length; i += 4) {
+      const dr = d[i] - kr, dg = d[i + 1] - kg, db = d[i + 2] - kb;
+      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+      if (dist < tol) d[i + 3] = 0;
+      else if (dist < tol + soft) d[i + 3] = Math.round(d[i + 3] * ((dist - tol) / soft));
+    }
+    kctx.putImageData(img, 0, 0);
+    ctx.drawImage(cv, dx, dy, dw, dh);
+  } catch { try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ } }
+}
 function drawFx(ctx: CanvasRenderingContext2D, fx: string | undefined, W: number, H: number) {
   switch (fx) {
     case "flash": ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H); break;
@@ -392,7 +429,10 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
               const dw = mw * fit, dh = mh * fit;
               const dx = (W - dw) / 2 + (c.x || 0) * sx + v.offX * W;
               const dy = (H - dh) / 2 + (c.y || 0) * sx + v.offY * H;
-              try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ }
+              if (c.blend === "screen" || c.blend === "multiply") ctx.globalCompositeOperation = c.blend;
+              if (c.keyColor) drawKeyed(ctx, el, c, dx, dy, dw, dh);
+              else { try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ } }
+              ctx.globalCompositeOperation = "source-over";
             }
           }
         } else if (c.kind === "text") {

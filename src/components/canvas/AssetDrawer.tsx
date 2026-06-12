@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles } from "lucide-react";
+import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Play, Pause } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
 import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
@@ -24,6 +24,17 @@ export default function AssetDrawer({
   onPick: (asset: AssetItem) => void;
   brandId?: string | null;
 }) {
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewingUrl, setPreviewingUrl] = useState<string | null>(null);
+  const togglePreview = (url: string) => {
+    const cur = previewAudioRef.current;
+    if (previewingUrl === url && cur) { cur.pause(); setPreviewingUrl(null); return; }
+    if (cur) cur.pause();
+    const a = new Audio(url); a.volume = 0.9; a.onended = () => setPreviewingUrl(null);
+    previewAudioRef.current = a; setPreviewingUrl(url);
+    a.play().catch(() => setPreviewingUrl(null));
+  };
+  useEffect(() => () => { previewAudioRef.current?.pause(); }, []);
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<"library" | "generated" | "ui">("generated");
@@ -483,10 +494,16 @@ export default function AssetDrawer({
                   <img src={a.cdnUrl} alt="" className="w-full h-full object-cover pointer-events-none" loading="lazy" />
                 )}
                 {a.kind === "video" && (
-                  <video src={a.cdnUrl} className="w-full h-full object-cover pointer-events-none" muted preload="metadata" />
+                  <video src={a.cdnUrl} className="w-full h-full object-cover" muted loop preload="metadata"
+                    onMouseEnter={(e) => { e.currentTarget.play().catch(() => {}); }} onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }} />
                 )}
                 {a.kind === "audio" && (
-                  <div className="w-full h-full flex items-center justify-center text-fg-subtle"><Music size={20} /></div>
+                  <div className="w-full h-full flex items-center justify-center text-fg-subtle relative"><Music size={20} />
+                    <button onClick={(e) => { e.stopPropagation(); togglePreview(a.cdnUrl); }} title={previewingUrl === a.cdnUrl ? "Stop" : "Preview"}
+                      className="absolute bottom-1 right-1 w-6 h-6 grid place-items-center rounded-full bg-black/70 text-white hover:bg-black/90">
+                      {previewingUrl === a.cdnUrl ? <Pause size={11} /> : <Play size={11} />}
+                    </button>
+                  </div>
                 )}
                 {a.kind === "text" && (
                   <div className="w-full h-full flex items-center justify-center p-2 text-fg-muted text-[8px] overflow-hidden">

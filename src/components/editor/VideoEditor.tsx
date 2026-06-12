@@ -44,6 +44,73 @@ const CAP_FONTS: { label: string; value: string }[] = [
   { label: "Mono", value: "ui-monospace, \"Courier New\", monospace" },
   { label: "Comic", value: "\"Comic Sans MS\", cursive" },
 ];
+// ---- chroma-key preview renderers (same math as the exporter) ----
+function keyHexToRgb(hex: string): [number, number, number] {
+  const m = hex.replace("#", ""); const v = m.length === 3 ? m.split("").map((c) => c + c).join("") : m;
+  const n = parseInt(v, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function keyImageData(d: Uint8ClampedArray, keyColor: string, keyTol: number) {
+  const [kr, kg, kb] = keyHexToRgb(keyColor);
+  const tol = Math.max(0.02, Math.min(1, keyTol)) * 255 * 1.5; const soft = tol * 0.4;
+  for (let i = 0; i < d.length; i += 4) {
+    const dr = d[i] - kr, dg = d[i + 1] - kg, db = d[i + 2] - kb;
+    const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+    if (dist < tol) d[i + 3] = 0;
+    else if (dist < tol + soft) d[i + 3] = Math.round(d[i + 3] * ((dist - tol) / soft));
+  }
+}
+function KeyedVideo({ url, keyColor, keyTol, register, onMeta }: { url: string; keyColor: string; keyTol: number; register: (el: HTMLVideoElement | null) => void; onMeta: (dur: number) => void }) {
+  const vRef = useRef<HTMLVideoElement | null>(null);
+  const cRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const v = vRef.current, cv = cRef.current;
+      if (v && cv && v.readyState >= 2 && v.videoWidth) {
+        const pw = Math.min(720, v.videoWidth), ph = Math.round(pw * (v.videoHeight / v.videoWidth));
+        if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+        const ctx = cv.getContext("2d", { willReadFrequently: true });
+        if (ctx) {
+          try {
+            ctx.clearRect(0, 0, pw, ph); ctx.drawImage(v, 0, 0, pw, ph);
+            const img = ctx.getImageData(0, 0, pw, ph);
+            keyImageData(img.data, keyColor, keyTol);
+            ctx.putImageData(img, 0, 0);
+          } catch { /* tainted → leave the raw frame */ }
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [keyColor, keyTol]);
+  return (<>
+    <video ref={(el) => { vRef.current = el; register(el); }} src={url} crossOrigin="anonymous" playsInline preload="metadata"
+      onLoadedMetadata={(e) => onMeta(e.currentTarget.duration)}
+      className="absolute inset-0 w-full h-full object-contain opacity-0 pointer-events-none" />
+    <canvas ref={cRef} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+  </>);
+}
+function KeyedImage({ url, keyColor, keyTol }: { url: string; keyColor: string; keyTol: number }) {
+  const cRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const img = new Image(); img.crossOrigin = "anonymous"; img.src = url;
+    img.onload = () => {
+      const cv = cRef.current; if (!cv) return;
+      const pw = Math.min(1280, img.naturalWidth), ph = Math.round(pw * (img.naturalHeight / Math.max(1, img.naturalWidth)));
+      cv.width = pw; cv.height = ph;
+      const ctx = cv.getContext("2d", { willReadFrequently: true }); if (!ctx) return;
+      try {
+        ctx.drawImage(img, 0, 0, pw, ph);
+        const d = ctx.getImageData(0, 0, pw, ph);
+        keyImageData(d.data, keyColor, keyTol);
+        ctx.putImageData(d, 0, 0);
+      } catch { /* */ }
+    };
+  }, [url, keyColor, keyTol]);
+  return <canvas ref={cRef} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />;
+}
+
 // demo backdrop for effect/filter previews (inline SVG — no network)
 const DEMO_BG = "url('data:image/svg+xml;utf8," + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2b5876"/><stop offset="1" stop-color="#4e4376"/></linearGradient></defs><rect width="160" height="90" fill="url(#g)"/><circle cx="118" cy="26" r="14" fill="#f6d365"/><path d="M0 70 L40 42 L75 64 L110 38 L160 60 L160 90 L0 90 Z" fill="#1f2d3d"/><path d="M0 78 L50 56 L95 74 L140 52 L160 62 L160 90 L0 90 Z" fill="#16202c"/></svg>`
@@ -192,6 +259,9 @@ type EditClip = {
   inset?: number; // media in-point (s) — used after razor splits
   volume?: number; // 0..2, default 1
   muted?: boolean;
+  blend?: string;    // "" | "screen" | "multiply"
+  keyColor?: string; // chroma key color (hex)
+  keyTol?: number;   // 0..1
   tstyle?: TextStyle;
   words?: CapWord[];
 };
@@ -424,7 +494,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         if (!r.ok || j.error) { setSyncMsg(`Sync failed: ${j.error || r.status}`); setSyncBusy(false); return; }
         total += j.imported || 0;
         if (!j.remaining) { setSyncMsg(total ? `Imported ${total} new file${total === 1 ? "" : "s"}.` : "Up to date — nothing new."); break; }
-        setSyncMsg(`Imported ${total}… ${j.remaining} left`);
+        setSyncMsg(`Batch ${i + 1}: imported ${total} so far… ${j.remaining} left`);
       }
       await loadBrand();
     } catch (e) { setSyncMsg(e instanceof DOMException && e.name === "AbortError" ? "Batch timed out — press Sync Drive again to continue (progress is saved)." : `Sync failed: ${e instanceof Error ? e.message : "error"}`); }
@@ -825,7 +895,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, tstyle: c.tstyle, words: c.words })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -1035,6 +1105,17 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     update(bId, patch); setTransMenu(null);
   };
 
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewingUrl, setPreviewingUrl] = useState<string | null>(null);
+  const togglePreview = (url: string) => {
+    const cur = previewAudioRef.current;
+    if (previewingUrl === url && cur) { cur.pause(); setPreviewingUrl(null); return; }
+    if (cur) cur.pause();
+    const a = new Audio(url); a.volume = 0.9; a.onended = () => setPreviewingUrl(null);
+    previewAudioRef.current = a; setPreviewingUrl(url);
+    a.play().catch(() => setPreviewingUrl(null));
+  };
+  useEffect(() => () => { previewAudioRef.current?.pause(); }, []);
   const assetGrid = (items: EditorAsset[]) => (
     <div className="flex-1 min-h-0 overflow-y-auto p-2">
       <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(96px, 1fr))` }}>
@@ -1046,8 +1127,17 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={a.url} alt="" onLoad={(e) => noteDims(a.url, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
               ) : a.kind === "video" ? (
-                <video src={a.url} muted playsInline preload="metadata" onLoadedMetadata={(e) => noteDims(a.url, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} className="absolute inset-0 w-full h-full object-cover" />
-              ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
+                <video src={a.url} muted loop playsInline preload="metadata" onLoadedMetadata={(e) => noteDims(a.url, e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
+                  onMouseEnter={(e) => { e.currentTarget.play().catch(() => {}); }} onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
+                  className="absolute inset-0 w-full h-full object-cover" />
+              ) : (
+                <span className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} />
+                  <button onClick={(e) => { e.stopPropagation(); togglePreview(a.url); }} title={previewingUrl === a.url ? "Stop" : "Preview"}
+                    className="absolute bottom-1 right-1 w-6 h-6 grid place-items-center rounded-full bg-black/70 text-white hover:bg-black/90">
+                    {previewingUrl === a.url ? <Pause size={11} /> : <Play size={11} />}
+                  </button>
+                </span>
+              )}
               <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
               {extOf(a.url) && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[8px] text-white/70">{extOf(a.url)}</span>}
               {a.subpath && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/80">{a.subpath.split("/")[0]}</span>}
@@ -1409,15 +1499,21 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                       const v = clipVisual(c as CompClip, t, clips as CompClip[]);
                       return (
                         <div key={c.id} className="absolute inset-0"
-                          style={{ ...styleFromVisual(c, v), pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
+                          style={{ ...styleFromVisual(c, v), mixBlendMode: (c.blend || undefined) as React.CSSProperties["mixBlendMode"], pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
                           onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}>
-                          {c.kind === "image" && (
+                          {c.kind === "image" && !c.keyColor && (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={c.url} alt="" draggable={false} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
                           )}
-                          {c.kind === "video" && (
+                          {c.kind === "image" && c.keyColor && <KeyedImage url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3} />}
+                          {c.kind === "video" && !c.keyColor && (
                             <video src={c.url} playsInline preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
                               className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                          )}
+                          {c.kind === "video" && c.keyColor && (
+                            <KeyedVideo url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3}
+                              register={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
+                              onMeta={(d) => onMeta(c.id, d)} />
                           )}
                           {isSel && active && <div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />}
                           {selected === c.id && active && (
@@ -1688,6 +1784,30 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                   <label className="flex items-center gap-2 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => updateSel(sel.id, { scale: Number(e.target.value) })} className="flex-1" /><span className="w-9 text-right tabular-nums">{Math.round(sel.scale * 100)}%</span></label>
                   <label className="flex items-center gap-2 text-fg-muted">animation<select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
                   <button onClick={() => resetTransform(sel.id)} className="text-[10px] text-fg-subtle hover:text-fg underline underline-offset-2">Reset position & scale</button>
+                </div>
+              )}
+
+              {(sel.kind === "video" || sel.kind === "image") && (
+                <div className="space-y-1.5">
+                  <div className="text-fg-muted font-medium">Blend & background</div>
+                  <label className="flex items-center gap-2 text-fg-muted">blend
+                    <select value={sel.blend ?? ""} onChange={(e) => updateSel(sel.id, { blend: e.target.value })} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                      <option value="">Normal</option>
+                      <option value="screen">Screen — drop black bg</option>
+                      <option value="multiply">Multiply — drop white bg</option>
+                    </select>
+                  </label>
+                  <div className="flex items-center gap-1.5 text-fg-muted">
+                    <span>chroma key</span>
+                    <button onClick={() => updateSel(sel.id, { keyColor: "#00ff00" })} className={`px-1.5 py-0.5 rounded border text-[10px] ${sel.keyColor === "#00ff00" ? "border-brand text-brand" : "border-border"}`}>Green</button>
+                    <button onClick={() => updateSel(sel.id, { keyColor: "#0000ff" })} className={`px-1.5 py-0.5 rounded border text-[10px] ${sel.keyColor === "#0000ff" ? "border-brand text-brand" : "border-border"}`}>Blue</button>
+                    <input type="color" value={sel.keyColor ?? "#00ff00"} onChange={(e) => updateSel(sel.id, { keyColor: e.target.value })} className="w-6 h-6 p-0 border border-border rounded bg-transparent" title="Custom key color" />
+                    <button onClick={() => updateSel(sel.id, { keyColor: undefined, keyTol: undefined })} className={`px-1.5 py-0.5 rounded border text-[10px] ${!sel.keyColor ? "border-brand text-brand" : "border-border"}`}>Off</button>
+                  </div>
+                  {sel.keyColor && (
+                    <label className="flex items-center gap-2 text-fg-muted">tolerance<input type="range" min={0.05} max={0.8} step={0.01} value={sel.keyTol ?? 0.3} onChange={(e) => updateSel(sel.id, { keyTol: Number(e.target.value) })} className="flex-1" /><span className="w-8 text-right tabular-nums">{Math.round((sel.keyTol ?? 0.3) * 100)}%</span></label>
+                  )}
+                  <div className="text-[10px] text-fg-subtle">Transparent PNG and alpha WebM work as-is. For footage on a solid color use chroma key; for glows/fireworks on black use Screen.</div>
                 </div>
               )}
 

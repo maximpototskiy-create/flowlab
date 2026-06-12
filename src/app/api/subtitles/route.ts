@@ -25,9 +25,11 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!/^https?:\/\//i.test(audioUrl)) return NextResponse.json({ error: "audioUrl must be a public http(s) URL" }, { status: 400 });
 
   const lang = (body.language || "auto").toLowerCase();
+  // NOTE: the field is `speech_model` (singular). The previous `speech_models`
+  // array was rejected for some inputs (e.g. wav uploads) with a 400.
   const payload: Record<string, unknown> = {
     audio_url: audioUrl,
-    speech_models: ["universal-3-pro", "universal-2"],
+    speech_model: "universal",
   };
   if (lang === "auto") { payload.language_detection = true; payload.language_detection_options = { fallback_language: "en" }; }
   else payload.language_code = lang;
@@ -41,7 +43,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     body: JSON.stringify(payload),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) return NextResponse.json({ error: j?.error || `AssemblyAI HTTP ${r.status}` }, { status: 502 });
+  if (!r.ok) return NextResponse.json({ error: (j as { error?: string })?.error || `AssemblyAI HTTP ${r.status}` }, { status: 502 });
   return NextResponse.json({ id: j.id, status: j.status });
 }
 
@@ -55,7 +57,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
   const r = await fetch(`${AAI}/${id}`, { headers: { Authorization: apiKey } });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) return NextResponse.json({ error: j?.error || `AssemblyAI HTTP ${r.status}` }, { status: 502 });
+  if (!r.ok) return NextResponse.json({ error: (j as { error?: string })?.error || `AssemblyAI HTTP ${r.status}` }, { status: 502 });
 
   if (j.status === "completed") {
     const words = Array.isArray(j.words)
