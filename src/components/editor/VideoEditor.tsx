@@ -7,7 +7,7 @@ import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw,
 } from "lucide-react";
 
 export type EditorAsset = {
@@ -218,7 +218,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [progress, setProgress] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
-  const [panelTab, setPanelTab] = useState<"effects" | "filters" | "text" | "subs">("effects");
+  const [railTab, setRailTab] = useState<"media" | "brand" | "audio" | "text" | "subs" | "effects" | "filters">("media");
+  const [brandLib, setBrandLib] = useState<EditorAsset[]>([]);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
   const [subSource, setSubSource] = useState<string>("");
   const [subMode, setSubMode] = useState<SplitMode>("smart");
   const [subEmoji, setSubEmoji] = useState(false);
@@ -253,12 +256,14 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   selectedRef.current = selectedIds;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
-  const bin = library.filter((a) =>
+  const mediaBin = library.filter((a) => binFilter === "all" || a.kind === binFilter);
+  const brandBin = brandLib.filter((a) =>
     (binFilter === "all" || a.kind === binFilter) &&
     (binCategory === "all" || a.category === binCategory) &&
     (binSub === "all" || (a.subpath || "").split("/")[0] === binSub));
-  const libSubs = binCategory === "all" ? [] : Array.from(new Set(library.filter((a) => a.category === binCategory && a.subpath).map((a) => (a.subpath as string).split("/")[0]))).sort();
-  const libCats = Array.from(new Set(library.map((a) => a.category).filter((c): c is string => !!c)));
+  const audioBin = [...library, ...brandLib].filter((a) => a.kind === "audio");
+  const libSubs = binCategory === "all" ? [] : Array.from(new Set(brandLib.filter((a) => a.category === binCategory && a.subpath).map((a) => (a.subpath as string).split("/")[0]))).sort();
+  const libCats = Array.from(new Set(brandLib.map((a) => a.category).filter((c): c is string => !!c)));
   const selTextCount = selectedIds.filter((id) => clips.find((c) => c.id === id)?.kind === "text").length;
   // ---- undo/redo (snapshots of clips+layers, debounced) ----
   const histRef = useRef<{ clips: EditClip[]; layers: Layer[] }[]>([]);
@@ -287,7 +292,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     restoringRef.current = true; setClips(s.clips); setLayers(s.layers); setSelectedIds([]);
   }, []);
 
-  const loadLibrary = async (over: Partial<{ q: string; brand: string; project: string; source: string }> = {}) => {
+  // generated + uploaded assets (the "Media" tab)
+  const loadGen = async (over: Partial<{ q: string; brand: string; project: string; source: string }> = {}) => {
     const q = over.q ?? binQuery, brand = over.brand ?? binBrand, project = over.project ?? binProject, source = over.source ?? binSource;
     setBinLoading(true);
     try {
@@ -296,30 +302,55 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       if (brand) p.set("brand", brand);
       if (project) p.set("project", project);
       if (source) p.set("source", source);
-      // brand-assets (canvas library: hook/body/packshot/logo/…) — fetched unless filtering to uploads only
-      const wantBrand = source !== "upload" && !project && !q.trim();
-      const bp = new URLSearchParams(); bp.set("limit", "200"); if (brand) bp.set("brandId", brand);
-      const [aR, bR] = await Promise.all([
-        fetch(`/api/assets?${p.toString()}`).then((r) => r.json()).catch(() => ({})),
-        wantBrand ? fetch(`/api/brand-assets/browse?${bp.toString()}`).then((r) => r.json()).catch(() => ({})) : Promise.resolve({}),
-      ]);
-      const aj = aR as { assets?: { id: string; cdnUrl: string; kind: string; prompt: string | null; brandName: string | null; durationSec: number | null }[]; brands?: { value: string; label: string }[]; projects?: { value: string; label: string }[] };
-      const bj = bR as { assets?: { id: string; url: string; kind: string; category: string; subpath?: string | null; label: string | null }[] };
-      const seen = new Set<string>();
+      const r = await fetch(`/api/assets?${p.toString()}`);
+      const aj = (await r.json()) as { assets?: { id: string; cdnUrl: string; kind: string; prompt: string | null; brandName: string | null; durationSec: number | null }[]; brands?: { value: string; label: string }[]; projects?: { value: string; label: string }[] };
       const items: EditorAsset[] = [];
+      const seen = new Set<string>();
       for (const a of aj.assets || []) {
         if (!a.cdnUrl || seen.has(a.cdnUrl)) continue; if (!(a.kind === "video" || a.kind === "image" || a.kind === "audio")) continue;
         seen.add(a.cdnUrl); items.push({ id: a.id, url: a.cdnUrl, kind: a.kind as EditorAsset["kind"], label: a.prompt || a.brandName || a.kind, duration: a.durationSec ?? null });
-      }
-      for (const r of bj.assets || []) {
-        if (!r.url?.startsWith("http") || seen.has(r.url)) continue;
-        seen.add(r.url); const kind: EditorAsset["kind"] = r.kind === "video" ? "video" : r.kind === "audio" ? "audio" : "image";
-        items.push({ id: `ba-${r.id}`, url: r.url, kind, label: r.label || CAT_LABEL[r.category] || r.category || "asset", duration: null, category: r.category, subpath: r.subpath || undefined });
       }
       setLibrary(items);
       if (Array.isArray(aj.brands)) setBrands(aj.brands);
       if (Array.isArray(aj.projects)) setProjects(aj.projects);
     } catch { /* keep current */ } finally { setBinLoading(false); }
+  };
+  // curated brand-kit assets (the "Brand" tab) — category/subfolder structured
+  const loadBrand = async (brandOver?: string) => {
+    const brand = brandOver ?? binBrand;
+    setBinLoading(true);
+    try {
+      const bp = new URLSearchParams(); bp.set("limit", "200"); if (brand) bp.set("brandId", brand);
+      const r = await fetch(`/api/brand-assets/browse?${bp.toString()}`);
+      const bj = (await r.json()) as { assets?: { id: string; url: string; kind: string; category: string; subpath?: string | null; label: string | null }[] };
+      const items: EditorAsset[] = [];
+      const seen = new Set<string>();
+      for (const x of bj.assets || []) {
+        if (!x.url?.startsWith("http") || seen.has(x.url)) continue;
+        seen.add(x.url); const kind: EditorAsset["kind"] = x.kind === "video" ? "video" : x.kind === "audio" ? "audio" : "image";
+        items.push({ id: `ba-${x.id}`, url: x.url, kind, label: x.label || CAT_LABEL[x.category] || x.category || "asset", duration: null, category: x.category, subpath: x.subpath || undefined });
+      }
+      setBrandLib(items);
+    } catch { /* keep current */ } finally { setBinLoading(false); }
+  };
+  const loadLibrary = async (over: Partial<{ q: string; brand: string; project: string; source: string }> = {}) => { await Promise.all([loadGen(over), loadBrand(over.brand)]); };
+  // pull new files from Google Drive into the brand kit, batch by batch
+  const syncFromDrive = async () => {
+    if (!binBrand) { setSyncMsg("Pick a brand first."); return; }
+    setSyncBusy(true); setSyncMsg("Checking Drive…");
+    try {
+      let total = 0;
+      for (let i = 0; i < 30; i++) {
+        const r = await fetch("/api/drive/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandId: binBrand }) });
+        const j = (await r.json()) as { ok?: boolean; imported?: number; remaining?: number; newFound?: number; error?: string };
+        if (!r.ok || j.error) { setSyncMsg(`Sync failed: ${j.error || r.status}`); setSyncBusy(false); return; }
+        total += j.imported || 0;
+        if (!j.remaining) { setSyncMsg(total ? `Imported ${total} new file${total === 1 ? "" : "s"}.` : "Up to date — nothing new."); break; }
+        setSyncMsg(`Imported ${total}… ${j.remaining} left`);
+      }
+      await loadBrand();
+    } catch (e) { setSyncMsg(`Sync failed: ${e instanceof Error ? e.message : "error"}`); }
+    setSyncBusy(false);
   };
   useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   // load caption webfonts + saved presets; redraw once fonts are ready
@@ -877,6 +908,28 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     update(bId, patch); setTransMenu(null);
   };
 
+  const assetGrid = (items: EditorAsset[]) => (
+    <div className="flex-1 min-h-0 overflow-y-auto p-2">
+      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(96px, 1fr))` }}>
+        {items.map((a) => (
+          <button key={a.id} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={a.label}
+            className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
+            {a.kind === "image" ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
+            ) : a.kind === "video" ? (
+              <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
+            ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
+            <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
+            {a.subpath && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/80">{a.subpath.split("/")[0]}</span>}
+            <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
+          </button>
+        ))}
+        {items.length === 0 && <div className="col-span-full text-fg-subtle text-[11px] p-3">{binLoading ? "Loading…" : "Nothing here yet."}</div>}
+      </div>
+    </div>
+  );
+
   const t = playhead;
   const styleFromVisual = (c: EditClip, v: ReturnType<typeof clipVisual>): React.CSSProperties => {
     const tx = (c.x || 0) + v.offX * previewSize.w;
@@ -902,82 +955,251 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   return (
     <div className="flex-1 flex min-h-0">
-      {/* Library (left) — resizable & collapsible */}
+      {/* Left rail (CapCut-style) */}
+      <nav className="w-12 shrink-0 border-r border-border flex flex-col items-center py-2 gap-1 text-fg-subtle">
+        {([
+          ["media", "Media", <Clapperboard key="i" size={16} />],
+          ["brand", "Brand", <Folder key="i" size={16} />],
+          ["audio", "Audio", <Music key="i" size={16} />],
+          ["text", "Text", <Type key="i" size={16} />],
+          ["subs", "Captions", <Subtitles key="i" size={16} />],
+          ["effects", "Effects", <Wand2 key="i" size={16} />],
+          ["filters", "Filters", <SlidersHorizontal key="i" size={16} />],
+        ] as const).map(([k, l, icon]) => (
+          <button key={k} onClick={() => { setRailTab(k); if (leftW === 0) setLeftW(260); }} title={l}
+            className={`w-10 py-1.5 rounded flex flex-col items-center gap-0.5 ${railTab === k && leftW !== 0 ? "bg-brand/15 text-brand" : "hover:text-fg"}`}>
+            {icon}
+            <span className="text-[8px] leading-none">{l}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* Left panel — content of the selected rail tab */}
       {leftW === 0 && (
-        <button onClick={() => setLeftW(240)} title="Show Library" className="shrink-0 w-5 border-r border-border text-fg-subtle hover:text-fg text-[10px]">›</button>
+        <button onClick={() => setLeftW(260)} title="Show panel" className="shrink-0 w-5 border-r border-border text-fg-subtle hover:text-fg text-[10px]">›</button>
       )}
       <aside style={{ width: leftW, display: leftW === 0 ? "none" : undefined }} className="relative shrink-0 border-r border-border flex flex-col min-h-0">
-        <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 text-[12px] font-medium text-fg">Library
+        <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 text-[12px] font-medium text-fg">
+          {railTab === "media" ? "Media" : railTab === "brand" ? "Brand kit" : railTab === "audio" ? "Audio" : railTab === "text" ? "Text" : railTab === "subs" ? "Captions" : railTab === "effects" ? "Effects" : "Filters"}
           <button onClick={() => setLeftW(0)} title="Hide panel" className="text-fg-subtle hover:text-fg">‹</button>
         </div>
         <div onPointerDown={dragPanel("left")} className="absolute top-0 -right-1 w-2 h-full cursor-col-resize z-20" title="Drag to resize" />
-        <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
-          <div className="flex gap-1.5">
-            <button onClick={() => fileInputRef.current?.click()} className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]"><Plus size={12} /> Upload</button>
-            <button onClick={() => loadLibrary()} disabled={binLoading} className="px-2 rounded border border-border text-fg-muted hover:text-fg text-[11px] disabled:opacity-50">{binLoading ? "…" : "Refresh"}</button>
-          </div>
-          <input ref={fileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ""; }} />
-          <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} placeholder="Semantic search… (Enter)" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
-          <div className="grid grid-cols-2 gap-1.5">
-            {projects.length > 0 && (
-              <select value={binProject} onChange={(e) => { setBinProject(e.target.value); loadLibrary({ project: e.target.value }); }} className="bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
-                <option value="">All projects</option>
-                {projects.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+
+        {railTab === "media" && (<>
+          <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
+            <div className="flex gap-1.5">
+              <button onClick={() => fileInputRef.current?.click()} className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]"><Plus size={12} /> Upload</button>
+              <button onClick={() => loadGen()} disabled={binLoading} className="px-2 rounded border border-border text-fg-muted hover:text-fg text-[11px] disabled:opacity-50">{binLoading ? "…" : "Refresh"}</button>
+            </div>
+            <input ref={fileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ""; }} />
+            <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} placeholder="Semantic search… (Enter)" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
+            <div className="grid grid-cols-2 gap-1.5">
+              {projects.length > 0 && (
+                <select value={binProject} onChange={(e) => { setBinProject(e.target.value); loadGen({ project: e.target.value }); }} className="bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
+                  <option value="">All projects</option>
+                  {projects.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              )}
+              <select value={binSource} onChange={(e) => { setBinSource(e.target.value); loadGen({ source: e.target.value }); }} className="bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
+                <option value="">All sources</option>
+                <option value="upload">Uploads</option>
+                <option value="generated">Generated</option>
               </select>
-            )}
-            {brands.length > 0 && (
-              <select value={binBrand} onChange={(e) => { setBinBrand(e.target.value); loadLibrary({ brand: e.target.value }); }} className="bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
+            </div>
+            <div className="flex items-center gap-1 text-[10px]">
+              {(["all", "video", "image", "audio"] as const).map((f) => (
+                <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
+              ))}
+            </div>
+          </div>
+          {assetGrid(mediaBin)}
+        </>)}
+
+        {railTab === "brand" && (<>
+          <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
+            <div className="flex gap-1.5">
+              <select value={binBrand} onChange={(e) => { setBinBrand(e.target.value); loadBrand(e.target.value); }} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
                 <option value="">All brands</option>
                 {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
               </select>
-            )}
-          </div>
-          <select value={binSource} onChange={(e) => { setBinSource(e.target.value); loadLibrary({ source: e.target.value }); }} className="w-full bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
-            <option value="">All sources</option>
-            <option value="upload">Uploads</option>
-            <option value="brand_kit">Brand kit</option>
-          </select>
-          {libCats.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap text-[10px]">
-              <button onClick={() => { setBinCategory("all"); setBinSub("all"); }} className={`px-2 py-0.5 rounded ${binCategory === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
-              {libCats.map((c) => (
-                <button key={c} onClick={() => { setBinCategory(c); setBinSub("all"); }} className={`px-2 py-0.5 rounded ${binCategory === c ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{CAT_LABEL[c] ?? c}</button>
-              ))}
-            </div>
-          )}
-          {libSubs.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap text-[10px]">
-              <span className="text-fg-subtle">↳</span>
-              <button onClick={() => setBinSub("all")} className={`px-2 py-0.5 rounded ${binSub === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
-              {libSubs.map((sp) => (
-                <button key={sp} onClick={() => setBinSub(sp)} className={`px-2 py-0.5 rounded ${binSub === sp ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{sp}</button>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center gap-1 text-[10px]">
-            {(["all", "video", "image", "audio"] as const).map((f) => (
-              <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
-            ))}
-          </div>
-        </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-2">
-          <div className="grid grid-cols-2 gap-2">
-            {bin.map((a) => (
-              <button key={a.id} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={a.label}
-                className="group relative aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
-                {a.kind === "image" ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
-                ) : a.kind === "video" ? (
-                  <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
-                ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
-                <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
-                <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
+              <button onClick={syncFromDrive} disabled={syncBusy || !binBrand} title="Import new files from the brand's Google Drive folder"
+                className="px-2 inline-flex items-center gap-1 rounded border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px] disabled:opacity-50">
+                <RefreshCw size={11} className={syncBusy ? "animate-spin" : ""} /> Sync Drive
               </button>
-            ))}
-            {bin.length === 0 && <div className="col-span-2 text-fg-subtle text-[11px] p-3">{binLoading ? "Loading…" : "No assets. Upload or pick a different category."}</div>}
+            </div>
+            {syncMsg && <div className="text-[10px] text-fg-subtle">{syncMsg}</div>}
+            {libCats.length > 0 && (
+              <div className="flex items-center gap-1 flex-wrap text-[10px]">
+                <button onClick={() => { setBinCategory("all"); setBinSub("all"); }} className={`px-2 py-0.5 rounded ${binCategory === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
+                {libCats.map((c) => (
+                  <button key={c} onClick={() => { setBinCategory(c); setBinSub("all"); }} className={`px-2 py-0.5 rounded ${binCategory === c ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{CAT_LABEL[c] ?? c}</button>
+                ))}
+              </div>
+            )}
+            {libSubs.length > 0 && (
+              <div className="flex items-center gap-1 flex-wrap text-[10px]">
+                <span className="text-fg-subtle">↳</span>
+                <button onClick={() => setBinSub("all")} className={`px-2 py-0.5 rounded ${binSub === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
+                {libSubs.map((sp) => (
+                  <button key={sp} onClick={() => setBinSub(sp)} className={`px-2 py-0.5 rounded ${binSub === sp ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{sp}</button>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-1 text-[10px]">
+              {(["all", "video", "image", "audio"] as const).map((f) => (
+                <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
+              ))}
+            </div>
           </div>
-        </div>
+          {assetGrid(brandBin)}
+        </>)}
+
+        {railTab === "audio" && (<>
+          <div className="shrink-0 border-b border-border/50 p-2 text-[10px] text-fg-subtle">Music & sound from uploads, generations and the brand kit.</div>
+          {assetGrid(audioBin)}
+        </>)}
+
+        {railTab === "effects" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <div className="text-[10px] text-fg-subtle px-1 pb-2">Overlay effect — added as a clip on a new top layer.</div>
+            <div className="grid grid-cols-2 gap-2">
+              {FX.map((f) => (
+                <button key={f.v} onClick={() => addFx(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center group">
+                  <div className="absolute inset-0" style={fxStyle(f.v)} />
+                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Sparkles size={11} /> {f.l}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {railTab === "filters" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <div className="text-[10px] text-fg-subtle px-1 pb-2">Filter — added as a clip; affects only layers below it.</div>
+            <div className="grid grid-cols-2 gap-2">
+              {ADJUST.map((f) => (
+                <button key={f.v} onClick={() => addAdjust(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-gradient-to-br from-bg-card to-bg-card/40 flex items-end justify-center">
+                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-400/30 via-fuchsia-400/20 to-amber-300/30" style={{ filter: f.v }} />
+                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Wand2 size={11} /> {f.l}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {railTab === "text" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <button onClick={addText} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add text</button>
+            <div className="text-[10px] text-fg-subtle px-1 pt-2">Adds a caption on a new top layer; edit text in the inspector.</div>
+          </div>
+        )}
+
+        {railTab === "subs" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2 text-[11px]">
+            <label className="block text-fg-muted">Source
+              <select value={subSource} onChange={(e) => setSubSource(e.target.value)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+                {subSources.length === 0 && <option value="">No video/audio on timeline</option>}
+                {subSources.map((c) => <option key={c.id} value={c.id}>{c.label} ({c.kind})</option>)}
+              </select>
+            </label>
+            <label className="block text-fg-muted">Split
+              <select value={subMode} onChange={(e) => setSubMode(e.target.value as SplitMode)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+                <option value="word">One word</option>
+                <option value="two">Two words</option>
+                <option value="three">Three words</option>
+                <option value="smart">Smart (phrases)</option>
+                <option value="sentence">Sentences</option>
+                <option value="line">Full line (~40 chars)</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 text-fg-muted"><input type="checkbox" checked={subEmoji} onChange={(e) => setSubEmoji(e.target.checked)} /> Auto emoji ✨</label>
+            <button onClick={generateSubtitles} disabled={subBusy || subSources.length === 0}
+              className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md bg-brand text-white text-[12px] font-medium disabled:opacity-50">
+              {subBusy ? <><Loader2 size={14} className="animate-spin" /> Working…</> : <><Sparkles size={14} /> Generate subtitles</>}
+            </button>
+            {subStatus && <div className="text-fg-subtle">{subStatus}</div>}
+
+            <div className="pt-2 border-t border-border/40 space-y-2">
+              <div className="text-fg-muted font-medium">Caption style <span className="text-fg-subtle font-normal">— applies to selected captions, or all if none selected</span></div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {CAP_PRESETS.map((p) => (
+                  <button key={p.key} onClick={() => { setCapPreset(p.key); applyStyle({ ...p.style }); }}
+                    className={`rounded border px-1 py-2 text-[10px] ${capPreset === p.key ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <label className="text-fg-muted">Position
+                  <select value={capStyle.pos || "bottom"} onChange={(e) => applyStyle({ ...capStyle, pos: e.target.value as TextStyle["pos"] })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                    <option value="bottom">Bottom</option><option value="center">Center</option><option value="top">Top</option>
+                  </select>
+                </label>
+                <label className="text-fg-muted">Animation
+                  <select value={capStyle.enter || ""} onChange={(e) => applyStyle({ ...capStyle, enter: e.target.value as TextStyle["enter"] })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                    <option value="">None</option><option value="scale">Scale</option><option value="bounce">Bounce</option><option value="fade">Fade</option><option value="typewriter">Typewriter</option>
+                  </select>
+                </label>
+                <label className="text-fg-muted col-span-2">Size
+                  <input type="range" min={0.5} max={2} step={0.05} value={capStyle.size ?? 1} onChange={(e) => applyStyle({ ...capStyle, size: Number(e.target.value) })} className="mt-1 w-full" />
+                </label>
+                <label className="text-fg-muted col-span-2">Font
+                  <select value={capStyle.font || "sans-serif"} onChange={(e) => applyStyle({ ...capStyle, font: e.target.value })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                    {CAP_FONTS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                  </select>
+                </label>
+                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={!!capStyle.upper} onChange={(e) => applyStyle({ ...capStyle, upper: e.target.checked })} /> UPPERCASE</label>
+                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={capStyle.shadow !== false} onChange={(e) => applyStyle({ ...capStyle, shadow: e.target.checked })} /> Shadow</label>
+                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={!!capStyle.noPunct} onChange={(e) => applyStyle({ ...capStyle, noPunct: e.target.checked })} /> No punctuation</label>
+                <label className="text-fg-muted">Shadow color
+                  <input type="color" value={capStyle.shadowColor || "#000000"} onChange={(e) => applyStyle({ ...capStyle, shadowColor: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
+                </label>
+                <label className="text-fg-muted">Weight
+                  <select value={String(capStyle.weight ?? 800)} onChange={(e) => applyStyle({ ...capStyle, weight: Number(e.target.value) })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                    {[400, 600, 700, 800, 900].map((w) => <option key={w} value={w}>{w}</option>)}
+                  </select>
+                </label>
+                <label className="text-fg-muted">Corner radius
+                  <input type="range" min={0} max={0.5} step={0.02} value={capStyle.radius ?? 0.22} onChange={(e) => applyStyle({ ...capStyle, radius: Number(e.target.value) })} className="mt-1 w-full" />
+                </label>
+                <label className="text-fg-muted">Outline width
+                  <input type="range" min={0} max={0.2} step={0.01} value={capStyle.strokeW ?? 0} onChange={(e) => applyStyle({ ...capStyle, strokeW: Number(e.target.value), stroke: capStyle.stroke || "#000000" })} className="mt-1 w-full" />
+                </label>
+                <label className="text-fg-muted">Outline color
+                  <input type="color" value={capStyle.stroke || "#000000"} onChange={(e) => applyStyle({ ...capStyle, stroke: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
+                </label>
+                <label className="text-fg-muted">Text color
+                  <input type="color" value={capStyle.color || "#ffffff"} onChange={(e) => applyStyle({ ...capStyle, color: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
+                </label>
+                <label className="text-fg-muted">{capStyle.plate === "word" ? "Plate color" : capStyle.plate === "full" ? "Plate color" : "Highlight color"}
+                  <input type="color"
+                    value={(capStyle.plate === "word" || capStyle.plate === "full" ? capStyle.plateColor : capStyle.highlight) || "#FFD60A"}
+                    onChange={(e) => applyStyle(capStyle.plate === "word" || capStyle.plate === "full" ? { ...capStyle, plateColor: e.target.value } : { ...capStyle, highlight: e.target.value })}
+                    className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
+                </label>
+              </div>
+              <div className="flex gap-1.5 pt-0.5">
+                <button onClick={applyStyleAll} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Apply to all captions</button>
+                <button onClick={applyStyleSelected} disabled={!selTextCount} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40">Apply to selected{selTextCount ? ` (${selTextCount})` : ""}</button>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-fg-muted font-medium">My presets</span>
+                <button onClick={savePreset} className="px-2 py-1 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Save current</button>
+              </div>
+              {savedPresets.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {savedPresets.map((p) => (
+                    <span key={p.name} className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-1">
+                      <button onClick={() => { setCapPreset(""); applyStyle({ ...p.style }); }} className="text-fg-muted hover:text-brand">{p.name}</button>
+                      <button onClick={() => deletePreset(p.name)} className="text-fg-subtle hover:text-red-400">×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="text-[10px] text-fg-subtle">Change preset/colors → applies live (selected, or all). Buttons re-apply to existing captions without re-transcribing.</div>
+            </div>
+          </div>
+        )}
       </aside>
 
       {/* Main */}
@@ -1207,10 +1429,22 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           </div>
         </div>
 
-        {/* Inspector — always present (no layout jump) */}
-        <div className="shrink-0 border-t border-border p-2 flex items-center gap-3 text-[11px] flex-wrap min-h-[44px]">
-          {!sel && <span className="text-fg-subtle">Select a clip to edit its properties.</span>}
-          {sel && (<>
+      </div>
+
+      {/* Properties (right) — selected clip, resizable & collapsible */}
+      {rightW === 0 && (
+        <button onClick={() => setRightW(256)} title="Show Properties" className="shrink-0 w-5 border-l border-border text-fg-subtle hover:text-fg text-[10px]">‹</button>
+      )}
+      <aside style={{ width: rightW, display: rightW === 0 ? "none" : undefined }} className="relative shrink-0 border-l border-border flex flex-col min-h-0">
+        <div onPointerDown={dragPanel("right")} className="absolute top-0 -left-1 w-2 h-full cursor-col-resize z-20" title="Drag to resize" />
+        <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 text-[12px] font-medium text-fg">Properties
+          <button onClick={() => setRightW(0)} title="Hide panel" className="text-fg-subtle hover:text-fg">›</button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-2 text-[11px]">
+          {!sel && <div className="text-fg-subtle p-2">Select a clip on the timeline or in the viewport to edit its properties.</div>}
+          {sel && (
+            <div className="flex flex-col gap-2 [&_label]:justify-between">
+
             <span className="text-fg-subtle uppercase tracking-wider">{sel.kind}</span>
             <input value={sel.label} onChange={(e) => update(sel.id, { label: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-28 outline-none focus:border-brand" placeholder="Name" title="Element name" />
             {sel.kind === "text" && (<input value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} className="bg-bg-card border border-border rounded px-2 py-1 text-fg w-40 outline-none focus:border-brand" placeholder="Caption" />)}
@@ -1228,164 +1462,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <label className="flex items-center gap-1 text-fg-muted">out<input type="number" min={0} step={0.1} value={sel.fadeOut} onChange={(e) => update(sel.id, { fadeOut: Math.max(0, Number(e.target.value) || 0) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
             <button onClick={() => duplicate(sel.id)} className="text-fg-muted hover:text-fg inline-flex items-center gap-1"><Copy size={12} /> dup</button>
             <button onClick={() => remove(sel.id)} className="text-red-400 hover:text-red-300 inline-flex items-center gap-1 ml-auto"><Trash2 size={13} /> delete</button>
-          </>)}
+          
+            </div>
+          )}
         </div>
-      </div>
-
-      {/* Tools (right) — resizable & collapsible */}
-      {rightW === 0 && (
-        <button onClick={() => setRightW(256)} title="Show Tools" className="shrink-0 w-5 border-l border-border text-fg-subtle hover:text-fg text-[10px]">‹</button>
-      )}
-      <aside style={{ width: rightW, display: rightW === 0 ? "none" : undefined }} className="relative shrink-0 border-l border-border flex flex-col min-h-0">
-        <div onPointerDown={dragPanel("right")} className="absolute top-0 -left-1 w-2 h-full cursor-col-resize z-20" title="Drag to resize" />
-        <div className="h-11 shrink-0 border-b border-border flex items-center gap-1 px-2 text-[11px]">
-          {([["effects", "Effects"], ["filters", "Filters"], ["text", "Text"], ["subs", "Subtitles"]] as const).map(([k, l]) => (
-            <button key={k} onClick={() => setPanelTab(k)} className={`px-2 py-1 rounded ${panelTab === k ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}>{l}</button>
-          ))}
-          <button onClick={() => setRightW(0)} title="Hide panel" className="ml-auto text-fg-subtle hover:text-fg">›</button>
-        </div>
-
-        {panelTab === "effects" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <div className="text-[10px] text-fg-subtle px-1 pb-2">Overlay effect — added as a clip on a new top layer.</div>
-            <div className="grid grid-cols-2 gap-2">
-              {FX.map((f) => (
-                <button key={f.v} onClick={() => addFx(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center group">
-                  <div className="absolute inset-0" style={fxStyle(f.v)} />
-                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Sparkles size={11} /> {f.l}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {panelTab === "filters" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <div className="text-[10px] text-fg-subtle px-1 pb-2">Filter — added as a clip; affects only layers below it.</div>
-            <div className="grid grid-cols-2 gap-2">
-              {ADJUST.map((f) => (
-                <button key={f.v} onClick={() => addAdjust(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-gradient-to-br from-bg-card to-bg-card/40 flex items-end justify-center">
-                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-400/30 via-fuchsia-400/20 to-amber-300/30" style={{ filter: f.v }} />
-                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Wand2 size={11} /> {f.l}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {panelTab === "text" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2">
-            <button onClick={addText} className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[12px]"><Type size={13} /> Add text</button>
-            <div className="text-[10px] text-fg-subtle px-1 pt-2">Adds a caption on a new top layer; edit text in the inspector.</div>
-          </div>
-        )}
-
-        {panelTab === "subs" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2 text-[11px]">
-            <label className="block text-fg-muted">Source
-              <select value={subSource} onChange={(e) => setSubSource(e.target.value)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
-                {subSources.length === 0 && <option value="">No video/audio on timeline</option>}
-                {subSources.map((c) => <option key={c.id} value={c.id}>{c.label} ({c.kind})</option>)}
-              </select>
-            </label>
-            <label className="block text-fg-muted">Split
-              <select value={subMode} onChange={(e) => setSubMode(e.target.value as SplitMode)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
-                <option value="word">One word</option>
-                <option value="two">Two words</option>
-                <option value="three">Three words</option>
-                <option value="smart">Smart (phrases)</option>
-                <option value="sentence">Sentences</option>
-                <option value="line">Full line (~40 chars)</option>
-              </select>
-            </label>
-            <label className="flex items-center gap-1.5 text-fg-muted"><input type="checkbox" checked={subEmoji} onChange={(e) => setSubEmoji(e.target.checked)} /> Auto emoji ✨</label>
-            <button onClick={generateSubtitles} disabled={subBusy || subSources.length === 0}
-              className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md bg-brand text-white text-[12px] font-medium disabled:opacity-50">
-              {subBusy ? <><Loader2 size={14} className="animate-spin" /> Working…</> : <><Sparkles size={14} /> Generate subtitles</>}
-            </button>
-            {subStatus && <div className="text-fg-subtle">{subStatus}</div>}
-
-            <div className="pt-2 border-t border-border/40 space-y-2">
-              <div className="text-fg-muted font-medium">Caption style <span className="text-fg-subtle font-normal">— applies to selected captions, or all if none selected</span></div>
-              <div className="grid grid-cols-3 gap-1.5">
-                {CAP_PRESETS.map((p) => (
-                  <button key={p.key} onClick={() => { setCapPreset(p.key); applyStyle({ ...p.style }); }}
-                    className={`rounded border px-1 py-2 text-[10px] ${capPreset === p.key ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <label className="text-fg-muted">Position
-                  <select value={capStyle.pos || "bottom"} onChange={(e) => applyStyle({ ...capStyle, pos: e.target.value as TextStyle["pos"] })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
-                    <option value="bottom">Bottom</option><option value="center">Center</option><option value="top">Top</option>
-                  </select>
-                </label>
-                <label className="text-fg-muted">Animation
-                  <select value={capStyle.enter || ""} onChange={(e) => applyStyle({ ...capStyle, enter: e.target.value as TextStyle["enter"] })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
-                    <option value="">None</option><option value="scale">Scale</option><option value="bounce">Bounce</option><option value="fade">Fade</option><option value="typewriter">Typewriter</option>
-                  </select>
-                </label>
-                <label className="text-fg-muted col-span-2">Size
-                  <input type="range" min={0.5} max={2} step={0.05} value={capStyle.size ?? 1} onChange={(e) => applyStyle({ ...capStyle, size: Number(e.target.value) })} className="mt-1 w-full" />
-                </label>
-                <label className="text-fg-muted col-span-2">Font
-                  <select value={capStyle.font || "sans-serif"} onChange={(e) => applyStyle({ ...capStyle, font: e.target.value })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
-                    {CAP_FONTS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
-                  </select>
-                </label>
-                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={!!capStyle.upper} onChange={(e) => applyStyle({ ...capStyle, upper: e.target.checked })} /> UPPERCASE</label>
-                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={capStyle.shadow !== false} onChange={(e) => applyStyle({ ...capStyle, shadow: e.target.checked })} /> Shadow</label>
-                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={!!capStyle.noPunct} onChange={(e) => applyStyle({ ...capStyle, noPunct: e.target.checked })} /> No punctuation</label>
-                <label className="text-fg-muted">Shadow color
-                  <input type="color" value={capStyle.shadowColor || "#000000"} onChange={(e) => applyStyle({ ...capStyle, shadowColor: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
-                </label>
-                <label className="text-fg-muted">Weight
-                  <select value={String(capStyle.weight ?? 800)} onChange={(e) => applyStyle({ ...capStyle, weight: Number(e.target.value) })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
-                    {[400, 600, 700, 800, 900].map((w) => <option key={w} value={w}>{w}</option>)}
-                  </select>
-                </label>
-                <label className="text-fg-muted">Corner radius
-                  <input type="range" min={0} max={0.5} step={0.02} value={capStyle.radius ?? 0.22} onChange={(e) => applyStyle({ ...capStyle, radius: Number(e.target.value) })} className="mt-1 w-full" />
-                </label>
-                <label className="text-fg-muted">Outline width
-                  <input type="range" min={0} max={0.2} step={0.01} value={capStyle.strokeW ?? 0} onChange={(e) => applyStyle({ ...capStyle, strokeW: Number(e.target.value), stroke: capStyle.stroke || "#000000" })} className="mt-1 w-full" />
-                </label>
-                <label className="text-fg-muted">Outline color
-                  <input type="color" value={capStyle.stroke || "#000000"} onChange={(e) => applyStyle({ ...capStyle, stroke: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
-                </label>
-                <label className="text-fg-muted">Text color
-                  <input type="color" value={capStyle.color || "#ffffff"} onChange={(e) => applyStyle({ ...capStyle, color: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
-                </label>
-                <label className="text-fg-muted">{capStyle.plate === "word" ? "Plate color" : capStyle.plate === "full" ? "Plate color" : "Highlight color"}
-                  <input type="color"
-                    value={(capStyle.plate === "word" || capStyle.plate === "full" ? capStyle.plateColor : capStyle.highlight) || "#FFD60A"}
-                    onChange={(e) => applyStyle(capStyle.plate === "word" || capStyle.plate === "full" ? { ...capStyle, plateColor: e.target.value } : { ...capStyle, highlight: e.target.value })}
-                    className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
-                </label>
-              </div>
-              <div className="flex gap-1.5 pt-0.5">
-                <button onClick={applyStyleAll} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Apply to all captions</button>
-                <button onClick={applyStyleSelected} disabled={!selTextCount} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40">Apply to selected{selTextCount ? ` (${selTextCount})` : ""}</button>
-              </div>
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-fg-muted font-medium">My presets</span>
-                <button onClick={savePreset} className="px-2 py-1 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Save current</button>
-              </div>
-              {savedPresets.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {savedPresets.map((p) => (
-                    <span key={p.name} className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-1">
-                      <button onClick={() => { setCapPreset(""); applyStyle({ ...p.style }); }} className="text-fg-muted hover:text-brand">{p.name}</button>
-                      <button onClick={() => deletePreset(p.name)} className="text-fg-subtle hover:text-red-400">×</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className="text-[10px] text-fg-subtle">Change preset/colors → applies live (selected, or all). Buttons re-apply to existing captions without re-transcribing.</div>
-            </div>
-          </div>
-        )}
       </aside>
 
       {/* Context menu */}
