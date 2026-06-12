@@ -1860,11 +1860,10 @@ export default function Canvas({
                 onUploadFile={uploadFile}
                 workflowMeta={{ ...workflowMeta, workflowId }}
                 composerTracks={composerTracks}
-                onOpenInEditor={node.type === "composer" ? () => {
+                editorHref={node.type === "composer" ? `/editor?wf=${workflowId}&proj=${workflowMeta.projectId}` : undefined}
+                onStashTracks={node.type === "composer" ? () => {
                   try { localStorage.setItem(`flowlab.editor.import.v1:${workflowId}`, JSON.stringify({ tracks: composerTracks ?? [] })); } catch { /* */ }
-                  window.open(`/editor?wf=${workflowId}&proj=${workflowMeta.projectId}`, "_blank");
                 } : undefined}
-                onOpenEditorOnly={node.type === "composer" ? () => { window.open(`/editor?wf=${workflowId}&proj=${workflowMeta.projectId}`, "_blank"); } : undefined}
               />
               );
             })}

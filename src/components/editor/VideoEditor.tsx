@@ -256,7 +256,8 @@ type EditClip = {
   fx?: string;
   transType?: string;
   autoDur?: boolean;
-  inset?: number; // media in-point (s) — used after razor splits
+  inset?: number; // media in-point (s) — used after razor splits and left-trim
+  srcDur?: number; // full source media duration (s) — auto-detected, allows un-trim
   volume?: number; // 0..2, default 1
   muted?: boolean;
   blend?: string;    // "" | "screen" | "multiply"
@@ -689,7 +690,12 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   // when a video/audio's real duration loads, snap the clip length to it (unless already trimmed)
   const onMeta = (id: string, dur: number) => {
     if (!isFinite(dur) || dur <= 0) return;
-    setClips((prev) => prev.map((c) => (c.id === id && c.autoDur ? { ...c, duration: +dur.toFixed(2), autoDur: false } : c)));
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id) return c;
+      const next = { ...c, srcDur: +dur.toFixed(2) }; // full media length — enables un-trimming
+      if (c.autoDur) { next.duration = +dur.toFixed(2); next.autoDur = false; }
+      return next;
+    }));
   };
   // CapCut-style placement: drop at the playhead; if every layer of this type is
   // occupied there, create a new layer — otherwise reuse the first free one.
@@ -834,8 +840,12 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     setLayers((p) => { const n = [...p]; n.splice(Math.max(0, Math.min(index, n.length)), 0, { id, type }); return n; });
     return id;
   };
-  // auto-prune empty layers (keep ≥1 video + ≥1 audio baseline) — never while dragging
+  // auto-prune empty layers (keep ≥1 video + ≥1 audio baseline) — never while dragging.
+  // The first (mount) run is skipped: it closes over the pre-restore empty clips
+  // and would prune freshly restored/imported layers, piling clips onto one track.
+  const pruneReadyRef = useRef(false);
   useEffect(() => {
+    if (!pruneReadyRef.current) { pruneReadyRef.current = true; return; }
     if (dragRef.current) return;
     setLayers((prev) => {
       const used = new Set(clips.map((c) => c.layer));
@@ -968,14 +978,14 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     finally { setExporting(false); }
   }, [exporting, clips, layers, res, previewSize, stop]);
 
-  const dragRef = useRef<{ id: string; mode: "move" | "trim"; startX: number; origDur: number; type: LayerType; moveIds: string[]; origStarts: Map<string, number> } | null>(null);
+  const dragRef = useRef<{ id: string; mode: "move" | "trim" | "trimL"; startX: number; origDur: number; origStart: number; origInset: number; type: LayerType; moveIds: string[]; origStarts: Map<string, number> } | null>(null);
   const hitTest = (clientY: number, type: LayerType): { type: "lane" | "strip"; id: string } | null => {
     for (const [id, el] of stripRefs.current) { const r = el.getBoundingClientRect(); if (clientY >= r.top - 3 && clientY <= r.bottom + 3) return { type: "strip", id }; }
     for (const [id, el] of laneRefs.current) { const r = el.getBoundingClientRect(); if (clientY >= r.top && clientY <= r.bottom) { const lane = layers.find((l) => l.id === id); return lane && lane.type === type ? { type: "lane", id } : null; } }
     return null;
   };
   const isLocked = (c: EditClip) => !!layersRef.current.find((l) => l.id === c.layer)?.locked;
-  const onClipPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim") => {
+  const onClipPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim" | "trimL") => {
     e.stopPropagation();
     if (isLocked(c)) return; (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
@@ -983,14 +993,31 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     setSelectedIds(ids);
     const moveIds = mode === "move" ? (ids.length ? ids : [c.id]) : [c.id];
     const origStarts = new Map(moveIds.map((id) => [id, clipsRef.current.find((x) => x.id === id)?.start ?? 0]));
-    dragRef.current = { id: c.id, mode, startX: e.clientX, origDur: c.duration, type: layerType(c), moveIds, origStarts };
+    dragRef.current = { id: c.id, mode, startX: e.clientX, origDur: c.duration, origStart: c.start, origInset: c.inset || 0, type: layerType(c), moveIds, origStarts };
   };
   const onClipPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current; if (!d) return; const dx = (e.clientX - d.startX) / pxPerSec;
     if (d.mode === "move") {
       setClips((prev) => prev.map((x) => (d.moveIds.includes(x.id) ? { ...x, start: Math.max(0, +((d.origStarts.get(x.id) ?? x.start) + dx).toFixed(2)) } : x)));
       setDropHint(d.moveIds.length > 1 ? null : hitTest(e.clientY, d.type)); // layer change only for a single clip
-    } else update(d.id, { duration: Math.max(MIN_DUR, +(d.origDur + dx).toFixed(2)) });
+    } else if (d.mode === "trim") {
+      const c = clipsRef.current.find((x) => x.id === d.id);
+      const isMedia = c && (c.kind === "video" || c.kind === "audio");
+      const maxDur = isMedia && c?.srcDur ? Math.max(MIN_DUR, c.srcDur - (c.inset || 0)) : Infinity; // drag right again to restore up to the source length
+      update(d.id, { duration: Math.max(MIN_DUR, Math.min(maxDur, +(d.origDur + dx).toFixed(2))) });
+    } else if (d.mode === "trimL") {
+      const c = clipsRef.current.find((x) => x.id === d.id);
+      const isMedia = c && (c.kind === "video" || c.kind === "audio");
+      // left edge: dragging right trims; dragging left restores hidden head (down to inset 0)
+      const minDx = Math.max(isMedia ? -d.origInset : -Infinity, -d.origStart);
+      const maxDx = d.origDur - MIN_DUR;
+      const ddx = Math.max(minDx, Math.min(maxDx, dx));
+      update(d.id, {
+        start: +(d.origStart + ddx).toFixed(2),
+        duration: +(d.origDur - ddx).toFixed(2),
+        ...(isMedia ? { inset: +(d.origInset + ddx).toFixed(3) } : {}),
+      });
+    }
   };
   const onClipPointerUp = () => {
     const d = dragRef.current; dragRef.current = null;
@@ -1749,15 +1776,21 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                           </span>
                         )}
                         {c.kind === "audio" && c.url && (() => {
-                          const peaks = wavePeaksCache.get(c.url);
-                          if (peaks === undefined) requestWave(c.url);
-                          if (!peaks) return null;
+                          const all = wavePeaksCache.get(c.url);
+                          if (all === undefined) requestWave(c.url);
+                          if (!all) return null;
+                          // show only the audible slice — trimming must cut the wave, not squeeze it
+                          const sd = c.srcDur && c.srcDur > 0 ? c.srcDur : (c.inset || 0) + c.duration;
+                          const i0 = Math.max(0, Math.floor(((c.inset || 0) / sd) * all.length));
+                          const i1 = Math.min(all.length, Math.max(i0 + 2, Math.ceil((((c.inset || 0) + c.duration) / sd) * all.length)));
+                          const peaks = all.slice(i0, i1);
                           const w = Math.max(24, c.duration * pxPerSec), h = laneH - 12;
                           const pts = peaks.map((v, i) => `${(i / (peaks.length - 1)) * w},${h / 2 - v * (h / 2 - 2)}`).join(" ");
                           const pts2 = peaks.map((v, i) => `${(i / (peaks.length - 1)) * w},${h / 2 + v * (h / 2 - 2)}`).reverse().join(" ");
                           return <svg className="absolute inset-0 pointer-events-none" width={w} height={h} preserveAspectRatio="none"><polygon points={`${pts} ${pts2}`} fill="rgba(110,231,183,0.45)" /></svg>;
                         })()}
                         <span className={`px-2 truncate leading-9 relative z-[1] ${c.kind === "video" ? "bg-black/40 rounded" : ""}`}>{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
+                        <span onPointerDown={(e) => onClipPointerDown(e, c, "trimL")} className="absolute left-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-l z-[2]" />
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r z-[2]" />
                       </div>
                     ))}

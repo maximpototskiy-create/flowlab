@@ -51,8 +51,8 @@ function CanvasNodeImpl({
   onUploadFile,
   workflowMeta,
   composerTracks,
-  onOpenInEditor,
-  onOpenEditorOnly,
+  editorHref,
+  onStashTracks,
 }: {
   node: GraphNode;
   edges: GraphEdge[];
@@ -76,10 +76,10 @@ function CanvasNodeImpl({
   workflowMeta: { brandId: string | null; brandSlug?: string | null; projectId: string; workflowId: string };
   /** Composer node only: ordered upstream tracks resolved by Canvas */
   composerTracks?: { kind: string; value: string; label: string }[];
-  /** Composer node only: stash tracks + open /editor */
-  onOpenInEditor?: () => void;
-  /** Composer node only: open this workflow's editor without replacing its timeline */
-  onOpenEditorOnly?: () => void;
+  /** Composer node only: href of this workflow's editor */
+  editorHref?: string;
+  /** Composer node only: stash the connected tracks right before navigation */
+  onStashTracks?: () => void;
 }) {
   const def = NODE_TYPES[node.type];
   if (!def) return null;
@@ -421,14 +421,20 @@ function CanvasNodeImpl({
               </div>
             ))}
             {(composerTracks?.length ?? 0) > 8 && <div className="text-fg-subtle">…and {(composerTracks?.length ?? 0) - 8} more</div>}
-            <button onClick={onOpenInEditor} disabled={(composerTracks?.length ?? 0) === 0}
-              className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-40">
-              Send tracks → editor{(composerTracks?.length ?? 0) > 0 ? ` (${composerTracks!.length})` : ""}
-            </button>
-            <button onClick={() => { if (onOpenEditorOnly) onOpenEditorOnly(); }}
+            {(composerTracks?.length ?? 0) > 0 ? (
+              <a href={editorHref} target="_blank" rel="noreferrer" onClick={onStashTracks}
+                className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium hover:opacity-90">
+                Send tracks → editor ({composerTracks!.length})
+              </a>
+            ) : (
+              <span className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-brand/40 text-white/60 text-[11px] font-medium cursor-not-allowed">
+                Send tracks → editor
+              </span>
+            )}
+            <a href={editorHref} target="_blank" rel="noreferrer"
               className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]">
               Open editor (keep current timeline)
-            </button>
+            </a>
           </div>
         )}
 
