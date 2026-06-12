@@ -69,6 +69,55 @@ const EMOJI_DICT: [RegExp, string][] = [
   [/\b(download|install|app)\b/i, "⬇️"], [/\b(link)\b/i, "🔗"], [/\b(now|today)\b/i, "👇"],
 ];
 function emojiFor(text: string): string | null { for (const [re, e] of EMOJI_DICT) if (re.test(text)) return e; return null; }
+
+// ---- timeline thumbnails: video filmstrips + audio waveforms (cached per URL) ----
+const filmstripCache = new Map<string, string | null>();
+const filmstripPending = new Set<string>();
+async function makeFilmstrip(url: string): Promise<string | null> {
+  if (filmstripCache.has(url)) return filmstripCache.get(url) ?? null;
+  if (filmstripPending.has(url)) return null;
+  filmstripPending.add(url);
+  try {
+    const v = document.createElement("video");
+    v.crossOrigin = "anonymous"; v.muted = true; v.preload = "auto"; v.src = url;
+    await new Promise<void>((res, rej) => { v.onloadedmetadata = () => res(); v.onerror = () => rej(new Error("load")); });
+    const frames = 6, fh = 48, fw = Math.max(24, Math.round(fh * (v.videoWidth / Math.max(1, v.videoHeight))));
+    const cv = document.createElement("canvas"); cv.width = fw * frames; cv.height = fh;
+    const ctx = cv.getContext("2d"); if (!ctx) throw new Error("ctx");
+    for (let i = 0; i < frames; i++) {
+      const t = (v.duration || 1) * ((i + 0.5) / frames);
+      await new Promise<void>((res) => { const on = () => { v.removeEventListener("seeked", on); res(); }; v.addEventListener("seeked", on); try { v.currentTime = Math.min(t, Math.max(0, (v.duration || 1) - 0.05)); } catch { res(); } });
+      ctx.drawImage(v, i * fw, 0, fw, fh);
+    }
+    const data = cv.toDataURL("image/jpeg", 0.6);
+    filmstripCache.set(url, data);
+    return data;
+  } catch { filmstripCache.set(url, null); return null; }
+  finally { filmstripPending.delete(url); }
+}
+const wavePeaksCache = new Map<string, number[] | null>();
+const wavePending = new Set<string>();
+async function makeWavePeaks(url: string, buckets = 220): Promise<number[] | null> {
+  if (wavePeaksCache.has(url)) return wavePeaksCache.get(url) ?? null;
+  if (wavePending.has(url)) return null;
+  wavePending.add(url);
+  try {
+    const ab = await fetch(url, { mode: "cors" }).then((r) => r.arrayBuffer());
+    type ACtor = new () => AudioContext;
+    const Ctx: ACtor = (window.AudioContext || (window as unknown as { webkitAudioContext: ACtor }).webkitAudioContext);
+    const ac = new Ctx();
+    const buf = await ac.decodeAudioData(ab);
+    const ch = buf.getChannelData(0);
+    const per = Math.max(1, Math.floor(ch.length / buckets));
+    const peaks: number[] = [];
+    for (let i = 0; i < buckets; i++) { let m = 0; const o = i * per; for (let j = 0; j < per; j += 50) { const v = Math.abs(ch[o + j] || 0); if (v > m) m = v; } peaks.push(m); }
+    ac.close().catch(() => {});
+    wavePeaksCache.set(url, peaks);
+    return peaks;
+  } catch { wavePeaksCache.set(url, null); return null; }
+  finally { wavePending.delete(url); }
+}
+
 const CAP_PRESETS: { key: string; label: string; style: TextStyle }[] = [
   { key: "plain", label: "Plain", style: { color: "#fff", shadow: true, plate: "none", enter: "", weight: 800 } },
   { key: "stroke", label: "Stroke", style: { color: "#fff", stroke: "#000", strokeW: 0.11, shadow: false, plate: "none", upper: true, weight: 900, enter: "scale" } },
@@ -192,7 +241,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [binSource, setBinSource] = useState("");
   const [binCategory, setBinCategory] = useState("all");
   const [binSub, setBinSub] = useState("all");
-  const [binSort, setBinSort] = useState<"newest" | "name" | "kind">("newest");
+  const [binSort, setBinSort] = useState<"newest" | "oldest" | "az" | "za" | "kind" | "duration">("newest");
+  const [brandQ, setBrandQ] = useState("");
   const [brands, setBrands] = useState<{ value: string; label: string }[]>([]);
   const [projects, setProjects] = useState<{ value: string; label: string }[]>([]);
   const [binLoading, setBinLoading] = useState(false);
@@ -231,6 +281,12 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [subEmoji, setSubEmoji] = useState(false);
   const [savedPresets, setSavedPresets] = useState<{ name: string; style: TextStyle }[]>([]);
   const [capRects, setCapRects] = useState<{ id: string; x: number; y: number; w: number; h: number }[]>([]);
+  const [thumbTick, setThumbTick] = useState(0); // bumps when a filmstrip/waveform finishes
+  const [dims, setDims] = useState<Record<string, string>>({}); // url → "1080×1920" (auto-detected)
+  const noteDims = (url: string, w: number, h: number) => { if (w && h) setDims((p) => (p[url] ? p : { ...p, [url]: `${w}×${h}` })); };
+  const requestFilmstrip = (url: string) => { if (!filmstripCache.has(url) && !filmstripPending.has(url)) makeFilmstrip(url).then(() => setThumbTick((v) => v + 1)); };
+  const requestWave = (url: string) => { if (!wavePeaksCache.has(url) && !wavePending.has(url)) makeWavePeaks(url).then(() => setThumbTick((v) => v + 1)); };
+  void thumbTick;
   const [subBusy, setSubBusy] = useState(false);
   const [subStatus, setSubStatus] = useState("");
   const [capPreset, setCapPreset] = useState("highlight");
@@ -260,10 +316,20 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   selectedRef.current = selectedIds;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
-  const sortBin = (arr: EditorAsset[]) => binSort === "newest" ? arr : [...arr].sort((a, b) => binSort === "name" ? a.label.localeCompare(b.label) : a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label));
+  const sortBin = (arr: EditorAsset[]) => {
+    if (binSort === "newest") return arr;
+    if (binSort === "oldest") return [...arr].reverse();
+    return [...arr].sort((a, b) =>
+      binSort === "az" ? a.label.localeCompare(b.label)
+      : binSort === "za" ? b.label.localeCompare(a.label)
+      : binSort === "duration" ? (b.duration ?? 0) - (a.duration ?? 0)
+      : a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label));
+  };
   const extOf = (url: string) => { const m = url.split("?")[0].match(/\.([a-z0-9]{2,4})$/i); return m ? m[1].toUpperCase() : ""; };
   const mediaBin = sortBin(library.filter((a) => binFilter === "all" || a.kind === binFilter));
+  const brandQl = brandQ.trim().toLowerCase();
   const brandBin = sortBin(brandLib.filter((a) =>
+    (!brandQl || a.label.toLowerCase().includes(brandQl) || (a.subpath || "").toLowerCase().includes(brandQl)) &&
     (binFilter === "all" || a.kind === binFilter) &&
     (binCategory === "all" || a.category === binCategory) &&
     (binSub === "all" || (a.subpath || "").split("/")[0] === binSub)));
@@ -441,8 +507,16 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const addAssetAt = (a: { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null }, layerId?: string, start?: number) => {
     const known = a.duration != null && a.duration > 0;
     const duration = known ? (a.duration as number) : DEFAULTS[a.kind];
-    const at = Math.max(0, start ?? +playheadRef.current.toFixed(2));
-    const layer = layerId ?? layerWithRoom(clipLayerType(a.kind), at, duration);
+    let layer: string, at: number;
+    if (layerId != null) { layer = layerId; at = Math.max(0, start ?? +playheadRef.current.toFixed(2)); }
+    else if (a.kind === "video") {
+      // videos build one continuous track by default — appended back-to-back on the first video layer
+      layer = layers.find((l) => l.type === "video")?.id ?? createLayerForType("video");
+      at = Math.max(0, ...clipsRef.current.filter((c) => c.layer === layer).map((c) => c.start + c.duration), 0);
+    } else {
+      at = Math.max(0, start ?? +playheadRef.current.toFixed(2));
+      layer = layerWithRoom(clipLayerType(a.kind), at, duration);
+    }
     setClips((p) => [...p, base(a.kind, layer, a.url, a.label, at, duration, known ? {} : { autoDur: true })]);
   };
   // when a video/audio's real duration loads, snap the clip length to it (unless already trimmed)
@@ -934,14 +1008,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               className="group relative w-full aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
               {a.kind === "image" ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
+                <img src={a.url} alt="" onLoad={(e) => noteDims(a.url, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
               ) : a.kind === "video" ? (
-                <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
+                <video src={a.url} muted playsInline preload="metadata" onLoadedMetadata={(e) => noteDims(a.url, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} className="absolute inset-0 w-full h-full object-cover" />
               ) : (<div className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} /></div>)}
               <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
               {extOf(a.url) && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[8px] text-white/70">{extOf(a.url)}</span>}
               {a.subpath && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/80">{a.subpath.split("/")[0]}</span>}
               {a.duration != null && a.duration > 0 && <span className="absolute bottom-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/70">{Math.round(a.duration)}s</span>}
+              {dims[a.url] && <span className="absolute bottom-1 left-1/2 -translate-x-1/2 px-1 rounded bg-black/60 text-[8px] text-white/70 whitespace-nowrap">{dims[a.url]}</span>}
               <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
             </button>
             <div className="mt-0.5 text-[9px] text-fg-subtle truncate" title={a.label}>{a.label}</div>
@@ -985,7 +1060,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       <nav className="w-12 shrink-0 border-r border-border flex flex-col items-center py-2 gap-1 text-fg-subtle">
         {([
           ["media", "Media", <Clapperboard key="i" size={16} />],
-          ["brand", "Brand", <Folder key="i" size={16} />],
+          ["brand", "Assets", <Folder key="i" size={16} />],
           ["audio", "Audio", <Music key="i" size={16} />],
           ["text", "Text", <Type key="i" size={16} />],
           ["subs", "Captions", <Subtitles key="i" size={16} />],
@@ -1006,7 +1081,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       )}
       <aside style={{ width: leftW, display: leftW === 0 ? "none" : undefined }} className="relative shrink-0 border-r border-border flex flex-col min-h-0">
         <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 text-[12px] font-medium text-fg">
-          {railTab === "media" ? "Media" : railTab === "brand" ? "Brand kit" : railTab === "audio" ? "Audio" : railTab === "text" ? "Text" : railTab === "subs" ? "Captions" : railTab === "effects" ? "Effects" : "Filters"}
+          {railTab === "media" ? "Media" : railTab === "brand" ? "Brand assets" : railTab === "audio" ? "Audio" : railTab === "text" ? "Text" : railTab === "subs" ? "Captions" : railTab === "effects" ? "Effects" : "Filters"}
           <button onClick={() => setLeftW(0)} title="Hide panel" className="text-fg-subtle hover:text-fg">‹</button>
         </div>
         <div onPointerDown={dragPanel("left")} className="absolute top-0 -right-1 w-2 h-full cursor-col-resize z-20" title="Drag to resize" />
@@ -1037,7 +1112,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
               ))}
               <select value={binSort} onChange={(e) => setBinSort(e.target.value as typeof binSort)} className="ml-auto bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
-                <option value="newest">Newest</option><option value="name">Name</option><option value="kind">Type</option>
+                <option value="newest">Newest</option><option value="oldest">Oldest</option><option value="az">Name A–Z</option><option value="za">Name Z–A</option><option value="kind">Type</option><option value="duration">Duration</option>
               </select>
             </div>
           </div>
@@ -1057,6 +1132,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               </button>
             </div>
             {syncMsg && <div className="text-[10px] text-fg-subtle">{syncMsg}</div>}
+            <input value={brandQ} onChange={(e) => setBrandQ(e.target.value)} placeholder="Search brand assets…" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
             {libCats.length > 0 && (
               <div className="flex items-center gap-1 flex-wrap text-[10px]">
                 <button onClick={() => { setBinCategory("all"); setBinSub("all"); }} className={`px-2 py-0.5 rounded ${binCategory === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
@@ -1079,7 +1155,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
               ))}
               <select value={binSort} onChange={(e) => setBinSort(e.target.value as typeof binSort)} className="ml-auto bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
-                <option value="newest">Newest</option><option value="name">Name</option><option value="kind">Type</option>
+                <option value="newest">Newest</option><option value="oldest">Oldest</option><option value="az">Name A–Z</option><option value="za">Name Z–A</option><option value="kind">Type</option><option value="duration">Duration</option>
               </select>
             </div>
           </div>
@@ -1194,7 +1270,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 </label>
                 <label className="text-fg-muted">Animation
                   <select value={capStyle.enter || ""} onChange={(e) => applyStyle({ ...capStyle, enter: e.target.value as TextStyle["enter"] })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
-                    <option value="">None</option><option value="scale">Scale</option><option value="bounce">Bounce</option><option value="fade">Fade</option><option value="typewriter">Typewriter</option>
+                    <option value="">None</option><option value="scale">Scale</option><option value="bounce">Bounce</option><option value="fade">Fade</option><option value="slideUp">Slide up</option><option value="slideDown">Slide down</option><option value="typewriter">Typewriter</option>
                   </select>
                 </label>
                 <label className="text-fg-muted col-span-2">Size
@@ -1360,9 +1436,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           <button onClick={() => removeMany(selectedIds)} disabled={!selectedIds.length} title="Delete selected" className="hover:text-red-400 disabled:opacity-30"><Trash2 size={13} /></button>
           <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={() => setPxPerSec((z) => Math.max(10, Math.round(z * 0.8)))} className="hover:text-fg" title="Zoom out (Cmd/Ctrl+wheel)"><ZoomOut size={13} /></button>
+            <button onClick={() => setPxPerSec((z) => Math.max(2, Math.round(z * 0.8)))} className="hover:text-fg" title="Zoom out (Cmd/Ctrl+wheel)"><ZoomOut size={13} /></button>
             <button onClick={() => setPxPerSec((z) => Math.min(400, Math.round(z * 1.25)))} className="hover:text-fg" title="Zoom in (Cmd/Ctrl+wheel)"><ZoomIn size={13} /></button>
             <input type="range" min={28} max={96} step={2} value={laneH} onChange={(e) => setLaneH(Number(e.target.value))} title="Track height (Alt+wheel)" className="w-14" />
+            <button onClick={() => { const w = (typeof window !== "undefined" ? window.innerWidth : 1200) - leftW - rightW - 200; setPxPerSec(Math.min(400, Math.max(2, Math.floor(w / Math.max(1, totalDur))))); }} title="Fit timeline to window" className="px-1.5 py-0.5 rounded border border-border text-fg-muted hover:text-fg text-[10px]">Fit</button>
           </div>
           {status && <span className="text-fg-subtle truncate max-w-[35%]">· {status}</span>}
         </div>
@@ -1377,16 +1454,25 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         <div className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
           onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}
           onWheel={(e) => {
-            if (e.metaKey || e.ctrlKey) { e.preventDefault(); setPxPerSec((z) => Math.min(400, Math.max(10, Math.round(z * (e.deltaY < 0 ? 1.12 : 0.89))))); }
+            if (e.metaKey || e.ctrlKey) { e.preventDefault(); setPxPerSec((z) => Math.min(400, Math.max(2, Math.round(z * (e.deltaY < 0 ? 1.12 : 0.89))))); }
             else if (e.altKey) { e.preventDefault(); setLaneH((h) => Math.min(96, Math.max(28, h + (e.deltaY < 0 ? 4 : -4)))); }
           }}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
               <div className="w-28 shrink-0 border-r border-border/40" />
               <div className="relative flex-1 h-6 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
-                {Array.from({ length: Math.ceil(totalDur) + 1 }).map((_, s) => (
-                  <div key={s} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pointer-events-none" style={{ left: s * pxPerSec }}>{s}s</div>
-                ))}
+                {(() => {
+                  const steps = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
+                  const step = steps.find((st) => st * pxPerSec >= 56) ?? 600;
+                  const fmtTick = (sec: number) => sec >= 60 ? `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}` : `${+sec.toFixed(2)}s`;
+                  const n = Math.ceil(totalDur / step) + 1;
+                  return Array.from({ length: n }).map((_, i) => {
+                    const sec = i * step;
+                    return (
+                      <div key={i} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pointer-events-none" style={{ left: sec * pxPerSec }}>{fmtTick(sec)}</div>
+                    );
+                  });
+                })()}
                 <div className="absolute top-0 bottom-0 w-0.5 bg-brand pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
               </div>
             </div>
@@ -1403,6 +1489,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 </div>
                 <div className="flex items-stretch border-b border-border/40 min-h-[48px]">
                   <div data-label onClick={() => setSelectedLayer(layer.id)} onDoubleClick={() => setRenamingLayer(layer.id)}
+                    style={{ boxShadow: `inset 3px 0 0 ${layer.type === "video" ? "#38bdf8" : layer.type === "image" ? "#a78bfa" : layer.type === "text" ? "#f59e0b" : layer.type === "effect" ? "#c084fc" : "#34d399"}` }}
                     className={`w-28 shrink-0 flex items-center gap-1 px-1.5 text-[9px] uppercase tracking-wider border-r border-border/40 cursor-pointer ${selectedLayer === layer.id ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>
                     {renamingLayer === layer.id ? (
                       <input autoFocus defaultValue={labelFor(layer)} onClick={(e) => e.stopPropagation()}
@@ -1435,17 +1522,34 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                           selectedIds.includes(c.id) ? "border-brand bg-brand/20 text-brand z-10"
                           : c.kind === "fx" ? "border-purple-500/50 bg-purple-500/15 text-purple-300"
                           : c.kind === "adjust" ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
-                          : "border-border bg-bg-card text-fg-muted"}`}>
-                        {(c.kind === "video" || c.kind === "image") && c.url && (
+                          : c.kind === "text" ? "border-amber-500/50 bg-amber-500/15 text-amber-200"
+                          : c.kind === "audio" ? "border-emerald-500/50 bg-emerald-600/20 text-emerald-200"
+                          : c.kind === "image" ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
+                          : "border-sky-500/50 bg-sky-500/15 text-sky-200"}`}>
+                        {c.kind === "video" && c.url && (() => {
+                          const fs = filmstripCache.get(c.url);
+                          if (fs === undefined) requestFilmstrip(c.url);
+                          return fs
+                            ? <span className="absolute inset-0 pointer-events-none opacity-80" style={{ backgroundImage: `url(${fs})`, backgroundSize: "auto 100%", backgroundRepeat: "repeat-x" }} />
+                            : <span className="h-full w-8 shrink-0 overflow-hidden border-r border-black/40 bg-black"><video src={c.url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" /></span>;
+                        })()}
+                        {c.kind === "image" && c.url && (
                           <span className="h-full w-8 shrink-0 overflow-hidden border-r border-black/40 bg-black">
-                            {c.kind === "image"
-                              // eslint-disable-next-line @next/next/no-img-element
-                              ? <img src={c.url} alt="" draggable={false} className="w-full h-full object-cover pointer-events-none" />
-                              : <video src={c.url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" />}
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={c.url} alt="" draggable={false} className="w-full h-full object-cover pointer-events-none" />
                           </span>
                         )}
-                        <span className="px-2 truncate leading-9">{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
-                        <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r" />
+                        {c.kind === "audio" && c.url && (() => {
+                          const peaks = wavePeaksCache.get(c.url);
+                          if (peaks === undefined) requestWave(c.url);
+                          if (!peaks) return null;
+                          const w = Math.max(24, c.duration * pxPerSec), h = laneH - 12;
+                          const pts = peaks.map((v, i) => `${(i / (peaks.length - 1)) * w},${h / 2 - v * (h / 2 - 2)}`).join(" ");
+                          const pts2 = peaks.map((v, i) => `${(i / (peaks.length - 1)) * w},${h / 2 + v * (h / 2 - 2)}`).reverse().join(" ");
+                          return <svg className="absolute inset-0 pointer-events-none" width={w} height={h} preserveAspectRatio="none"><polygon points={`${pts} ${pts2}`} fill="rgba(110,231,183,0.45)" /></svg>;
+                        })()}
+                        <span className={`px-2 truncate leading-9 relative z-[1] ${c.kind === "video" ? "bg-black/40 rounded" : ""}`}>{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
+                        <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r z-[2]" />
                       </div>
                     ))}
                     {/* transition "+" between adjacent clips (CapCut-style) */}
@@ -1513,7 +1617,18 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <div className="text-fg-muted font-medium">Basic</div>
                 <input value={sel.label} onChange={(e) => update(sel.id, { label: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" placeholder="Name" />
                 {sel.kind === "text" && (<textarea value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} rows={2} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand resize-y" placeholder="Text" />)}
-                {sel.kind === "text" && (<div className="text-[10px] text-fg-subtle">Style & entrance animation: <b>Captions → Caption style</b> (applies to the selected text).</div>)}
+                {sel.kind === "text" && (
+                  <div className="space-y-1">
+                    <div className="text-fg-muted">Entrance animation</div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {([["", "None"], ["fade", "Fade"], ["scale", "Scale"], ["bounce", "Bounce"], ["slideUp", "Slide ↑"], ["slideDown", "Slide ↓"], ["typewriter", "Type"]] as const).map(([v, l]) => (
+                        <button key={v} onClick={() => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), enter: v as TextStyle["enter"] } } : c))); }}
+                          className={`px-1 py-1 rounded border text-[10px] ${(sel.tstyle?.enter || "") === v ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>{l}</button>
+                      ))}
+                    </div>
+                    <div className="text-[10px] text-fg-subtle">Full styling (colors, plates, fonts, presets): <b>Captions → Caption style</b>.</div>
+                  </div>
+                )}
                 {sel.kind === "fx" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{FX.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
                 {sel.kind === "adjust" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{ADJUST.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
               </div>

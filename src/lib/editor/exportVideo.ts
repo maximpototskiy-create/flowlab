@@ -26,7 +26,7 @@ export type TextStyle = {
   radius?: number;                     // plate corner radius as fraction of font size (default 0.22)
   highlight?: string;                  // active-word text color (karaoke)
   pos?: "bottom" | "center" | "top";
-  enter?: "" | "scale" | "bounce" | "fade" | "typewriter";
+  enter?: "" | "scale" | "bounce" | "fade" | "typewriter" | "slideUp" | "slideDown";
   upper?: boolean;                     // uppercase
 };
 export type CapWord = { text: string; t: number; d: number }; // relative to clip start (s)
@@ -133,6 +133,7 @@ function drawFx(ctx: CanvasRenderingContext2D, fx: string | undefined, W: number
   }
 }
 
+function fontPxBase(W: number, st: TextStyle, c: ExportClip, v: { scaleMul: number }) { return Math.max(14, W / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul; }
 function easeOutCubic(p: number) { return 1 - Math.pow(1 - p, 3); }
 function easeOutBack(p: number) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
 
@@ -150,11 +151,13 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
 
   // entrance
-  let alpha = 1, scl = 1, typeChars = Infinity;
+  let alpha = 1, scl = 1, typeChars = Infinity, slideY = 0;
   const ep = Math.min(1, local / 0.28);
   if (st.enter === "fade") alpha = ep;
   else if (st.enter === "scale") scl = 0.6 + 0.4 * easeOutCubic(ep);
   else if (st.enter === "bounce") scl = Math.max(0.01, easeOutBack(ep));
+  else if (st.enter === "slideUp") { alpha = ep; slideY = (1 - easeOutCubic(ep)) * fontPxBase(W, st, c, v) * 1.4; }
+  else if (st.enter === "slideDown") { alpha = ep; slideY = -(1 - easeOutCubic(ep)) * fontPxBase(W, st, c, v) * 1.4; }
   else if (st.enter === "typewriter") { const td = Math.min(0.9, c.duration * 0.6); typeChars = Math.max(1, Math.floor((Math.min(1, local / td)) * text.length)); }
 
   // words (for word plate / karaoke); fall back to splitting evenly
@@ -195,6 +198,7 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha * v.opacity));
   const blockH = n * lineH;
+  ctx.translate(0, slideY);
   ctx.translate(cx, cy - blockH / 2); ctx.scale(scl, scl); ctx.translate(-cx, -(cy - blockH / 2));
 
   const padX = fontPx * 0.28, padY = fontPx * 0.16, rad = fontPx * (st.radius ?? 0.22);
