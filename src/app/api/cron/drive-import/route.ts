@@ -4,7 +4,7 @@
 // library automatically. Protected by CRON_SECRET (or Vercel's cron header).
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { importBrandBatch } from "@/lib/driveImport";
+import { importBrandBatch, embedSkippedBatch } from "@/lib/driveImport";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -33,6 +33,7 @@ export async function GET(req: Request): Promise<NextResponse> {
   for (const b of brands) {
     try {
       const r = await importBrandBatch(b.id, MAX_PER_BRAND);
+      await embedSkippedBatch(b.id, 3).catch(() => {});
       summary.push({
         brand: b.name,
         imported: r.imported ?? 0,

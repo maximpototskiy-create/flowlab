@@ -26,7 +26,7 @@ export type TextStyle = {
   radius?: number;                     // plate corner radius as fraction of font size (default 0.22)
   highlight?: string;                  // active-word text color (karaoke)
   pos?: "bottom" | "center" | "top";
-  enter?: "" | "scale" | "bounce" | "fade" | "typewriter" | "slideUp" | "slideDown";
+  enter?: "" | "scale" | "bounce" | "fade" | "typewriter" | "slideUp" | "slideDown" | "zoomIn" | "spin" | "wipeRight" | "wipeLeft" | "blurIn" | "wordsUp";
   upper?: boolean;                     // uppercase
 };
 export type CapWord = { text: string; t: number; d: number }; // relative to clip start (s)
@@ -151,14 +151,21 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
 
   // entrance
-  let alpha = 1, scl = 1, typeChars = Infinity, slideY = 0;
+  let alpha = 1, scl = 1, typeChars = Infinity, slideY = 0, rot = 0, wipe: "" | "r" | "l" = "", blurPx = 0;
   const ep = Math.min(1, local / 0.28);
+  const eo = easeOutCubic(ep);
   if (st.enter === "fade") alpha = ep;
-  else if (st.enter === "scale") scl = 0.6 + 0.4 * easeOutCubic(ep);
+  else if (st.enter === "scale") scl = 0.6 + 0.4 * eo;
+  else if (st.enter === "zoomIn") { scl = 1.7 - 0.7 * eo; alpha = ep; }
   else if (st.enter === "bounce") scl = Math.max(0.01, easeOutBack(ep));
-  else if (st.enter === "slideUp") { alpha = ep; slideY = (1 - easeOutCubic(ep)) * fontPxBase(W, st, c, v) * 1.4; }
-  else if (st.enter === "slideDown") { alpha = ep; slideY = -(1 - easeOutCubic(ep)) * fontPxBase(W, st, c, v) * 1.4; }
+  else if (st.enter === "spin") { rot = (1 - eo) * 0.6; alpha = ep; scl = 0.7 + 0.3 * eo; }
+  else if (st.enter === "wipeRight") wipe = "r";
+  else if (st.enter === "wipeLeft") wipe = "l";
+  else if (st.enter === "blurIn") { blurPx = (1 - eo) * 10; alpha = Math.max(0.2, ep); }
+  else if (st.enter === "slideUp") { alpha = ep; slideY = (1 - eo) * fontPxBase(W, st, c, v) * 1.4; }
+  else if (st.enter === "slideDown") { alpha = ep; slideY = -(1 - eo) * fontPxBase(W, st, c, v) * 1.4; }
   else if (st.enter === "typewriter") { const td = Math.min(0.9, c.duration * 0.6); typeChars = Math.max(1, Math.floor((Math.min(1, local / td)) * text.length)); }
+  const wordsUp = st.enter === "wordsUp";
 
   // words (for word plate / karaoke); fall back to splitting evenly
   const rawWords = text.split(/\s+/).filter(Boolean);
@@ -199,7 +206,9 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha * v.opacity));
   const blockH = n * lineH;
   ctx.translate(0, slideY);
-  ctx.translate(cx, cy - blockH / 2); ctx.scale(scl, scl); ctx.translate(-cx, -(cy - blockH / 2));
+  ctx.translate(cx, cy - blockH / 2); ctx.scale(scl, scl); if (rot) ctx.rotate(rot); ctx.translate(-cx, -(cy - blockH / 2));
+  if (wipe) { const ww = W * eo; ctx.beginPath(); if (wipe === "r") ctx.rect(0, 0, ww, H); else ctx.rect(W - ww, 0, ww, H); ctx.clip(); }
+  if (blurPx > 0.3) ctx.filter = `blur(${blurPx.toFixed(1)}px)`;
 
   const padX = fontPx * 0.28, padY = fontPx * 0.16, rad = fontPx * (st.radius ?? 0.22);
   const rrect = (x: number, y: number, w: number, h: number, r: number) => { const rr = Math.min(r, h / 2, w / 2); ctx.beginPath(); ctx.moveTo(x + rr, y); ctx.arcTo(x + w, y, x + w, y + h, rr); ctx.arcTo(x + w, y + h, x, y + h, rr); ctx.arcTo(x, y + h, x, y, rr); ctx.arcTo(x, y, x + w, y, rr); ctx.closePath(); };
@@ -223,20 +232,31 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
     }
     for (const wo of ln.words) {
       const isActive = wo.idx === activeIdx;
+      let wAlpha = 1, wDy = 0;
+      if (wordsUp) {
+        const epw = Math.max(0, Math.min(1, (local - wo.idx * 0.07) / 0.22));
+        wAlpha = epw; wDy = (1 - easeOutCubic(epw)) * fontPx * 0.6;
+        if (epw <= 0) { x += wo.width + space; continue; }
+      }
+      const prevAlpha = ctx.globalAlpha;
+      if (wordsUp) ctx.globalAlpha = prevAlpha * wAlpha;
+      const yW = yBottom + wDy;
       if (st.plate === "word" && isActive) {
         ctx.save(); ctx.shadowColor = "transparent";
         ctx.fillStyle = st.plateColor || "#FFD60A";
-        const b = boxFor(wo.w, yBottom, padY * 0.85);
+        const b = boxFor(wo.w, yW, padY * 0.85);
         rrect(x - padX * 0.5, b.top, wo.width + padX, b.h, rad); ctx.fill(); ctx.restore();
       }
       if (st.shadow !== false) { ctx.shadowColor = st.shadowColor || "rgba(0,0,0,0.85)"; ctx.shadowBlur = fontPx * 0.18; ctx.shadowOffsetY = fontPx * 0.05; } else ctx.shadowColor = "transparent";
       const swFrac = st.strokeW ?? 0.08;
-      if (st.stroke && swFrac > 0) { ctx.lineJoin = "round"; ctx.lineWidth = fontPx * swFrac; ctx.strokeStyle = st.stroke; ctx.strokeText(wo.w, x, yBottom); }
+      if (st.stroke && swFrac > 0) { ctx.lineJoin = "round"; ctx.lineWidth = fontPx * swFrac; ctx.strokeStyle = st.stroke; ctx.strokeText(wo.w, x, yW); }
       ctx.fillStyle = isActive && st.highlight ? st.highlight : (st.plate === "word" && isActive ? "#111" : (st.color || "#fff"));
-      ctx.fillText(wo.w, x, yBottom);
+      ctx.fillText(wo.w, x, yW);
+      if (wordsUp) ctx.globalAlpha = prevAlpha;
       x += wo.width + space;
     }
   });
+  ctx.filter = "none";
   ctx.restore();
   // block bounding box (unscaled), used by the editor for hit-testing
   const maxLineW = Math.max(...lines.map((ln) => ln.words.reduce((s, w, i) => s + w.width + (i ? space : 0), 0)), 0);

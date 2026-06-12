@@ -25,7 +25,7 @@ export type ImportResult = {
   remaining?: number;
 };
 
-export async function importBrandBatch(brandId: string, maxPerRun: number): Promise<ImportResult> {
+export async function importBrandBatch(brandId: string, maxPerRun: number, opts: { skipHeavyEmbeds?: boolean } = {}) {
   const brand = await prisma.brand.findUnique({ where: { id: brandId } });
   if (!brand) return { ok: false, error: "brand not found" };
 
@@ -120,6 +120,10 @@ export async function importBrandBatch(brandId: string, maxPerRun: number): Prom
           await insertEmbedding({ assetId: asset.id, brandId, modality: "image", category: f.category, url: cdnUrl, embedding: vec });
           await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedStatus: "ready" } });
           embeddedImages++;
+        } else if (opts.skipHeavyEmbeds) {
+          // fast manual sync: defer the heavy video/audio embedding to the nightly cron
+          await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedStatus: "skipped" } });
+          videos++;
         } else if (kind === "video") {
           const { taskId } = await embedVideoSmart(cdnUrl, `brands/${brandId}/padded/${asset.id}.mp4`);
           await prisma.brandAsset.update({ where: { id: asset.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
@@ -153,4 +157,28 @@ export async function importBrandBatch(brandId: string, maxPerRun: number): Prom
     embedErrors,
     remaining: Math.max(0, fresh.length - batch.length),
   };
+}
+
+
+// Kick off embeds for assets imported in fast mode (embedStatus "skipped").
+export async function embedSkippedBatch(brandId: string, max: number): Promise<number> {
+  const rows = await prisma.brandAsset.findMany({
+    where: { brandId, embedStatus: "skipped", kind: { in: ["video", "audio"] } },
+    take: max,
+    orderBy: { createdAt: "asc" },
+    select: { id: true, url: true, kind: true },
+  });
+  let started = 0;
+  for (const a of rows) {
+    try {
+      const { taskId } = a.kind === "video"
+        ? await embedVideoSmart(a.url, `brands/${brandId}/padded/${a.id}.mp4`)
+        : await embedAudio(a.url);
+      await prisma.brandAsset.update({ where: { id: a.id }, data: { embedTaskId: taskId, embedStatus: "processing" } });
+      started++;
+    } catch (err) {
+      await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "failed", embedError: String(err instanceof Error ? err.message : err).slice(0, 500) } }).catch(() => {});
+    }
+  }
+  return started;
 }

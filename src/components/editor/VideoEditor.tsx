@@ -44,6 +44,10 @@ const CAP_FONTS: { label: string; value: string }[] = [
   { label: "Mono", value: "ui-monospace, \"Courier New\", monospace" },
   { label: "Comic", value: "\"Comic Sans MS\", cursive" },
 ];
+// demo backdrop for effect/filter previews (inline SVG — no network)
+const DEMO_BG = "url('data:image/svg+xml;utf8," + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2b5876"/><stop offset="1" stop-color="#4e4376"/></linearGradient></defs><rect width="160" height="90" fill="url(#g)"/><circle cx="118" cy="26" r="14" fill="#f6d365"/><path d="M0 70 L40 42 L75 64 L110 38 L160 60 L160 90 L0 90 Z" fill="#1f2d3d"/><path d="M0 78 L50 56 L95 74 L140 52 L160 62 L160 90 L0 90 Z" fill="#16202c"/></svg>`
+) + "')";
 const CAP_FONTS_CSS = "https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800;900&family=Inter:wght@400;600;700;800;900&family=Poppins:wght@400;600;700;800;900&family=Bebas+Neue&family=Anton&family=Archivo+Black&family=Oswald:wght@400;600;700&family=Roboto+Condensed:wght@400;700&display=swap";
 // keyword → emoji for auto-emoji captions
 const EMOJI_DICT: [RegExp, string][] = [
@@ -412,8 +416,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     setSyncBusy(true); setSyncMsg("Checking Drive…");
     try {
       let total = 0;
-      for (let i = 0; i < 30; i++) {
-        const r = await fetch("/api/drive/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandId: binBrand }) });
+      for (let i = 0; i < 60; i++) {
+        const ctl = new AbortController();
+        const tmo = setTimeout(() => ctl.abort(), 120000); // a batch should never take 2 min — bail and surface it
+        const r = await fetch("/api/drive/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandId: binBrand }), signal: ctl.signal }).finally(() => clearTimeout(tmo));
         const j = (await r.json()) as { ok?: boolean; imported?: number; remaining?: number; newFound?: number; error?: string };
         if (!r.ok || j.error) { setSyncMsg(`Sync failed: ${j.error || r.status}`); setSyncBusy(false); return; }
         total += j.imported || 0;
@@ -421,10 +427,40 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         setSyncMsg(`Imported ${total}… ${j.remaining} left`);
       }
       await loadBrand();
-    } catch (e) { setSyncMsg(`Sync failed: ${e instanceof Error ? e.message : "error"}`); }
+    } catch (e) { setSyncMsg(e instanceof DOMException && e.name === "AbortError" ? "Batch timed out — press Sync Drive again to continue (progress is saved)." : `Sync failed: ${e instanceof Error ? e.message : "error"}`); }
     setSyncBusy(false);
   };
   useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // ---- project persistence (localStorage): restore on open, autosave on change ----
+  const PROJECT_KEY = "flowlab.editor.project.v1";
+  const restoredRef = useRef(false);
+  const [saveState, setSaveState] = useState<"" | "saved" | "saving">("");
+  useEffect(() => {
+    if (restoredRef.current) return; restoredRef.current = true;
+    try {
+      const raw = localStorage.getItem(PROJECT_KEY); if (!raw) return;
+      const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string };
+      if (Array.isArray(j.clips) && j.clips.length && Array.isArray(j.layers) && j.layers.length) {
+        setClips(j.clips); setLayers(j.layers);
+        if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
+      }
+    } catch { /* ignore corrupt saves */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const saveProject = useCallback(() => {
+    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
+  }, [resKey]);
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    setSaveState("saving");
+    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
+    return () => clearTimeout(t);
+  }, [clips, layers, resKey]);
+  const newProject = () => {
+    if (!window.confirm("Start a new project? The current timeline will be cleared (last autosave is overwritten).")) return;
+    setClips([]); setSelectedIds([]); setLayers([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]); seek(0);
+    try { localStorage.removeItem(PROJECT_KEY); } catch { /* */ }
+  };
   // load caption webfonts + saved presets; redraw once fonts are ready
   const [fontsTick, setFontsTick] = useState(0);
   useEffect(() => {
@@ -1172,9 +1208,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <div className="text-[10px] text-fg-subtle px-1 pb-2">Overlay effect — added as a clip on a new top layer.</div>
             <div className="grid grid-cols-2 gap-2">
               {FX.map((f) => (
-                <button key={f.v} onClick={() => addFx(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center group">
+                <button key={f.v} onClick={() => addFx(f.v)} style={{ backgroundImage: DEMO_BG, backgroundSize: "cover" }} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center group">
                   <div className="absolute inset-0" style={fxStyle(f.v)} />
-                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Sparkles size={11} /> {f.l}</span>
+                  <span className="relative z-10 mb-1 px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-white font-medium inline-flex items-center gap-1"><Sparkles size={11} /> {f.l}</span>
                 </button>
               ))}
             </div>
@@ -1186,9 +1222,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             <div className="text-[10px] text-fg-subtle px-1 pb-2">Filter — added as a clip; affects only layers below it.</div>
             <div className="grid grid-cols-2 gap-2">
               {ADJUST.map((f) => (
-                <button key={f.v} onClick={() => addAdjust(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-gradient-to-br from-bg-card to-bg-card/40 flex items-end justify-center">
-                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-400/30 via-fuchsia-400/20 to-amber-300/30" style={{ filter: f.v }} />
-                  <span className="relative z-10 text-[10px] text-white font-medium pb-1 inline-flex items-center gap-1"><Wand2 size={11} /> {f.l}</span>
+                <button key={f.v} onClick={() => addAdjust(f.v)} className="relative aspect-video rounded-md overflow-hidden border border-border hover:border-brand bg-black flex items-end justify-center">
+                  <div className="absolute inset-0" style={{ backgroundImage: DEMO_BG, backgroundSize: "cover", filter: f.v }} />
+                  <span className="relative z-10 mb-1 px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-white font-medium inline-flex items-center gap-1"><Wand2 size={11} /> {f.l}</span>
                 </button>
               ))}
             </div>
@@ -1270,7 +1306,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 </label>
                 <label className="text-fg-muted">Animation
                   <select value={capStyle.enter || ""} onChange={(e) => applyStyle({ ...capStyle, enter: e.target.value as TextStyle["enter"] })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
-                    <option value="">None</option><option value="scale">Scale</option><option value="bounce">Bounce</option><option value="fade">Fade</option><option value="slideUp">Slide up</option><option value="slideDown">Slide down</option><option value="typewriter">Typewriter</option>
+                    <option value="">None</option><option value="fade">Fade</option><option value="scale">Scale</option><option value="zoomIn">Zoom in</option><option value="bounce">Bounce</option><option value="spin">Spin</option><option value="slideUp">Slide up</option><option value="slideDown">Slide down</option><option value="wipeRight">Wipe right</option><option value="wipeLeft">Wipe left</option><option value="blurIn">Blur in</option><option value="wordsUp">Words up</option><option value="typewriter">Typewriter</option>
                   </select>
                 </label>
                 <label className="text-fg-muted col-span-2">Size
@@ -1340,6 +1376,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 gap-2">
           <div className="flex items-center gap-2 text-fg text-[13px] font-medium"><Clapperboard size={14} className="text-brand" /> Editor</div>
           <div className="flex items-center gap-2">
+            <span className="text-[10px] text-fg-subtle w-12 text-right">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : ""}</span>
+            <button onClick={saveProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">Save</button>
+            <button onClick={newProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">New</button>
             <select value={resKey} onChange={(e) => setResKey(e.target.value)} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
               {RESOLUTIONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
@@ -1621,7 +1660,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                   <div className="space-y-1">
                     <div className="text-fg-muted">Entrance animation</div>
                     <div className="grid grid-cols-4 gap-1">
-                      {([["", "None"], ["fade", "Fade"], ["scale", "Scale"], ["bounce", "Bounce"], ["slideUp", "Slide ↑"], ["slideDown", "Slide ↓"], ["typewriter", "Type"]] as const).map(([v, l]) => (
+                      {([["", "None"], ["fade", "Fade"], ["scale", "Scale"], ["zoomIn", "Zoom in"], ["bounce", "Bounce"], ["spin", "Spin"], ["slideUp", "Slide ↑"], ["slideDown", "Slide ↓"], ["wipeRight", "Wipe →"], ["wipeLeft", "Wipe ←"], ["blurIn", "Blur"], ["wordsUp", "Words up"], ["typewriter", "Type"]] as const).map(([v, l]) => (
                         <button key={v} onClick={() => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), enter: v as TextStyle["enter"] } } : c))); }}
                           className={`px-1 py-1 rounded border text-[10px] ${(sel.tstyle?.enter || "") === v ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>{l}</button>
                       ))}
@@ -1671,7 +1710,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         const apply = (patch: Partial<EditClip>) => { update(menu.id, patch); setMenu(null); };
         const isMedia = c.kind === "video" || c.kind === "image" || c.kind === "text";
         return (
-          <div className="fixed z-50 w-52 bg-bg-card border border-border rounded-lg shadow-xl p-1.5 text-[11px]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 360) }} onClick={(e) => e.stopPropagation()}>
+          <div className="fixed z-50 w-52 bg-bg-card border border-border rounded-lg shadow-xl p-1.5 text-[11px]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.max(8, Math.min(menu.y, window.innerHeight - 500)) }} onClick={(e) => e.stopPropagation()}>
             {isMedia && (
               <>
                 <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Animation</div>
@@ -1699,7 +1738,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       {transMenu && (() => {
         const b = clips.find((x) => x.id === transMenu.id);
         return (
-          <div className="fixed z-50 w-44 bg-bg-card border border-border rounded-lg shadow-xl p-1.5 text-[11px]" style={{ left: Math.min(transMenu.x, window.innerWidth - 190), top: Math.min(transMenu.y, window.innerHeight - 240) }} onClick={(e) => e.stopPropagation()}>
+          <div className="fixed z-50 w-44 bg-bg-card border border-border rounded-lg shadow-xl p-1.5 text-[11px]" style={{ left: Math.min(transMenu.x, window.innerWidth - 190), top: Math.max(8, Math.min(transMenu.y, window.innerHeight - 320)) }} onClick={(e) => e.stopPropagation()}>
             <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Transition</div>
             <div className="grid grid-cols-2 gap-1 px-1 pb-1">
               {TRANSITIONS.map((a) => (

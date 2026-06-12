@@ -7,7 +7,7 @@ import { importBrandBatch } from "@/lib/driveImport";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const MAX_PER_RUN = 4; // smaller batch = more frequent progress updates
+const MAX_PER_RUN = 3; // small batch = fast responses; heavy embeds deferred to the cron
 
 export async function POST(req: Request): Promise<NextResponse> {
   await requireUser();
@@ -19,7 +19,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   if (!body.brandId) return NextResponse.json({ error: "brandId required" }, { status: 400 });
 
-  const result = await importBrandBatch(body.brandId, MAX_PER_RUN);
+  const result = await importBrandBatch(body.brandId, MAX_PER_RUN, { skipHeavyEmbeds: true });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 500 });
   return NextResponse.json(result);
 }
