@@ -550,6 +550,21 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
           const newLayers: Layer[] = [];
           const newClips: EditClip[] = [];
           tracks.forEach((t, i) => {
+            if (t.kind === "captions") {
+              // word-level transcript from the canvas Subtitles node
+              try {
+                const ws = JSON.parse(t.value) as { text: string; start: number; end: number }[];
+                if (Array.isArray(ws) && ws.length) {
+                  const lid = `timp_${Date.now()}_${i}_${_l++}`;
+                  newLayers.push({ id: lid, type: "text", name: "Subtitles" });
+                  const groups = groupWords(ws.map((w) => ({ text: w.text, start: Math.round(w.start * 1000), end: Math.round(w.end * 1000) })), "smart");
+                  for (const g of groups) {
+                    newClips.push({ id: uid(), kind: "text", layer: lid, label: g.text.slice(0, 24), start: g.start, duration: g.dur, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, text: g.text, words: g.words, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 800 } });
+                  }
+                }
+              } catch { /* malformed words payload */ }
+              return;
+            }
             const kind = kindOf(t);
             const ltype = clipLayerType(kind);
             const lid = `${ltype[0]}imp_${Date.now()}_${i}_${_l++}`; // one fresh layer per track — guaranteed unique
@@ -1559,6 +1574,16 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                     <option value="">None</option><option value="fade">Fade</option><option value="scale">Scale</option><option value="zoomIn">Zoom in</option><option value="bounce">Bounce</option><option value="spin">Spin</option><option value="slideUp">Slide up</option><option value="slideDown">Slide down</option><option value="wipeRight">Wipe right</option><option value="wipeLeft">Wipe left</option><option value="blurIn">Blur in</option><option value="wordsUp">Words up</option><option value="typewriter">Typewriter</option>
                   </select>
                 </label>
+            <label className="block text-fg-muted">Exit animation
+              <select value={capStyle.exit ?? ""} onChange={(e) => applyStyle({ exit: e.target.value as TextStyle["exit"] })} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+                <option value="">None</option><option value="fade">Fade</option><option value="scale">Scale</option><option value="zoomOut">Zoom out</option><option value="slideUp">Slide up</option><option value="slideDown">Slide down</option><option value="wipeLeft">Wipe left</option><option value="wipeRight">Wipe right</option><option value="blurOut">Blur out</option>
+              </select>
+            </label>
+            <label className="block text-fg-muted">Loop
+              <select value={capStyle.loop ?? ""} onChange={(e) => applyStyle({ loop: e.target.value as TextStyle["loop"] })} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+                <option value="">None</option><option value="pulse">Pulse</option><option value="float">Float</option><option value="wiggle">Wiggle</option>
+              </select>
+            </label>
                 <label className="text-fg-muted col-span-2">Size
                   <input type="range" min={0.5} max={2} step={0.05} value={capStyle.size ?? 1} onChange={(e) => applyStyle({ ...capStyle, size: Number(e.target.value) })} className="mt-1 w-full" />
                 </label>
@@ -1951,6 +1976,20 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                       {([["", "None"], ["fade", "Fade"], ["scale", "Scale"], ["zoomIn", "Zoom in"], ["bounce", "Bounce"], ["spin", "Spin"], ["slideUp", "Slide ↑"], ["slideDown", "Slide ↓"], ["wipeRight", "Wipe →"], ["wipeLeft", "Wipe ←"], ["blurIn", "Blur"], ["wordsUp", "Words up"], ["typewriter", "Type"]] as const).map(([v, l]) => (
                         <button key={v} onClick={() => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), enter: v as TextStyle["enter"] } } : c))); }}
                           className={`px-1 py-1 rounded border text-[10px] ${(sel.tstyle?.enter || "") === v ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>{l}</button>
+                      ))}
+                    </div>
+                    <div className="text-fg-muted pt-1">Exit animation</div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {([["", "None"], ["fade", "Fade"], ["scale", "Scale"], ["zoomOut", "Zoom out"], ["slideUp", "Slide ↑"], ["slideDown", "Slide ↓"], ["wipeLeft", "Wipe ←"], ["wipeRight", "Wipe →"], ["blurOut", "Blur"]] as const).map(([v, l]) => (
+                        <button key={v} onClick={() => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), exit: v as TextStyle["exit"] } } : c))); }}
+                          className={`px-1 py-1 rounded border text-[10px] ${(sel.tstyle?.exit || "") === v ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>{l}</button>
+                      ))}
+                    </div>
+                    <div className="text-fg-muted pt-1">Loop</div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {([["", "None"], ["pulse", "Pulse"], ["float", "Float"], ["wiggle", "Wiggle"]] as const).map(([v, l]) => (
+                        <button key={v} onClick={() => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), loop: v as TextStyle["loop"] } } : c))); }}
+                          className={`px-1 py-1 rounded border text-[10px] ${(sel.tstyle?.loop || "") === v ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>{l}</button>
                       ))}
                     </div>
                     <div className="text-[10px] text-fg-subtle">Full styling (colors, plates, fonts, presets): <b>Captions → Caption style</b>.</div>

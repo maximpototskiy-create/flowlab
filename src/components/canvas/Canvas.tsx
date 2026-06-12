@@ -1849,6 +1849,11 @@ export default function Canvas({
                   const from = graph.nodes.find((n) => n.id === e.from.nodeId);
                   if (!from) continue;
                   const fdef = NODE_TYPES[from.type];
+                  if (from.type === "subtitles") {
+                    const wj = from.outputs?.words;
+                    if (typeof wj === "string" && wj.startsWith("[")) items.push({ y: from.position.y, kind: "captions", value: wj, label: "Subtitles" });
+                    continue;
+                  }
                   const portType = fdef?.outputs.find((p) => p.name === e.from.port)?.type ?? "any";
                   const section = SECTION_TYPES[from.type];
                   const label = (typeof from.config?.label === "string" && from.config.label) || fdef?.name || from.type;

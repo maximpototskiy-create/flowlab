@@ -27,6 +27,8 @@ export type TextStyle = {
   highlight?: string;                  // active-word text color (karaoke)
   pos?: "bottom" | "center" | "top";
   enter?: "" | "scale" | "bounce" | "fade" | "typewriter" | "slideUp" | "slideDown" | "zoomIn" | "spin" | "wipeRight" | "wipeLeft" | "blurIn" | "wordsUp";
+  exit?: "" | "fade" | "scale" | "zoomOut" | "slideUp" | "slideDown" | "wipeLeft" | "wipeRight" | "blurOut";
+  loop?: "" | "pulse" | "float" | "wiggle";
   upper?: boolean;                     // uppercase
 };
 export type CapWord = { text: string; t: number; d: number }; // relative to clip start (s)
@@ -188,7 +190,7 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
 
   // entrance
-  let alpha = 1, scl = 1, typeChars = Infinity, slideY = 0, rot = 0, wipe: "" | "r" | "l" = "", blurPx = 0;
+  let alpha = 1, scl = 1, typeChars = Infinity, slideY = 0, rot = 0, wipe: "" | "r" | "l" = "", blurPx = 0, wipeProgress = 1;
   const ep = Math.min(1, local / 0.28);
   const eo = easeOutCubic(ep);
   if (st.enter === "fade") alpha = ep;
@@ -196,13 +198,36 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   else if (st.enter === "zoomIn") { scl = 1.7 - 0.7 * eo; alpha = ep; }
   else if (st.enter === "bounce") scl = Math.max(0.01, easeOutBack(ep));
   else if (st.enter === "spin") { rot = (1 - eo) * 0.6; alpha = ep; scl = 0.7 + 0.3 * eo; }
-  else if (st.enter === "wipeRight") wipe = "r";
-  else if (st.enter === "wipeLeft") wipe = "l";
+  else if (st.enter === "wipeRight") { wipe = "r"; wipeProgress = eo; }
+  else if (st.enter === "wipeLeft") { wipe = "l"; wipeProgress = eo; }
   else if (st.enter === "blurIn") { blurPx = (1 - eo) * 10; alpha = Math.max(0.2, ep); }
   else if (st.enter === "slideUp") { alpha = ep; slideY = (1 - eo) * fontPxBase(W, st, c, v) * 1.4; }
   else if (st.enter === "slideDown") { alpha = ep; slideY = -(1 - eo) * fontPxBase(W, st, c, v) * 1.4; }
   else if (st.enter === "typewriter") { const td = Math.min(0.9, c.duration * 0.6); typeChars = Math.max(1, Math.floor((Math.min(1, local / td)) * text.length)); }
   const wordsUp = st.enter === "wordsUp";
+  // exit (last 0.28s of the clip) — mirrors the entrances
+  if (st.exit) {
+    const eq = Math.max(0, Math.min(1, (c.duration - local) / 0.28)); // 1 → playing, 0 → gone
+    if (eq < 1) {
+      const op = 1 - easeOutCubic(eq);
+      if (st.exit === "fade") alpha *= eq;
+      else if (st.exit === "scale") { scl *= 0.6 + 0.4 * eq; alpha *= eq; }
+      else if (st.exit === "zoomOut") { scl *= 1 + 0.7 * op; alpha *= eq; }
+      else if (st.exit === "slideUp") { slideY -= op * fontPxBase(W, st, c, v) * 1.4; alpha *= eq; }
+      else if (st.exit === "slideDown") { slideY += op * fontPxBase(W, st, c, v) * 1.4; alpha *= eq; }
+      else if (st.exit === "wipeLeft") wipe = wipe || "r"; // shrink from the right edge
+      else if (st.exit === "wipeRight") wipe = wipe || "l";
+      else if (st.exit === "blurOut") { blurPx = Math.max(blurPx, op * 10); alpha *= Math.max(0.2, eq); }
+      if (st.exit === "wipeLeft" || st.exit === "wipeRight") {
+        // reuse the clip-rect mechanism with the closing progress
+        wipeProgress = Math.min(wipeProgress, eq);
+      }
+    }
+  }
+  // loop — continuous subtle motion for the whole clip
+  if (st.loop === "pulse") scl *= 1 + 0.035 * Math.sin(local * 4);
+  else if (st.loop === "float") slideY += Math.sin(local * 2.2) * fontPxBase(W, st, c, v) * 0.12;
+  else if (st.loop === "wiggle") rot += 0.035 * Math.sin(local * 3);
 
   // words (for word plate / karaoke); fall back to splitting evenly
   const rawWords = text.split(/\s+/).filter(Boolean);
@@ -244,7 +269,7 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   const blockH = n * lineH;
   ctx.translate(0, slideY);
   ctx.translate(cx, cy - blockH / 2); ctx.scale(scl, scl); if (rot) ctx.rotate(rot); ctx.translate(-cx, -(cy - blockH / 2));
-  if (wipe) { const ww = W * eo; ctx.beginPath(); if (wipe === "r") ctx.rect(0, 0, ww, H); else ctx.rect(W - ww, 0, ww, H); ctx.clip(); }
+  if (wipe) { const ww = W * Math.max(0, Math.min(1, wipeProgress)); ctx.beginPath(); if (wipe === "r") ctx.rect(0, 0, ww, H); else ctx.rect(W - ww, 0, ww, H); ctx.clip(); }
   if (blurPx > 0.3) ctx.filter = `blur(${blurPx.toFixed(1)}px)`;
 
   const padX = fontPx * 0.28, padY = fontPx * 0.16, rad = fontPx * (st.radius ?? 0.22);

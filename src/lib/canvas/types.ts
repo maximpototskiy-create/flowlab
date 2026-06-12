@@ -1171,6 +1171,26 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     quickFields: ["duration"],
   },
 
+  subtitles: {
+    name: "Subtitles",
+    category: "audio",
+    icon: "audio-lines",
+    description: "Transcribe the connected audio/video with word timestamps (AssemblyAI). Wire the words output into the Editor node to get a styled caption layer.",
+    inputs: [{ name: "media", type: "any", label: "Audio / Video" }],
+    outputs: [
+      { name: "text", type: "text", label: "Transcript" },
+      { name: "words", type: "text", label: "Words (timed)" },
+    ],
+    defaults: { language: "auto" },
+    fields: [
+      { name: "language", label: "Language", type: "select", options: [
+        { value: "auto", label: "Auto-detect" }, { value: "en", label: "English" }, { value: "ru", label: "Russian" },
+        { value: "es", label: "Spanish" }, { value: "de", label: "German" }, { value: "fr", label: "French" },
+        { value: "it", label: "Italian" }, { value: "ja", label: "Japanese" },
+      ] },
+    ],
+  },
+
   uploadAudio: {
     name: "Upload Audio",
     category: "audio",

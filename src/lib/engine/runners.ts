@@ -985,6 +985,34 @@ export async function runNode(
     }
 
     // ─────────────────────── TOOLS
+    case "subtitles": {
+      const media = String(inputs.media || "").trim();
+      if (!media.startsWith("http")) throw new Error("Connect an audio or video URL to the media input");
+      const key = process.env.ASSEMBLYAI_API_KEY;
+      if (!key) throw new Error("ASSEMBLYAI_API_KEY is not set");
+      const lang = String(config.language || "auto");
+      const payload: Record<string, unknown> = { audio_url: media, speech_model: "universal" };
+      if (lang === "auto") payload.language_detection = true; else payload.language_code = lang;
+      const sub = await fetch("https://api.assemblyai.com/v2/transcript", {
+        method: "POST", headers: { authorization: key, "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const sj = (await sub.json()) as { id?: string; error?: string };
+      if (!sub.ok || !sj.id) throw new Error(sj.error || `AssemblyAI HTTP ${sub.status}`);
+      let words: { text: string; start: number; end: number }[] = [];
+      let text = "";
+      for (let i = 0; i < 90; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const pr = await fetch(`https://api.assemblyai.com/v2/transcript/${sj.id}`, { headers: { authorization: key } });
+        const pj = (await pr.json()) as { status?: string; error?: string; text?: string; words?: { text: string; start: number; end: number }[] };
+        if (pj.status === "completed") { text = pj.text || ""; words = pj.words || []; break; }
+        if (pj.status === "error") throw new Error(pj.error || "transcription failed");
+      }
+      if (!text && !words.length) throw new Error("Transcription timed out");
+      return {
+        outputs: { text, words: JSON.stringify(words.map((w) => ({ text: w.text, start: w.start / 1000, end: w.end / 1000 }))) },
+        costUsd: 0, durationMs: Date.now() - t0,
+      };
+    }
     case "composer": {
       const u = typeof config.exportUrl === "string" && config.exportUrl ? config.exportUrl : null;
       return { outputs: u ? { video: u } : {}, costUsd: 0, durationMs: Date.now() - t0 };
