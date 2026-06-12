@@ -82,6 +82,7 @@ function CanvasNodeImpl({
   onStashTracks?: () => void;
 }) {
   const composerDownRef = useRef<{ x: number; y: number } | null>(null);
+  const [tracksSent, setTracksSent] = useState(false);
   const def = NODE_TYPES[node.type];
   if (!def) return null;
 
@@ -423,20 +424,20 @@ function CanvasNodeImpl({
             ))}
             {(composerTracks?.length ?? 0) > 8 && <div className="text-fg-subtle">…and {(composerTracks?.length ?? 0) - 8} more</div>}
             {(composerTracks?.length ?? 0) > 0 ? (
-              <a href={editorHref} target="_blank" rel="noreferrer" draggable={false}
-                onPointerDown={(e) => { e.stopPropagation(); composerDownRef.current = { x: e.clientX, y: e.clientY }; }}
+              <button type="button"
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
-                  const d = composerDownRef.current;
-                  if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) { e.preventDefault(); return; } // it was a drag, not a click
                   if (onStashTracks) onStashTracks();
+                  setTracksSent(true);
+                  setTimeout(() => setTracksSent(false), 3000);
                 }}
-                className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium hover:opacity-90">
-                Send tracks → editor ({composerTracks!.length})
-              </a>
+                className={`w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md text-[11px] font-medium ${tracksSent ? "bg-emerald-600 text-white" : "bg-brand text-white hover:opacity-90"}`}>
+                {tracksSent ? "Sent ✓ — open the editor to see it" : `Send tracks to editor (${composerTracks!.length})`}
+              </button>
             ) : (
               <span className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-brand/40 text-white/60 text-[11px] font-medium cursor-not-allowed">
-                Send tracks → editor
+                Send tracks to editor
               </span>
             )}
             <a href={editorHref} target="_blank" rel="noreferrer" draggable={false}

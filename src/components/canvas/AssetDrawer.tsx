@@ -100,7 +100,7 @@ export default function AssetDrawer({
           bp.set("limit", String(targetLimit));
           const bres = await fetch(`/api/brand-assets/browse?${bp.toString()}`);
           const bdata = await bres.json();
-          const brows: Array<{ url: string; kind: string; category: string | null; subpath?: string | null }> = bdata.assets ?? [];
+          const brows: Array<{ url: string; kind: string; category: string | null; subpath?: string | null; label?: string | null }> = bdata.assets ?? [];
           const sm: Record<string, string> = {};
           for (const r of brows) if (r.subpath) sm[r.url] = r.subpath.split("/")[0];
           setSubByUrl(sm);
@@ -116,7 +116,7 @@ export default function AssetDrawer({
               durationSec: null,
               source: "library",
               model: null,
-              prompt: r.category,
+              prompt: r.label || r.category,
               createdAt: new Date().toISOString(),
               projectName: null,
               brandName: null,
@@ -204,8 +204,15 @@ export default function AssetDrawer({
   }, [limit, loadPage]);
 
   // Tab filter is purely local now → instant switching, no refetch.
+  const [sortBy, setSortBy] = useState<"newest" | "name" | "kind">("newest");
+  const [dims, setDims] = useState<Record<string, string>>({});
+  const noteDims = (url: string, w: number, h: number) => { if (w && h) setDims((p) => (p[url] ? p : { ...p, [url]: `${w}×${h}` })); };
+  const extOf = (url: string) => { const m = url.split("?")[0].match(/\.([a-z0-9]{2,4})$/i); return m ? m[1].toUpperCase() : ""; };
+  const nameOf = (a: AssetItem) => a.prompt || a.model || a.kind;
   const visibleBase = source === "library" && libSub !== "all" ? assets.filter((a) => subByUrl[a.cdnUrl] === libSub) : assets;
-  const visible = kind ? visibleBase.filter((a) => a.kind === kind) : visibleBase;
+  const visibleKind = kind ? visibleBase.filter((a) => a.kind === kind) : visibleBase;
+  const visible = sortBy === "newest" ? visibleKind : [...visibleKind].sort((a, b) =>
+    sortBy === "name" ? nameOf(a).localeCompare(nameOf(b)) : a.kind.localeCompare(b.kind) || nameOf(a).localeCompare(nameOf(b)));
 
   // Stop wheel from reaching the canvas. The canvas binds a NATIVE wheel
   // listener on its own element, which fires on bubble BEFORE React's
@@ -406,7 +413,10 @@ export default function AssetDrawer({
                 {k.label}
               </button>
             ))}
-          </div>
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)} className="ml-auto bg-bg border border-border rounded px-1 py-0.5 text-[10px] text-fg-muted outline-none">
+            <option value="newest">Newest</option><option value="name">Name</option><option value="kind">Type</option>
+          </select>
+        </div>
         )}
         {/* Explicit drop zone for image search (clear where to drop). */}
         {(source === "library" || isFal) && !similar && (
@@ -501,7 +511,7 @@ export default function AssetDrawer({
               : "No assets."}
           </p>
         ) : (
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-x-2 gap-y-5">
             {visible.map((a) => (
               <div
                 key={a.id}
@@ -521,10 +531,10 @@ export default function AssetDrawer({
               >
                 {a.kind === "image" && (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={a.cdnUrl} alt="" className="w-full h-full object-cover pointer-events-none" loading="lazy" />
+                  <img src={a.cdnUrl} alt="" onLoad={(e) => noteDims(a.cdnUrl, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className="w-full h-full object-cover pointer-events-none" loading="lazy" />
                 )}
                 {a.kind === "video" && (
-                  <video src={a.cdnUrl} className="w-full h-full object-cover pointer-events-none" muted loop preload="metadata" />
+                  <video src={a.cdnUrl} onLoadedMetadata={(e) => noteDims(a.cdnUrl, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} className="w-full h-full object-cover pointer-events-none" muted loop preload="metadata" />
                 )}
                 {a.kind === "audio" && (
                   <div className="w-full h-full flex items-center justify-center text-fg-subtle relative"><Music size={20} />
@@ -542,6 +552,10 @@ export default function AssetDrawer({
                 <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/50 text-[7px] uppercase text-white/80">
                   {a.kind}
                 </span>
+                {extOf(a.cdnUrl) && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[7px] text-white/70">{extOf(a.cdnUrl)}</span>}
+                {dims[a.cdnUrl] && <span className="absolute bottom-1 right-1 px-1 rounded bg-black/60 text-[7px] text-white/70">{dims[a.cdnUrl]}</span>}
+                {subByUrl[a.cdnUrl] && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[7px] text-white/80">{subByUrl[a.cdnUrl]}</span>}
+                <div className="absolute inset-x-0 bottom-0 translate-y-full pt-0.5 text-[8px] text-fg-subtle truncate pointer-events-none">{nameOf(a)}</div>
               </div>
             ))}
           </div>
