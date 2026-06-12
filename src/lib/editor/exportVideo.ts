@@ -19,6 +19,8 @@ export type TextStyle = {
   stroke?: string;                     // stroke color ("" = none)
   strokeW?: number;                    // stroke width as fraction of font size (e.g. 0.08)
   shadow?: boolean;                    // soft drop shadow, default true
+  shadowColor?: string;                // shadow color (default near-black)
+  noPunct?: boolean;                   // strip punctuation from rendered captions
   plate?: "none" | "full" | "word";    // background plate: none / full line / active word
   plateColor?: string;                 // plate color
   radius?: number;                     // plate corner radius as fraction of font size (default 0.22)
@@ -128,10 +130,11 @@ function easeOutCubic(p: number) { return 1 - Math.pow(1 - p, 3); }
 function easeOutBack(p: number) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
 
 // Draw a styled caption (plate / word-highlight / karaoke / stroke / shadow / enter animations).
-export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W: number, H: number, sx: number, v: { opacity: number; scaleMul: number; offX: number; offY: number }) {
+export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W: number, H: number, sx: number, v: { opacity: number; scaleMul: number; offX: number; offY: number }): { x: number; y: number; w: number; h: number } | null {
   const st = c.tstyle || {};
   let text = c.text || ""; if (st.upper) text = text.toUpperCase();
-  if (!text.trim()) return;
+  if (st.noPunct) text = text.replace(/[.,!?;:…"'„“”«»]/g, "");
+  if (!text.trim()) return null;
   const local = tt - c.start;
   const fontPx = Math.max(14, W / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul;
   const family = st.font || "sans-serif";
@@ -215,14 +218,19 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
         const b = boxFor(wo.w, yBottom, padY * 0.85);
         rrect(x - padX * 0.5, b.top, wo.width + padX, b.h, rad); ctx.fill(); ctx.restore();
       }
-      if (st.shadow !== false) { ctx.shadowColor = "rgba(0,0,0,0.85)"; ctx.shadowBlur = fontPx * 0.18; ctx.shadowOffsetY = fontPx * 0.05; } else ctx.shadowColor = "transparent";
-      if (st.stroke) { ctx.lineJoin = "round"; ctx.lineWidth = fontPx * (st.strokeW ?? 0.08); ctx.strokeStyle = st.stroke; ctx.strokeText(wo.w, x, yBottom); }
+      if (st.shadow !== false) { ctx.shadowColor = st.shadowColor || "rgba(0,0,0,0.85)"; ctx.shadowBlur = fontPx * 0.18; ctx.shadowOffsetY = fontPx * 0.05; } else ctx.shadowColor = "transparent";
+      const swFrac = st.strokeW ?? 0.08;
+      if (st.stroke && swFrac > 0) { ctx.lineJoin = "round"; ctx.lineWidth = fontPx * swFrac; ctx.strokeStyle = st.stroke; ctx.strokeText(wo.w, x, yBottom); }
       ctx.fillStyle = isActive && st.highlight ? st.highlight : (st.plate === "word" && isActive ? "#111" : (st.color || "#fff"));
       ctx.fillText(wo.w, x, yBottom);
       x += wo.width + space;
     }
   });
   ctx.restore();
+  // block bounding box (unscaled), used by the editor for hit-testing
+  const maxLineW = Math.max(...lines.map((ln) => ln.words.reduce((s, w, i) => s + w.width + (i ? space : 0), 0)), 0);
+  const top = cy - (n - 1) * lineH - ascent - padY;
+  return { x: cx - maxLineW / 2 - padX, y: top, w: maxLineW + padX * 2, h: (cy + descent + padY) - top };
 }
 
 export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: string; mp4: boolean }> {

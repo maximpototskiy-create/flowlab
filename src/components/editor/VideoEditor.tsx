@@ -26,17 +26,47 @@ const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text:
 const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" ? "text" : k === "image" ? "image" : "video");
 const CAT_LABEL: Record<string, string> = { logo: "Logo", ui: "UI", store: "Store", graphic: "Graphic", overlay: "Overlay", music: "Music", sound: "Sound", reference: "Reference", hook: "Hook", body: "Body", packshot: "Packshot", other: "Other" };
 const CAP_FONTS: { label: string; value: string }[] = [
+  { label: "SF / System", value: "-apple-system, \"SF Pro Display\", system-ui, sans-serif" },
+  { label: "Montserrat", value: "Montserrat, sans-serif" },
+  { label: "Inter", value: "Inter, sans-serif" },
+  { label: "Poppins", value: "Poppins, sans-serif" },
+  { label: "Bebas Neue", value: "\"Bebas Neue\", sans-serif" },
+  { label: "Anton", value: "Anton, sans-serif" },
+  { label: "Archivo Black", value: "\"Archivo Black\", sans-serif" },
+  { label: "Oswald", value: "Oswald, sans-serif" },
+  { label: "Roboto Condensed", value: "\"Roboto Condensed\", sans-serif" },
   { label: "Sans", value: "sans-serif" },
-  { label: "System", value: "system-ui, sans-serif" },
   { label: "Arial Black", value: "\"Arial Black\", sans-serif" },
   { label: "Impact", value: "Impact, sans-serif" },
-  { label: "Trebuchet", value: "\"Trebuchet MS\", sans-serif" },
-  { label: "Verdana", value: "Verdana, sans-serif" },
   { label: "Georgia", value: "Georgia, serif" },
-  { label: "Times", value: "\"Times New Roman\", serif" },
   { label: "Mono", value: "ui-monospace, \"Courier New\", monospace" },
   { label: "Comic", value: "\"Comic Sans MS\", cursive" },
 ];
+const CAP_FONTS_CSS = "https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800;900&family=Inter:wght@400;600;700;800;900&family=Poppins:wght@400;600;700;800;900&family=Bebas+Neue&family=Anton&family=Archivo+Black&family=Oswald:wght@400;600;700&family=Roboto+Condensed:wght@400;700&display=swap";
+// keyword → emoji for auto-emoji captions
+const EMOJI_DICT: [RegExp, string][] = [
+  [/\b(money|cash|price|cost|pay|sale|deal)\b/i, "💸"], [/\b(free)\b/i, "🆓"],
+  [/\b(phone|iphone|mobile)\b/i, "📱"], [/\b(storage|space|memory)\b/i, "💾"],
+  [/\b(photo|photos|picture|camera)\b/i, "📸"], [/\b(video|videos)\b/i, "🎬"],
+  [/\b(clean|cleaner|cleaning|junk|trash|garbage)\b/i, "🧹"], [/\b(delete|remove|erase)\b/i, "🗑️"],
+  [/\b(fast|quick|speed|instant)\b/i, "⚡"], [/\b(slow|lag)\b/i, "🐌"],
+  [/\b(love|loved|like)\b/i, "❤️"], [/\b(fire|hot|lit)\b/i, "🔥"],
+  [/\b(new)\b/i, "✨"], [/\b(secret|hidden)\b/i, "🤫"], [/\b(stop|wait)\b/i, "✋"],
+  [/\b(warning|careful|danger)\b/i, "⚠️"], [/\b(problem|issue|broken)\b/i, "😩"],
+  [/\b(easy|simple)\b/i, "👌"], [/\b(best|top|number one)\b/i, "🏆"], [/\b(win|winner)\b/i, "🥇"],
+  [/\b(grow|growth|increase|boost)\b/i, "📈"], [/\b(drop|decrease|down)\b/i, "📉"],
+  [/\b(idea|tip|trick|hack)\b/i, "💡"], [/\b(brain|smart|genius)\b/i, "🧠"],
+  [/\b(work|working|job)\b/i, "💼"], [/\b(time|minute|second|hour)\b/i, "⏰"],
+  [/\b(check|done|ready)\b/i, "✅"], [/\b(wrong|no|never)\b/i, "❌"],
+  [/\b(look|watch|see)\b/i, "👀"], [/\b(listen|hear|sound)\b/i, "🔊"],
+  [/\b(food|eat|eating|hungry)\b/i, "🍔"], [/\b(coffee)\b/i, "☕"],
+  [/\b(home|house)\b/i, "🏠"], [/\b(car|drive)\b/i, "🚗"], [/\b(travel|trip|fly)\b/i, "✈️"],
+  [/\b(music|song)\b/i, "🎵"], [/\b(game|play|gaming)\b/i, "🎮"],
+  [/\b(happy|smile|fun)\b/i, "😊"], [/\b(sad|cry)\b/i, "😢"], [/\b(crazy|insane|wild)\b/i, "🤯"],
+  [/\b(strong|power|powerful)\b/i, "💪"], [/\b(gift|present|bonus)\b/i, "🎁"],
+  [/\b(download|install|app)\b/i, "⬇️"], [/\b(link)\b/i, "🔗"], [/\b(now|today)\b/i, "👇"],
+];
+function emojiFor(text: string): string | null { for (const [re, e] of EMOJI_DICT) if (re.test(text)) return e; return null; }
 const CAP_PRESETS: { key: string; label: string; style: TextStyle }[] = [
   { key: "plain", label: "Plain", style: { color: "#fff", shadow: true, plate: "none", enter: "", weight: 800 } },
   { key: "stroke", label: "Stroke", style: { color: "#fff", stroke: "#000", strokeW: 0.11, shadow: false, plate: "none", upper: true, weight: 900, enter: "scale" } },
@@ -54,7 +84,8 @@ const CAP_PRESETS: { key: string; label: string; style: TextStyle }[] = [
 
 type Word = { text: string; start: number; end: number }; // ms
 // group transcript words into caption segments per mode → {text, start(s), dur(s), words(rel)}
-function groupWords(words: Word[], mode: "word" | "two" | "smart"): { text: string; start: number; dur: number; words: CapWord[] }[] {
+type SplitMode = "word" | "two" | "three" | "smart" | "sentence" | "line";
+function groupWords(words: Word[], mode: SplitMode): { text: string; start: number; dur: number; words: CapWord[] }[] {
   const out: { text: string; start: number; dur: number; words: CapWord[] }[] = [];
   const push = (ws: Word[]) => {
     if (!ws.length) return;
@@ -68,12 +99,19 @@ function groupWords(words: Word[], mode: "word" | "two" | "smart"): { text: stri
   };
   if (mode === "word") { for (const w of words) push([w]); return out; }
   if (mode === "two") { for (let i = 0; i < words.length; i += 2) push(words.slice(i, i + 2)); return out; }
-  // smart: accumulate up to ~25 chars, break on sentence punctuation
+  if (mode === "three") { for (let i = 0; i < words.length; i += 3) push(words.slice(i, i + 3)); return out; }
+  if (mode === "sentence") {
+    let buf: Word[] = [];
+    for (const w of words) { buf.push(w); if (/[.!?…]$/.test(w.text)) { push(buf); buf = []; } }
+    push(buf); return out;
+  }
+  // smart ~25 chars w/ punctuation; line ~40 chars (one full line per caption)
+  const limit = mode === "line" ? 40 : 25;
   let buf: Word[] = [], len = 0;
   for (const w of words) {
     buf.push(w); len += w.text.length + 1;
     const ends = /[.!?,…]$/.test(w.text);
-    if (len >= 25 || ends) { push(buf); buf = []; len = 0; }
+    if (len >= limit || (mode === "smart" && ends)) { push(buf); buf = []; len = 0; }
   }
   push(buf);
   return out;
@@ -164,7 +202,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
   const [panelTab, setPanelTab] = useState<"effects" | "filters" | "text" | "subs">("effects");
   const [subSource, setSubSource] = useState<string>("");
-  const [subMode, setSubMode] = useState<"word" | "two" | "smart">("smart");
+  const [subMode, setSubMode] = useState<SplitMode>("smart");
+  const [subEmoji, setSubEmoji] = useState(false);
+  const [savedPresets, setSavedPresets] = useState<{ name: string; style: TextStyle }[]>([]);
+  const [capRects, setCapRects] = useState<{ id: string; x: number; y: number; w: number; h: number }[]>([]);
   const [subBusy, setSubBusy] = useState(false);
   const [subStatus, setSubStatus] = useState("");
   const [capPreset, setCapPreset] = useState("highlight");
@@ -197,6 +238,32 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const bin = library.filter((a) => (binFilter === "all" || a.kind === binFilter) && (binCategory === "all" || a.category === binCategory));
   const libCats = Array.from(new Set(library.map((a) => a.category).filter((c): c is string => !!c)));
   const selTextCount = selectedIds.filter((id) => clips.find((c) => c.id === id)?.kind === "text").length;
+  // ---- undo/redo (snapshots of clips+layers, debounced) ----
+  const histRef = useRef<{ clips: EditClip[]; layers: Layer[] }[]>([]);
+  const histPosRef = useRef(-1);
+  const restoringRef = useRef(false);
+  useEffect(() => {
+    if (restoringRef.current) { restoringRef.current = false; return; }
+    const tmo = setTimeout(() => {
+      const h = histRef.current.slice(0, histPosRef.current + 1);
+      const last = h[h.length - 1];
+      if (last && last.clips === clips && last.layers === layers) return;
+      h.push({ clips, layers });
+      if (h.length > 60) h.shift();
+      histRef.current = h; histPosRef.current = h.length - 1;
+    }, 250);
+    return () => clearTimeout(tmo);
+  }, [clips, layers]);
+  const undo = useCallback(() => {
+    if (histPosRef.current <= 0) return;
+    histPosRef.current -= 1; const s = histRef.current[histPosRef.current];
+    restoringRef.current = true; setClips(s.clips); setLayers(s.layers); setSelectedIds([]);
+  }, []);
+  const redo = useCallback(() => {
+    if (histPosRef.current >= histRef.current.length - 1) return;
+    histPosRef.current += 1; const s = histRef.current[histPosRef.current];
+    restoringRef.current = true; setClips(s.clips); setLayers(s.layers); setSelectedIds([]);
+  }, []);
 
   const loadLibrary = async (over: Partial<{ q: string; brand: string; project: string; source: string }> = {}) => {
     const q = over.q ?? binQuery, brand = over.brand ?? binBrand, project = over.project ?? binProject, source = over.source ?? binSource;
@@ -233,6 +300,16 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     } catch { /* keep current */ } finally { setBinLoading(false); }
   };
   useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // load caption webfonts + saved presets; redraw once fonts are ready
+  const [fontsTick, setFontsTick] = useState(0);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (!document.querySelector('link[data-cap-fonts]')) {
+      const l = document.createElement("link"); l.rel = "stylesheet"; l.href = CAP_FONTS_CSS; l.setAttribute("data-cap-fonts", "1"); document.head.appendChild(l);
+    }
+    document.fonts?.ready?.then(() => setFontsTick((v) => v + 1)).catch(() => {});
+    try { const raw = localStorage.getItem("flowlab.capPresets"); if (raw) setSavedPresets(JSON.parse(raw)); } catch { /* ignore */ }
+  }, []);
   // draw captions on the overlay canvas using the SAME routine as the exporter (pixel parity)
   useEffect(() => {
     const cv = capCanvasRef.current; if (!cv) return;
@@ -242,12 +319,16 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     const ctx = cv.getContext("2d"); if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
+    const rects: { id: string; x: number; y: number; w: number; h: number }[] = [];
     for (const c of clips) {
       if (c.kind !== "text") continue;
       if (playhead < c.start || playhead >= c.start + c.duration) continue;
-      drawCaption(ctx, c as unknown as ExportClip, playhead, W, H, 1, { opacity: alphaAt(c as CompClip, playhead) || 1, scaleMul: 1, offX: 0, offY: 0 });
+      const r = drawCaption(ctx, c as unknown as ExportClip, playhead, W, H, 1, { opacity: alphaAt(c as CompClip, playhead) || 1, scaleMul: 1, offX: 0, offY: 0 });
+      if (r) rects.push({ id: c.id, ...r });
     }
-  }, [clips, playhead, previewSize.w, previewSize.h]);
+    // interactive handles only when paused (kept light during playback)
+    setCapRects((prev) => (playing ? (prev.length ? [] : prev) : rects));
+  }, [clips, playhead, previewSize.w, previewSize.h, playing, fontsTick]);
   const runSearch = async () => {
     const q = binQuery.trim();
     if (!q) { loadLibrary(); return; }
@@ -324,6 +405,18 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   // explicit buttons — restyle existing captions with the current style, no re-transcription
   const applyStyleAll = () => setClips((prev) => prev.map((c) => (c.kind === "text" ? { ...c, tstyle: { ...capStyle } } : c)));
   const applyStyleSelected = () => { const ids = new Set(selectedRef.current); setClips((prev) => prev.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...capStyle } } : c))); };
+  const savePreset = () => {
+    const name = window.prompt("Preset name:");
+    if (!name?.trim()) return;
+    const next = [...savedPresets.filter((p) => p.name !== name.trim()), { name: name.trim(), style: { ...capStyle } }];
+    setSavedPresets(next);
+    try { localStorage.setItem("flowlab.capPresets", JSON.stringify(next)); } catch { /* ignore */ }
+  };
+  const deletePreset = (name: string) => {
+    const next = savedPresets.filter((p) => p.name !== name);
+    setSavedPresets(next);
+    try { localStorage.setItem("flowlab.capPresets", JSON.stringify(next)); } catch { /* ignore */ }
+  };
   const addFx = (type = "vignette") => addClipKind("fx", { fx: type }, DEFAULTS.fx, "FX");
   const addAdjust = (v = "grayscale(1)") => addClipKind("adjust", { fx: v }, DEFAULTS.adjust, "Adjust");
 
@@ -350,8 +443,13 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       if (!words) throw new Error("Timed out");
       if (!words.length) throw new Error("No speech detected");
       const segs = groupWords(words, subMode);
+      if (subEmoji) for (const sg of segs) { const e = emojiFor(sg.text); if (e) { const last = sg.words[sg.words.length - 1]; sg.text = `${sg.text} ${e}`; sg.words.push({ text: e, t: last ? +(last.t + last.d).toFixed(3) : 0, d: 0.01 }); } }
       const base0 = src.start; // align captions to where the source sits on the timeline
-      const layerId = layerForKind("text");
+      // captions always go to a dedicated "Subtitles" text layer (created on top if missing)
+      const subLayer = layers.find((l) => l.type === "text" && l.name === "Subtitles");
+      let layerId: string;
+      if (subLayer) layerId = subLayer.id;
+      else { layerId = createLayerForType("text"); setLayers((p) => p.map((l) => (l.id === layerId ? { ...l, name: "Subtitles" } : l))); }
       setClips((p) => [...p, ...segs.map((sg) => base("text", layerId, undefined, "Caption", +(base0 + sg.start).toFixed(3), sg.dur, { text: sg.text, words: sg.words, tstyle: { ...capStyle } }))]);
       setSubStatus(`Done — ${segs.length} captions added.`);
     } catch (e) {
@@ -451,10 +549,12 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       const tg = e.target as HTMLElement | null;
       if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT" || tg.isContentEditable)) return;
       if (e.code === "Space") { e.preventDefault(); play(); }
+      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
       else if (e.key === "Delete" || e.key === "Backspace") { if (selectedRef.current.length) { e.preventDefault(); removeMany(selectedRef.current); } }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
-  }, [play, removeMany]);
+  }, [play, removeMany, undo, redo]);
 
   useEffect(() => {
     if (!menu && !transMenu) return;
@@ -611,6 +711,33 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
   const resetTransform = (id: string) => update(id, { x: 0, y: 0, scale: 1 });
+  // drag a caption box on the canvas overlay → move (x/y); corner handle → scale
+  const onCapDown = (e: React.PointerEvent, c: EditClip) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    const ids = additive ? (selectedRef.current.includes(c.id) ? selectedRef.current.filter((x) => x !== c.id) : [...selectedRef.current, c.id]) : (selectedRef.current.includes(c.id) ? selectedRef.current : [c.id]);
+    setSelectedIds(ids);
+    const s = { sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y };
+    const move = (ev: PointerEvent) => {
+      const z = viewZoomRef.current || 1;
+      update(c.id, { x: Math.round(s.ox + (ev.clientX - s.sx) / z), y: Math.round(s.oy + (ev.clientY - s.sy) / z) });
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
+  const onCapScale = (e: React.PointerEvent, c: EditClip) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const s = { sx: e.clientX, sy: e.clientY, os: c.scale };
+    const move = (ev: PointerEvent) => {
+      const z = viewZoomRef.current || 1;
+      const d = ((ev.clientX - s.sx) + (ev.clientY - s.sy)) / z;
+      update(c.id, { scale: Math.min(8, Math.max(0.2, +(s.os + d / 250).toFixed(2))) });
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
 
   const onBinDragStart = (e: React.DragEvent, a: EditorAsset) => {
     e.dataTransfer.setData("application/x-flowlab-asset", JSON.stringify({ kind: a.kind, url: a.url, label: a.label, duration: a.duration }));
@@ -786,6 +913,17 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                   </div>
                   {/* captions drawn with the SAME routine as the MP4 export → preview == export */}
                   <canvas ref={capCanvasRef} className="absolute inset-0 pointer-events-none z-[9]" style={{ width: previewSize.w, height: previewSize.h }} />
+                  {!playing && capRects.map((r) => {
+                    const c = clips.find((x) => x.id === r.id); if (!c) return null;
+                    const isSel = selectedIds.includes(r.id);
+                    return (
+                      <div key={r.id} className={`absolute z-[9] ${isSel ? "ring-2 ring-brand" : "hover:ring-1 hover:ring-brand/60"}`}
+                        style={{ left: r.x, top: r.y, width: r.w, height: r.h, cursor: "move", touchAction: "none" }}
+                        onPointerDown={(e) => onCapDown(e, c)} onContextMenu={(e) => onClipContext(e, c)}>
+                        {isSel && <div onPointerDown={(e) => onCapScale(e, c)} className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} />}
+                      </div>
+                    );
+                  })}
                   {/* dim everything outside the composition (pasteboard), content stays visible & grabbable */}
                   <div className="absolute inset-0 pointer-events-none z-10" style={{ boxShadow: "0 0 0 99999px rgba(0,0,0,0.55)" }} />
                   <div className="absolute inset-0 ring-1 ring-white/30 pointer-events-none z-10" />
@@ -814,6 +952,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         <div className="h-9 shrink-0 border-t border-border flex items-center gap-3 px-3 text-[11px] text-fg-muted">
           <button onClick={() => seek(0)} className="hover:text-fg"><SkipBack size={14} /></button>
           <button onClick={play} className="text-fg hover:text-brand">{playing ? <Pause size={16} /> : <Play size={16} />}</button>
+          <button onClick={undo} title="Undo (Cmd/Ctrl+Z)" className="hover:text-fg text-[13px] leading-none">↺</button>
+          <button onClick={redo} title="Redo (Shift+Cmd/Ctrl+Z)" className="hover:text-fg text-[13px] leading-none">↻</button>
           <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
           <div className="ml-auto flex items-center gap-2">
             <button onClick={() => setPxPerSec((z) => Math.max(20, z - 20))} className="hover:text-fg"><ZoomOut size={13} /></button>
@@ -1006,12 +1146,16 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               </select>
             </label>
             <label className="block text-fg-muted">Split
-              <select value={subMode} onChange={(e) => setSubMode(e.target.value as "word" | "two" | "smart")} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
+              <select value={subMode} onChange={(e) => setSubMode(e.target.value as SplitMode)} className="mt-1 w-full bg-bg-card border border-border rounded px-2 py-1.5 text-fg outline-none">
                 <option value="word">One word</option>
                 <option value="two">Two words</option>
+                <option value="three">Three words</option>
                 <option value="smart">Smart (phrases)</option>
+                <option value="sentence">Sentences</option>
+                <option value="line">Full line (~40 chars)</option>
               </select>
             </label>
+            <label className="flex items-center gap-1.5 text-fg-muted"><input type="checkbox" checked={subEmoji} onChange={(e) => setSubEmoji(e.target.checked)} /> Auto emoji ✨</label>
             <button onClick={generateSubtitles} disabled={subBusy || subSources.length === 0}
               className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md bg-brand text-white text-[12px] font-medium disabled:opacity-50">
               {subBusy ? <><Loader2 size={14} className="animate-spin" /> Working…</> : <><Sparkles size={14} /> Generate subtitles</>}
@@ -1049,6 +1193,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 </label>
                 <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={!!capStyle.upper} onChange={(e) => applyStyle({ ...capStyle, upper: e.target.checked })} /> UPPERCASE</label>
                 <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={capStyle.shadow !== false} onChange={(e) => applyStyle({ ...capStyle, shadow: e.target.checked })} /> Shadow</label>
+                <label className="text-fg-muted flex items-center gap-1.5"><input type="checkbox" checked={!!capStyle.noPunct} onChange={(e) => applyStyle({ ...capStyle, noPunct: e.target.checked })} /> No punctuation</label>
+                <label className="text-fg-muted">Shadow color
+                  <input type="color" value={capStyle.shadowColor || "#000000"} onChange={(e) => applyStyle({ ...capStyle, shadowColor: e.target.value })} className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
+                </label>
                 <label className="text-fg-muted">Weight
                   <select value={String(capStyle.weight ?? 800)} onChange={(e) => applyStyle({ ...capStyle, weight: Number(e.target.value) })} className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
                     {[400, 600, 700, 800, 900].map((w) => <option key={w} value={w}>{w}</option>)}
@@ -1077,6 +1225,20 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <button onClick={applyStyleAll} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Apply to all captions</button>
                 <button onClick={applyStyleSelected} disabled={!selTextCount} className="flex-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40">Apply to selected{selTextCount ? ` (${selTextCount})` : ""}</button>
               </div>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-fg-muted font-medium">My presets</span>
+                <button onClick={savePreset} className="px-2 py-1 rounded border border-border text-fg-muted hover:text-fg hover:border-brand">Save current</button>
+              </div>
+              {savedPresets.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {savedPresets.map((p) => (
+                    <span key={p.name} className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-1">
+                      <button onClick={() => { setCapPreset(""); applyStyle({ ...p.style }); }} className="text-fg-muted hover:text-brand">{p.name}</button>
+                      <button onClick={() => deletePreset(p.name)} className="text-fg-subtle hover:text-red-400">×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="text-[10px] text-fg-subtle">Change preset/colors → applies live (selected, or all). Buttons re-apply to existing captions without re-transcribing.</div>
             </div>
           </div>
