@@ -10,8 +10,9 @@ import VideoEditor, { type EditorAsset } from "@/components/editor/VideoEditor";
 
 export const dynamic = "force-dynamic";
 
-export default async function EditorPage() {
+export default async function EditorPage({ searchParams }: { searchParams: Promise<{ wf?: string; proj?: string }> }) {
   await requireUser();
+  const { wf, proj } = await searchParams;
   const { assets } = await queryAssets({ limit: 120 });
   const bin: EditorAsset[] = assets
     .filter((a) => a.kind === "video" || a.kind === "image" || a.kind === "audio")
@@ -26,7 +27,7 @@ export default async function EditorPage() {
   return (
     <div className="h-screen overflow-hidden bg-bg flex flex-col">
       <TopNav activeNav="editor" />
-      <VideoEditor assets={bin} />
+      <VideoEditor assets={bin} workflowId={wf} projectId={proj} />
     </div>
   );
 }

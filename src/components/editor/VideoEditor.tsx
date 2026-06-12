@@ -298,7 +298,7 @@ let _id = 0, _l = 0;
 const uid = () => `c${Date.now()}_${_id++}`;
 const fmt = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
 
-export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
+export default function VideoEditor({ assets, workflowId, projectId }: { assets: EditorAsset[]; workflowId?: string; projectId?: string }) {
   const [layers, setLayers] = useState<Layer[]>([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]);
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
@@ -519,7 +519,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   };
   useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   // ---- project persistence (localStorage): restore on open, autosave on change ----
-  const PROJECT_KEY = "flowlab.editor.project.v1";
+  // One editor project per canvas workflow (standalone /editor keeps the legacy key)
+  const PROJECT_KEY = workflowId ? `flowlab.editor.project.v1:${workflowId}` : "flowlab.editor.project.v1";
+  const IMPORT_KEY = workflowId ? `flowlab.editor.import.v1:${workflowId}` : "flowlab.editor.import.v1";
   const restoredRef = useRef(false);
   const [saveState, setSaveState] = useState<"" | "saved" | "saving">("");
   useEffect(() => {
@@ -532,11 +534,12 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
       }
     } catch { /* ignore corrupt saves */ }
-    // Composer hand-off: tracks stashed by the canvas Composer node become layers
+    // Canvas hand-off: tracks stashed by the Editor node become layers.
+    // A send from the canvas REPLACES this workflow's editor project (fresh start).
     try {
-      const rawImp = localStorage.getItem("flowlab.editor.import.v1");
+      const rawImp = localStorage.getItem(IMPORT_KEY);
       if (rawImp) {
-        localStorage.removeItem("flowlab.editor.import.v1");
+        localStorage.removeItem(IMPORT_KEY);
         const imp = JSON.parse(rawImp) as { tracks?: { kind: string; value: string; label: string }[] };
         const tracks = (imp.tracks ?? []).filter((t) => t && typeof t.value === "string" && t.value);
         if (tracks.length) {
@@ -553,8 +556,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               newClips.push({ id: uid(), kind, layer: lid, url: t.value, label: t.label || kind, start: 0, duration: DEFAULTS[kind], fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, ...(kind === "video" || kind === "audio" ? { autoDur: true } : {}) });
             }
           }
-          setLayers((prev) => [...newLayers, ...prev]);
-          setClips((prev) => [...prev, ...newClips]);
+          setLayers(newLayers.length ? newLayers : [{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]);
+          setClips(newClips);
+          setSelectedIds([]);
         }
       }
     } catch { /* malformed hand-off — ignore */ }
@@ -1518,6 +1522,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 gap-2">
           <div className="flex items-center gap-2 text-fg text-[13px] font-medium"><Clapperboard size={14} className="text-brand" /> Editor</div>
           <div className="flex items-center gap-2">
+            {workflowId && projectId && (
+              <a href={`/projects/${projectId}/workflows/${workflowId}`} title="Back to the node canvas of this project"
+                className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">← Canvas</a>
+            )}
             <span className="text-[10px] text-fg-subtle w-12 text-right">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : ""}</span>
             <button onClick={saveProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">Save</button>
             <button onClick={newProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">New</button>

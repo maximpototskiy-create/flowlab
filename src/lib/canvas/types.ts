@@ -1368,10 +1368,10 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
   },
 
   composer: {
-    name: "Composer",
-    category: "video",
+    name: "Editor",
+    category: "structural",
     icon: "clapperboard",
-    description: "Collect connected clips, images, audio and text into timeline layers and open them in the browser editor.",
+    description: "The timeline editor of this workflow. Connected clips, images, audio and text become layers; the editor project is tied to this workflow.",
     inputs: [{ name: "tracks", type: "any", multi: true, label: "Tracks" }],
     outputs: [],
     defaults: {},

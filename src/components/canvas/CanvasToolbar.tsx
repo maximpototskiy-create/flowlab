@@ -41,6 +41,8 @@ export default function CanvasToolbar({
 
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="text-[13px] font-medium text-fg truncate">{workflowName}</span>
+        <a href={`/editor?wf=${workflowId}&proj=${projectId}`} target="_blank" rel="noreferrer" title="Open this workflow's timeline editor"
+          className="ml-2 px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand shrink-0">Editor ↗</a>
         <SaveIndicator state={saveState} />
       </div>
 

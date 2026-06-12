@@ -1819,7 +1819,16 @@ export default function Canvas({
                     if (from.type === "brandAssets") for (const r of from.results) pushVal(r.value);
                     else if (idx >= 0 && from.results[idx]) pushVal(from.results[idx].value);
                     else pushVal(from.outputs?.[e.from.port]);
-                  } else pushVal(from.outputs?.[e.from.port]);
+                  } else if (from.outputs && from.outputs[e.from.port] != null) {
+                    pushVal(from.outputs[e.from.port]);
+                  } else {
+                    // node never ran — fall back to its config (uploads, brand picks, raw text)
+                    const cfg = from.config ?? {};
+                    if (from.type === "uploadVideo" || from.type === "uploadAudio") pushVal((cfg.cdnUrl as string) || (cfg.url as string));
+                    else if (from.type === "uploadImage") pushVal(cfg.cdnUrl as string);
+                    else if (from.type === "brandAssets") { const sel = cfg.selected; if (Array.isArray(sel)) for (const u of sel) pushVal(u as string); }
+                    else if (from.type === "yourText") pushVal(cfg.text as string);
+                  }
                 }
                 items.sort((a, b) => a.y - b.y);
                 composerTracks = items.map(({ kind, value, label }) => ({ kind, value, label }));
@@ -1851,8 +1860,8 @@ export default function Canvas({
                 workflowMeta={{ ...workflowMeta, workflowId }}
                 composerTracks={composerTracks}
                 onOpenInEditor={node.type === "composer" ? () => {
-                  try { localStorage.setItem("flowlab.editor.import.v1", JSON.stringify({ tracks: composerTracks ?? [] })); } catch { /* */ }
-                  window.open("/editor", "_blank");
+                  try { localStorage.setItem(`flowlab.editor.import.v1:${workflowId}`, JSON.stringify({ tracks: composerTracks ?? [] })); } catch { /* */ }
+                  window.open(`/editor?wf=${workflowId}&proj=${workflowMeta.projectId}`, "_blank");
                 } : undefined}
               />
               );
