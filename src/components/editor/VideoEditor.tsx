@@ -534,7 +534,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const rawImp = localStorage.getItem(IMPORT_KEY);
       if (rawImp) {
         localStorage.removeItem(IMPORT_KEY);
-        const imp = JSON.parse(rawImp) as { tracks?: { kind: string; value: string; label: string }[] };
+        const imp = JSON.parse(rawImp) as { tracks?: { kind: string; value: string; label: string; section?: string }[] };
         const tracks = (imp.tracks ?? []).filter((t) => t && typeof t.value === "string" && t.value);
         if (tracks.length) {
           // kind by URL extension first — port types lie (brand kit "image" port can carry mp4)
@@ -552,7 +552,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
             const kind = kindOf(t);
             const ltype = clipLayerType(kind);
             const lid = `${ltype[0]}imp_${Date.now()}_${i}_${_l++}`; // one fresh layer per track — guaranteed unique
-            newLayers.push({ id: lid, type: ltype });
+            newLayers.push({ id: lid, type: ltype, ...(t.section ? { name: t.section } : {}) });
             if (kind === "text") {
               newClips.push({ id: uid(), kind, layer: lid, label: t.label || "Text", start: 0, duration: DEFAULTS.text, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, text: t.value, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 } });
             } else {
@@ -978,6 +978,35 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     finally { setExporting(false); }
   }, [exporting, clips, layers, res, previewSize, stop]);
 
+  // Reverse bridge: render + upload + hand the URL to the canvas Editor node
+  const [sendingToCanvas, setSendingToCanvas] = useState(false);
+  const exportToCanvas = useCallback(async () => {
+    if (!workflowId || sendingToCanvas || exporting || !clips.length) return;
+    setSendingToCanvas(true); setProgress(0); setStatus("Rendering for canvas…"); stop();
+    try {
+      const vis = layers.filter((l) => l.type !== "audio");
+      const hiddenIds = new Set(layers.filter((l) => l.hidden).map((l) => l.id));
+      const z: EditClip[] = [];
+      for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...clips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
+      const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
+      const { exportTimeline } = await import("@/lib/editor/exportVideo");
+      const { blob, ext } = await exportTimeline({
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words })),
+        width: res.w, height: res.h, previewWidth: previewSize.w,
+        onProgress: (p) => setProgress(Math.round(p * 100)),
+      });
+      setStatus("Uploading…");
+      const fd = new FormData();
+      fd.append("file", new File([blob], `editor-export-${Date.now()}.${ext}`, { type: blob.type || "video/mp4" }));
+      const r = await fetch("/api/upload", { method: "POST", body: fd });
+      const j = (await r.json()) as { cdnUrl?: string; error?: string };
+      if (!r.ok || !j.cdnUrl) throw new Error(j.error || "upload failed");
+      localStorage.setItem(`flowlab.editor.export.v1:${workflowId}`, JSON.stringify({ url: j.cdnUrl, at: Date.now() }));
+      setStatus("Sent to canvas ✓ — the Editor node now outputs this video.");
+    } catch (e) { console.error(e); setStatus(`Send failed: ${e instanceof Error ? e.message : "see console"}`); }
+    finally { setSendingToCanvas(false); }
+  }, [workflowId, sendingToCanvas, exporting, clips, layers, res, previewSize, stop]);
+
   const dragRef = useRef<{ id: string; mode: "move" | "trim" | "trimL"; startX: number; origDur: number; origStart: number; origInset: number; type: LayerType; moveIds: string[]; origStarts: Map<string, number> } | null>(null);
   const hitTest = (clientY: number, type: LayerType): { type: "lane" | "strip"; id: string } | null => {
     for (const [id, el] of stripRefs.current) { const r = el.getBoundingClientRect(); if (clientY >= r.top - 3 && clientY <= r.bottom + 3) return { type: "strip", id }; }
@@ -1309,6 +1338,12 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
             </div>
             <input ref={fileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ""; }} />
             <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} placeholder="Semantic search… (Enter)" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
+            {brands.length > 0 && (
+              <select value={binBrand} onChange={(e) => { setBinBrand(e.target.value); loadGen({ brand: e.target.value }); loadBrand(e.target.value); }} className="w-full bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
+                <option value="">All brands</option>
+                {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </select>
+            )}
             <div className="grid grid-cols-2 gap-1.5">
               {projects.length > 0 && (
                 <select value={binProject} onChange={(e) => { setBinProject(e.target.value); loadGen({ project: e.target.value }); }} className="bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
@@ -1576,6 +1611,12 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
             <button onClick={exportMp4} disabled={exporting || !clips.length} className="px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
               {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{exporting ? `${progress}%` : "Export MP4"}
             </button>
+            {workflowId && (
+              <button onClick={exportToCanvas} disabled={sendingToCanvas || exporting || !clips.length} title="Render and set as the Editor node's output on the canvas"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand disabled:opacity-50">
+                {sendingToCanvas ? <Loader2 size={13} className="animate-spin" /> : null}{sendingToCanvas ? `${progress}%` : "→ Canvas"}
+              </button>
+            )}
           </div>
         </div>
 

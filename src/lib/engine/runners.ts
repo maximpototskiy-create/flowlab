@@ -985,8 +985,11 @@ export async function runNode(
     }
 
     // ─────────────────────── TOOLS
+    case "composer": {
+      const u = typeof config.exportUrl === "string" && config.exportUrl ? config.exportUrl : null;
+      return { outputs: u ? { video: u } : {}, costUsd: 0, durationMs: Date.now() - t0 };
+    }
     case "note":
-    case "composer":
     case "output":
     case "exportMP4":
     case "exportAE":

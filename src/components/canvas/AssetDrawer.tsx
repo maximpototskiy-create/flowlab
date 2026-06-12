@@ -42,6 +42,14 @@ export default function AssetDrawer({
   const [libCategory, setLibCategory] = useState<string>("all");
   const [libSub, setLibSub] = useState<string>("all");
   const [subByUrl, setSubByUrl] = useState<Record<string, string>>({});
+  // brand selector — defaults to the workflow's brand, but any brand can be browsed
+  const [brandSel, setBrandSel] = useState<string>(brandId ?? "");
+  const [brandOpts, setBrandOpts] = useState<{ value: string; label: string }[]>([]);
+  useEffect(() => {
+    (async () => {
+      try { const r = await fetch("/api/assets?limit=1"); const j = await r.json(); if (Array.isArray(j.brands)) setBrandOpts(j.brands); } catch { /* */ }
+    })();
+  }, []);
   const isFal = source === "generated" && genSource === "fal";
   const [kind, setKind] = useState("");
   const [q, setQ] = useState("");
@@ -75,7 +83,7 @@ export default function AssetDrawer({
       }
     })();
     return () => { alive = false; };
-  }, [source]);
+  }, [source, brandSel]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
@@ -95,7 +103,7 @@ export default function AssetDrawer({
           // No search query → browse mode: list this brand's assets, optionally
           // filtered by the selected category, newest first.
           const bp = new URLSearchParams();
-          if (brandId) bp.set("brandId", brandId);
+          if (brandSel) bp.set("brandId", brandSel);
           if (libCategory !== "all") bp.set("category", libCategory);
           bp.set("limit", String(targetLimit));
           const bres = await fetch(`/api/brand-assets/browse?${bp.toString()}`);
@@ -131,7 +139,7 @@ export default function AssetDrawer({
           body: JSON.stringify({
             query: similar?.url ? undefined : debouncedQ,
             imageUrl: similar?.url,
-            brandId: brandId || undefined,
+            brandId: brandSel || undefined,
             category: libCategory === "all" ? undefined : libCategory,
             limit: targetLimit,
           }),
@@ -170,8 +178,9 @@ export default function AssetDrawer({
       // UI = brand-kit screenshots for the current brand.
       if (source === "ui") {
         p.set("source", "brand_kit");
-        if (brandId) p.set("brand", brandId);
+        if (brandSel) p.set("brand", brandSel);
       }
+      if (source === "generated" && !isFal && brandSel) p.set("brand", brandSel);
       const endpoint = isFal ? "/api/fal-assets" : "/api/assets";
       const res = await fetch(`${endpoint}?${p.toString()}`);
       const data = await res.json();
@@ -339,6 +348,13 @@ export default function AssetDrawer({
         )}
 
         {/* Library: category chips */}
+        {(source === "library" || source === "generated" || source === "ui") && !isFal && brandOpts.length > 0 && (
+          <select value={brandSel} onChange={(e) => { setBrandSel(e.target.value); setLibSub("all"); }}
+            className="w-full bg-bg border border-border rounded px-1.5 py-1 text-[11px] text-fg outline-none">
+            <option value="">All brands</option>
+            {brandOpts.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
+          </select>
+        )}
         {source === "library" && (
           <div className="flex flex-wrap gap-1">
             {["all", "logo", "ui", "store", "graphic", "overlay", "music", "sound", "reference", "hook", "body", "packshot", "other"].map((c) => (

@@ -75,7 +75,7 @@ function CanvasNodeImpl({
   onUploadFile: (file: File, onProgress?: (pct: number) => void) => Promise<{ cdnUrl: string }>;
   workflowMeta: { brandId: string | null; brandSlug?: string | null; projectId: string; workflowId: string };
   /** Composer node only: ordered upstream tracks resolved by Canvas */
-  composerTracks?: { kind: string; value: string; label: string }[];
+  composerTracks?: { kind: string; value: string; label: string; section?: string }[];
   /** Composer node only: href of this workflow's editor */
   editorHref?: string;
   /** Composer node only: stash the connected tracks right before navigation */
@@ -419,6 +419,7 @@ function CanvasNodeImpl({
               <div key={i} className="flex items-center gap-1.5 text-fg-muted">
                 <span className="w-4 text-right text-fg-subtle">{i + 1}.</span>
                 <span className={`px-1 rounded text-[9px] uppercase ${t.kind === "video" ? "bg-sky-500/20 text-sky-300" : t.kind === "image" ? "bg-violet-500/20 text-violet-300" : t.kind === "audio" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>{t.kind}</span>
+                {t.section && <span className="px-1 rounded text-[9px] bg-purple-500/20 text-purple-300">{t.section}</span>}
                 <span className="truncate flex-1" title={t.label}>{t.label}</span>
               </div>
             ))}

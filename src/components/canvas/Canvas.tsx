@@ -252,6 +252,34 @@ export default function Canvas({
   // ─────────────────────────────── Expanded modal
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
 
+  // Reverse bridge: the editor stashes its rendered MP4 URL per workflow;
+  // pick it up here and make it the Editor node's output (usable downstream).
+  useEffect(() => {
+    const KEY = `flowlab.editor.export.v1:${workflowId}`;
+    const apply = () => {
+      try {
+        const raw = localStorage.getItem(KEY);
+        if (!raw) return;
+        const j = JSON.parse(raw) as { url?: string };
+        if (!j.url) { localStorage.removeItem(KEY); return; }
+        localStorage.removeItem(KEY);
+        setGraph((g) => ({
+          ...g,
+          nodes: g.nodes.map((n) => n.type === "composer"
+            ? { ...n, config: { ...n.config, exportUrl: j.url }, outputs: { ...(n.outputs ?? {}), video: j.url as string }, status: "done" as const }
+            : n),
+        }));
+      } catch { /* */ }
+    };
+    apply();
+    const onStorage = (e: StorageEvent) => { if (e.key === KEY) apply(); };
+    const onFocus = () => apply();
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    return () => { window.removeEventListener("storage", onStorage); window.removeEventListener("focus", onFocus); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowId]);
+
   // ─────────────────────────────── Runs
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -1797,14 +1825,34 @@ export default function Canvas({
               let composerTracks: { kind: string; value: string; label: string }[] | undefined;
               if (node.type === "composer") {
                 const incoming = graph.edges.filter((e) => e.to.nodeId === node.id);
-                const items: { y: number; kind: string; value: string; label: string }[] = [];
+                const items: { y: number; kind: string; value: string; label: string; section?: string }[] = [];
+                const SECTION_TYPES: Record<string, string> = { hook: "Hook", body: "Body", packShot: "Packshot", cta: "CTA" };
+                const SECTION_ORDER = ["Hook", "Body", "Packshot", "CTA"];
+                const resolveNodeVals = (n: typeof graph.nodes[number], port: string, push: (v: unknown, pt: string) => void) => {
+                  const d = NODE_TYPES[n.type];
+                  const pt = d?.outputs.find((p) => p.name === port)?.type ?? "any";
+                  if (n.results && n.results.length > 1) {
+                    const idx = typeof n.config?._selectedResultIdx === "number" ? (n.config._selectedResultIdx as number) : -1;
+                    if (n.type === "brandAssets") for (const r of n.results) push(r.value, pt);
+                    else if (idx >= 0 && n.results[idx]) push(n.results[idx].value, pt);
+                    else push(n.outputs?.[port], pt);
+                  } else if (n.outputs && n.outputs[port] != null) push(n.outputs[port], pt);
+                  else {
+                    const cfg = n.config ?? {};
+                    if (n.type === "uploadVideo" || n.type === "uploadAudio") push((cfg.cdnUrl as string) || (cfg.url as string), pt);
+                    else if (n.type === "uploadImage") push(cfg.cdnUrl as string, pt);
+                    else if (n.type === "brandAssets") { const sel = cfg.selected; if (Array.isArray(sel)) for (const u of sel) push(u as string, pt); }
+                    else if (n.type === "yourText") push(cfg.text as string, pt);
+                  }
+                };
                 for (const e of incoming) {
                   const from = graph.nodes.find((n) => n.id === e.from.nodeId);
                   if (!from) continue;
                   const fdef = NODE_TYPES[from.type];
                   const portType = fdef?.outputs.find((p) => p.name === e.from.port)?.type ?? "any";
+                  const section = SECTION_TYPES[from.type];
                   const label = (typeof from.config?.label === "string" && from.config.label) || fdef?.name || from.type;
-                  const pushVal = (v: unknown) => {
+                  const pushVal = (v: unknown, pt: string = portType, lbl: string = label) => {
                     if (typeof v !== "string" || !v) return;
                     const isUrl = v.startsWith("http");
                     let kind: string;
@@ -1812,9 +1860,19 @@ export default function Canvas({
                     else if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(v)) kind = "video";
                     else if (/\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/i.test(v)) kind = "audio";
                     else if (/\.(png|jpe?g|webp|gif|avif|svg)(\?|$)/i.test(v)) kind = "image";
-                    else kind = portType === "any" || portType === "text" ? "image" : portType;
-                    items.push({ y: from.position.y, kind, value: v, label });
+                    else kind = pt === "any" || pt === "text" ? "image" : pt;
+                    items.push({ y: from.position.y, kind, value: v, label: lbl, section });
                   };
+                  if (section) {
+                    // a structural section node: forward the materials wired INTO it, tagged with the section
+                    for (const se of graph.edges.filter((x) => x.to.nodeId === from.id)) {
+                      const src = graph.nodes.find((n) => n.id === se.from.nodeId);
+                      if (!src) continue;
+                      const srcLabel = NODE_TYPES[src.type]?.name || src.type;
+                      resolveNodeVals(src, se.from.port, (v, pt) => pushVal(v, pt, `${section}: ${srcLabel}`));
+                    }
+                    continue;
+                  }
                   if (from.results && from.results.length > 1) {
                     const idx = typeof from.config?._selectedResultIdx === "number" ? (from.config._selectedResultIdx as number) : -1;
                     if (from.type === "brandAssets") for (const r of from.results) pushVal(r.value);
@@ -1831,8 +1889,12 @@ export default function Canvas({
                     else if (from.type === "yourText") pushVal(cfg.text as string);
                   }
                 }
-                items.sort((a, b) => a.y - b.y);
-                composerTracks = items.map(({ kind, value, label }) => ({ kind, value, label }));
+                items.sort((a, b) => {
+                  const sa = a.section ? SECTION_ORDER.indexOf(a.section) : 99;
+                  const sb = b.section ? SECTION_ORDER.indexOf(b.section) : 99;
+                  return sa - sb || a.y - b.y;
+                });
+                composerTracks = items.map(({ kind, value, label, section }) => ({ kind, value, label, section }));
               }
               return (
               <CanvasNode
