@@ -487,6 +487,8 @@ export default function AssetDrawer({
                 }}
                 onClick={() => setPreview(a)}
                 title={a.prompt || a.model || a.kind}
+                onMouseEnter={(e) => { const v = e.currentTarget.querySelector("video"); if (v) (v as HTMLVideoElement).play().catch(() => {}); }}
+                onMouseLeave={(e) => { const v = e.currentTarget.querySelector("video"); if (v) { (v as HTMLVideoElement).pause(); (v as HTMLVideoElement).currentTime = 0; } }}
                 className="group relative aspect-square rounded-md overflow-hidden bg-bg border border-border hover:border-brand cursor-grab active:cursor-grabbing"
               >
                 {a.kind === "image" && (
@@ -494,8 +496,7 @@ export default function AssetDrawer({
                   <img src={a.cdnUrl} alt="" className="w-full h-full object-cover pointer-events-none" loading="lazy" />
                 )}
                 {a.kind === "video" && (
-                  <video src={a.cdnUrl} className="w-full h-full object-cover" muted loop preload="metadata"
-                    onMouseEnter={(e) => { e.currentTarget.play().catch(() => {}); }} onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }} />
+                  <video src={a.cdnUrl} className="w-full h-full object-cover pointer-events-none" muted loop preload="metadata" />
                 )}
                 {a.kind === "audio" && (
                   <div className="w-full h-full flex items-center justify-center text-fg-subtle relative"><Music size={20} />

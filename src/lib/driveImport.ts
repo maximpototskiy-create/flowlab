@@ -85,10 +85,10 @@ export async function importBrandBatch(brandId: string, maxPerRun: number, opts:
   const embedErrors: string[] = [];
   const batch = fresh.slice(0, maxPerRun);
 
-  for (const f of batch) {
+  await Promise.allSettled(batch.map(async (f) => {
     if (f.sizeBytes && f.sizeBytes > MAX_BYTES) {
       skippedLarge++;
-      continue;
+      return;
     }
     const kind = f.mimeType.startsWith("video/") ? "video" : f.mimeType.startsWith("audio/") ? "audio" : "image";
     try {
@@ -143,7 +143,7 @@ export async function importBrandBatch(brandId: string, maxPerRun: number, opts:
       console.error("[driveImport] failed for", f.name, err);
       failed++;
     }
-  }
+  }));
 
   return {
     ok: true,
@@ -161,7 +161,7 @@ export async function importBrandBatch(brandId: string, maxPerRun: number, opts:
 
 
 // Kick off embeds for assets imported in fast mode (embedStatus "skipped").
-export async function embedSkippedBatch(brandId: string, max: number): Promise<number> {
+export async function embedSkippedBatch(brandId: string, max: number): Promise<{ started: number; remaining: number }> {
   const rows = await prisma.brandAsset.findMany({
     where: { brandId, embedStatus: "skipped", kind: { in: ["video", "audio"] } },
     take: max,
@@ -180,5 +180,6 @@ export async function embedSkippedBatch(brandId: string, max: number): Promise<n
       await prisma.brandAsset.update({ where: { id: a.id }, data: { embedStatus: "failed", embedError: String(err instanceof Error ? err.message : err).slice(0, 500) } }).catch(() => {});
     }
   }
-  return started;
+  const remaining = await prisma.brandAsset.count({ where: { brandId, embedStatus: "skipped", kind: { in: ["video", "audio"] } } });
+  return { started, remaining };
 }

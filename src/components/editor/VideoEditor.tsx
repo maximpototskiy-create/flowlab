@@ -350,6 +350,23 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [brandLib, setBrandLib] = useState<EditorAsset[]>([]);
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
+  const [embedMsg, setEmbedMsg] = useState("");
+  const embedLoopRef = useRef(false);
+  // background semantic indexing of fast-synced videos/audio — fire and forget
+  const startEmbedLoop = useCallback(async (brandId: string) => {
+    if (embedLoopRef.current || !brandId) return;
+    embedLoopRef.current = true;
+    try {
+      for (let i = 0; i < 200; i++) {
+        const r = await fetch("/api/brand-assets/embed-skipped", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandId }) });
+        const j = (await r.json()) as { ok?: boolean; started?: number; remaining?: number; error?: string };
+        if (!r.ok || j.error) { setEmbedMsg(""); break; }
+        if (!j.remaining) { setEmbedMsg(j.started || i > 0 ? "Semantic indexing done." : ""); setTimeout(() => setEmbedMsg(""), 4000); break; }
+        setEmbedMsg(`Indexing for search… ${j.remaining} left`);
+      }
+    } catch { setEmbedMsg(""); }
+    embedLoopRef.current = false;
+  }, []);
   const [subSource, setSubSource] = useState<string>("");
   const [subMode, setSubMode] = useState<SplitMode>("smart");
   const [subEmoji, setSubEmoji] = useState(false);
@@ -493,7 +510,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         const j = (await r.json()) as { ok?: boolean; imported?: number; remaining?: number; newFound?: number; error?: string };
         if (!r.ok || j.error) { setSyncMsg(`Sync failed: ${j.error || r.status}`); setSyncBusy(false); return; }
         total += j.imported || 0;
-        if (!j.remaining) { setSyncMsg(total ? `Imported ${total} new file${total === 1 ? "" : "s"}.` : "Up to date — nothing new."); break; }
+        if (!j.remaining) { setSyncMsg(total ? `Imported ${total} new file${total === 1 ? "" : "s"}.` : "Up to date — nothing new."); startEmbedLoop(binBrand); break; }
         setSyncMsg(`Batch ${i + 1}: imported ${total} so far… ${j.remaining} left`);
       }
       await loadBrand();
@@ -1121,15 +1138,16 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(96px, 1fr))` }}>
         {items.map((a) => (
           <div key={a.id} className="min-w-0">
-            <button draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={`${a.label}${extOf(a.url) ? ` · ${extOf(a.url)}` : ""}`}
+            <div role="button" tabIndex={0} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={`${a.label}${extOf(a.url) ? ` · ${extOf(a.url)}` : ""}`}
+              onMouseEnter={(e) => { const v = e.currentTarget.querySelector("video"); if (v) (v as HTMLVideoElement).play().catch(() => {}); }}
+              onMouseLeave={(e) => { const v = e.currentTarget.querySelector("video"); if (v) { (v as HTMLVideoElement).pause(); (v as HTMLVideoElement).currentTime = 0; } }}
               className="group relative w-full aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
               {a.kind === "image" ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={a.url} alt="" onLoad={(e) => noteDims(a.url, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
               ) : a.kind === "video" ? (
                 <video src={a.url} muted loop playsInline preload="metadata" onLoadedMetadata={(e) => noteDims(a.url, e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                  onMouseEnter={(e) => { e.currentTarget.play().catch(() => {}); }} onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
-                  className="absolute inset-0 w-full h-full object-cover" />
+                  className="absolute inset-0 w-full h-full object-cover pointer-events-none" />
               ) : (
                 <span className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} />
                   <button onClick={(e) => { e.stopPropagation(); togglePreview(a.url); }} title={previewingUrl === a.url ? "Stop" : "Preview"}
@@ -1143,8 +1161,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               {a.subpath && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/80">{a.subpath.split("/")[0]}</span>}
               {a.duration != null && a.duration > 0 && <span className="absolute bottom-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/70">{Math.round(a.duration)}s</span>}
               {dims[a.url] && <span className="absolute bottom-1 left-1/2 -translate-x-1/2 px-1 rounded bg-black/60 text-[8px] text-white/70 whitespace-nowrap">{dims[a.url]}</span>}
-              <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100"><Plus size={18} className="text-white" /></span>
-            </button>
+              <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 opacity-0 group-hover:opacity-100 pointer-events-none"><Plus size={18} className="text-white" /></span>
+            </div>
             <div className="mt-0.5 text-[9px] text-fg-subtle truncate" title={a.label}>{a.label}</div>
           </div>
         ))}
@@ -1257,7 +1275,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <RefreshCw size={11} className={syncBusy ? "animate-spin" : ""} /> Sync Drive
               </button>
             </div>
-            {syncMsg && <div className="text-[10px] text-fg-subtle">{syncMsg}</div>}
+            {(syncMsg || embedMsg) && <div className="text-[10px] text-fg-subtle">{syncMsg}{syncMsg && embedMsg ? " · " : ""}{embedMsg}</div>}
             <input value={brandQ} onChange={(e) => setBrandQ(e.target.value)} placeholder="Search brand assets…" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
             {libCats.length > 0 && (
               <div className="flex items-center gap-1 flex-wrap text-[10px]">
@@ -1267,14 +1285,22 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 ))}
               </div>
             )}
-            {libSubs.length > 0 && (
+            {libSubs.length > 0 && libSubs.length <= 6 && (
               <div className="flex items-center gap-1 flex-wrap text-[10px]">
                 <span className="text-fg-subtle">↳</span>
                 <button onClick={() => setBinSub("all")} className={`px-2 py-0.5 rounded ${binSub === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
                 {libSubs.map((sp) => (
-                  <button key={sp} onClick={() => setBinSub(sp)} className={`px-2 py-0.5 rounded ${binSub === sp ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{sp}</button>
+                  <button key={sp} onClick={() => setBinSub(sp)} title={sp} className={`px-2 py-0.5 rounded max-w-[110px] truncate ${binSub === sp ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{sp}</button>
                 ))}
               </div>
+            )}
+            {libSubs.length > 6 && (
+              <label className="flex items-center gap-1.5 text-[10px] text-fg-subtle">↳
+                <select value={binSub} onChange={(e) => setBinSub(e.target.value)} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-[11px] text-fg outline-none">
+                  <option value="all">All subfolders ({libSubs.length})</option>
+                  {libSubs.map((sp) => <option key={sp} value={sp}>{sp}</option>)}
+                </select>
+              </label>
             )}
             <div className="flex items-center gap-1 text-[10px]">
               {(["all", "video", "image", "audio"] as const).map((f) => (
@@ -1594,7 +1620,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           }}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
-              <div className="w-28 shrink-0 border-r border-border/40" />
+              <div className="w-28 shrink-0 border-r border-border/40 sticky left-0 z-20 bg-bg-card" />
               <div className="relative flex-1 h-6 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
                 {(() => {
                   const steps = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
@@ -1615,7 +1641,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               <div key={layer.id}>
                 {/* insertion strip above this layer */}
                 <div className="flex h-2.5 items-center">
-                  <div className="w-28 shrink-0" />
+                  <div className="w-28 shrink-0 sticky left-0 z-20" />
                   <div ref={(el) => { if (el) stripRefs.current.set(`strip-${li}`, el); else stripRefs.current.delete(`strip-${li}`); }}
                     onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li}` }); }}
                     onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li}` ? null : h))}
@@ -1625,7 +1651,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 <div className="flex items-stretch border-b border-border/40 min-h-[48px]">
                   <div data-label onClick={() => setSelectedLayer(layer.id)} onDoubleClick={() => setRenamingLayer(layer.id)}
                     style={{ boxShadow: `inset 3px 0 0 ${layer.type === "video" ? "#38bdf8" : layer.type === "image" ? "#a78bfa" : layer.type === "text" ? "#f59e0b" : layer.type === "effect" ? "#c084fc" : "#34d399"}` }}
-                    className={`w-28 shrink-0 flex items-center gap-1 px-1.5 text-[9px] uppercase tracking-wider border-r border-border/40 cursor-pointer ${selectedLayer === layer.id ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>
+                    className={`w-28 shrink-0 flex items-center gap-1 px-1.5 text-[9px] uppercase tracking-wider border-r border-border/40 cursor-pointer sticky left-0 z-20 ${selectedLayer === layer.id ? "bg-brand/15 text-brand bg-bg-card" : "text-fg-subtle hover:text-fg bg-bg-card"}`}>
                     {renamingLayer === layer.id ? (
                       <input autoFocus defaultValue={labelFor(layer)} onClick={(e) => e.stopPropagation()}
                         onBlur={(e) => { renameLayer(layer.id, e.target.value); setRenamingLayer(null); }}
@@ -1712,7 +1738,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 {/* bottom insertion strip after the last layer */}
                 {li === layers.length - 1 && (
                   <div className="flex h-2.5 items-center">
-                    <div className="w-28 shrink-0" />
+                    <div className="w-28 shrink-0 sticky left-0 z-20" />
                     <div ref={(el) => { if (el) stripRefs.current.set(`strip-${li + 1}`, el); else stripRefs.current.delete(`strip-${li + 1}`); }}
                       onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li + 1}` }); }}
                       onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li + 1}` ? null : h))}
