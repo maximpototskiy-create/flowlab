@@ -194,7 +194,7 @@ export type NodeTypeDef = {
   examples?: string[];
   starters?: string[];
   /** Custom node body (file uploads etc.) */
-  custom?: "upload-image" | "upload-video" | "upload-audio" | "note" | "brand-assets";
+  custom?: "upload-image" | "upload-video" | "upload-audio" | "note" | "brand-assets" | "composer";
   /** Special: force expanded modal (no primary textarea) */
   forceExpanded?: boolean;
 };
@@ -1365,6 +1365,18 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     outputs: [],
     defaults: {},
     fields: [],
+  },
+
+  composer: {
+    name: "Composer",
+    category: "video",
+    icon: "clapperboard",
+    description: "Collect connected clips, images, audio and text into timeline layers and open them in the browser editor.",
+    inputs: [{ name: "tracks", type: "any", multi: true, label: "Tracks" }],
+    outputs: [],
+    defaults: {},
+    fields: [],
+    custom: "composer",
   },
 
   exportMP4: {

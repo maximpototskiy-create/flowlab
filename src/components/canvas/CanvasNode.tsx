@@ -50,6 +50,8 @@ function CanvasNodeImpl({
   onExpand,
   onUploadFile,
   workflowMeta,
+  composerTracks,
+  onOpenInEditor,
 }: {
   node: GraphNode;
   edges: GraphEdge[];
@@ -71,6 +73,10 @@ function CanvasNodeImpl({
   onExpand: () => void;
   onUploadFile: (file: File, onProgress?: (pct: number) => void) => Promise<{ cdnUrl: string }>;
   workflowMeta: { brandId: string | null; brandSlug?: string | null; projectId: string; workflowId: string };
+  /** Composer node only: ordered upstream tracks resolved by Canvas */
+  composerTracks?: { kind: string; value: string; label: string }[];
+  /** Composer node only: stash tracks + open /editor */
+  onOpenInEditor?: () => void;
 }) {
   const def = NODE_TYPES[node.type];
   if (!def) return null;
@@ -399,6 +405,26 @@ function CanvasNodeImpl({
         )}
 
         {/* Note custom */}
+        {def.custom === "composer" && (
+          <div className="space-y-1.5 text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
+            {(composerTracks?.length ?? 0) === 0 && (
+              <div className="text-fg-subtle">Connect image / video / audio / text outputs to the <b>Tracks</b> port — each becomes a timeline layer (top to bottom by node position).</div>
+            )}
+            {(composerTracks ?? []).slice(0, 8).map((t, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-fg-muted">
+                <span className="w-4 text-right text-fg-subtle">{i + 1}.</span>
+                <span className={`px-1 rounded text-[9px] uppercase ${t.kind === "video" ? "bg-sky-500/20 text-sky-300" : t.kind === "image" ? "bg-violet-500/20 text-violet-300" : t.kind === "audio" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>{t.kind}</span>
+                <span className="truncate flex-1" title={t.label}>{t.label}</span>
+              </div>
+            ))}
+            {(composerTracks?.length ?? 0) > 8 && <div className="text-fg-subtle">…and {(composerTracks?.length ?? 0) - 8} more</div>}
+            <button onClick={onOpenInEditor} disabled={(composerTracks?.length ?? 0) === 0}
+              className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-40">
+              Open in editor{(composerTracks?.length ?? 0) > 0 ? ` (${composerTracks!.length} track${composerTracks!.length === 1 ? "" : "s"})` : ""}
+            </button>
+          </div>
+        )}
+
         {def.custom === "note" && (
           <textarea
             className="w-full bg-transparent border-none outline-none text-fg text-[12px] resize-none"

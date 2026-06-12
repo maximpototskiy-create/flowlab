@@ -1793,6 +1793,37 @@ export default function Canvas({
                     : val;
                 }
               }
+              // Composer: resolve connected upstream outputs into an ordered track list
+              let composerTracks: { kind: string; value: string; label: string }[] | undefined;
+              if (node.type === "composer") {
+                const incoming = graph.edges.filter((e) => e.to.nodeId === node.id);
+                const items: { y: number; kind: string; value: string; label: string }[] = [];
+                for (const e of incoming) {
+                  const from = graph.nodes.find((n) => n.id === e.from.nodeId);
+                  if (!from) continue;
+                  const fdef = NODE_TYPES[from.type];
+                  const portType = fdef?.outputs.find((p) => p.name === e.from.port)?.type ?? "any";
+                  const label = (typeof from.config?.label === "string" && from.config.label) || fdef?.name || from.type;
+                  const pushVal = (v: unknown) => {
+                    if (typeof v !== "string" || !v) return;
+                    const isUrl = v.startsWith("http");
+                    let kind: string = portType;
+                    if (!isUrl) kind = "text";
+                    else if (kind === "any" || kind === "text") {
+                      kind = /\.(mp4|webm|mov)(\?|$)/i.test(v) ? "video" : /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(v) ? "audio" : "image";
+                    }
+                    items.push({ y: from.position.y, kind, value: v, label });
+                  };
+                  if (from.results && from.results.length > 1) {
+                    const idx = typeof from.config?._selectedResultIdx === "number" ? (from.config._selectedResultIdx as number) : -1;
+                    if (from.type === "brandAssets") for (const r of from.results) pushVal(r.value);
+                    else if (idx >= 0 && from.results[idx]) pushVal(from.results[idx].value);
+                    else pushVal(from.outputs?.[e.from.port]);
+                  } else pushVal(from.outputs?.[e.from.port]);
+                }
+                items.sort((a, b) => a.y - b.y);
+                composerTracks = items.map(({ kind, value, label }) => ({ kind, value, label }));
+              }
               return (
               <CanvasNode
                 key={node.id}
@@ -1818,6 +1849,11 @@ export default function Canvas({
                 onExpand={() => setExpandedNodeId(node.id)}
                 onUploadFile={uploadFile}
                 workflowMeta={{ ...workflowMeta, workflowId }}
+                composerTracks={composerTracks}
+                onOpenInEditor={node.type === "composer" ? () => {
+                  try { localStorage.setItem("flowlab.editor.import.v1", JSON.stringify({ tracks: composerTracks ?? [] })); } catch { /* */ }
+                  window.open("/editor", "_blank");
+                } : undefined}
               />
               );
             })}

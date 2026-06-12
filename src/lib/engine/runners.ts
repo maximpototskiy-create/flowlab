@@ -986,6 +986,7 @@ export async function runNode(
 
     // ─────────────────────── TOOLS
     case "note":
+    case "composer":
     case "output":
     case "exportMP4":
     case "exportAE":

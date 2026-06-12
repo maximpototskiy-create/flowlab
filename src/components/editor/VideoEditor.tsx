@@ -532,6 +532,32 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
       }
     } catch { /* ignore corrupt saves */ }
+    // Composer hand-off: tracks stashed by the canvas Composer node become layers
+    try {
+      const rawImp = localStorage.getItem("flowlab.editor.import.v1");
+      if (rawImp) {
+        localStorage.removeItem("flowlab.editor.import.v1");
+        const imp = JSON.parse(rawImp) as { tracks?: { kind: string; value: string; label: string }[] };
+        const tracks = (imp.tracks ?? []).filter((t) => t && typeof t.value === "string" && t.value);
+        if (tracks.length) {
+          const newLayers: Layer[] = [];
+          const newClips: EditClip[] = [];
+          for (const t of tracks) {
+            const kind: Kind = t.kind === "video" ? "video" : t.kind === "audio" ? "audio" : t.kind === "text" ? "text" : "image";
+            const ltype = clipLayerType(kind);
+            const lid = `${ltype[0]}imp_${Date.now()}_${newLayers.length}`;
+            newLayers.push({ id: lid, type: ltype });
+            if (kind === "text") {
+              newClips.push({ id: uid(), kind, layer: lid, label: t.label || "Text", start: 0, duration: DEFAULTS.text, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, text: t.value, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 } });
+            } else {
+              newClips.push({ id: uid(), kind, layer: lid, url: t.value, label: t.label || kind, start: 0, duration: DEFAULTS[kind], fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, ...(kind === "video" || kind === "audio" ? { autoDur: true } : {}) });
+            }
+          }
+          setLayers((prev) => [...newLayers, ...prev]);
+          setClips((prev) => [...prev, ...newClips]);
+        }
+      }
+    } catch { /* malformed hand-off — ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveProject = useCallback(() => {
