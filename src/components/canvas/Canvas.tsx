@@ -1807,11 +1807,12 @@ export default function Canvas({
                   const pushVal = (v: unknown) => {
                     if (typeof v !== "string" || !v) return;
                     const isUrl = v.startsWith("http");
-                    let kind: string = portType;
+                    let kind: string;
                     if (!isUrl) kind = "text";
-                    else if (kind === "any" || kind === "text") {
-                      kind = /\.(mp4|webm|mov)(\?|$)/i.test(v) ? "video" : /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(v) ? "audio" : "image";
-                    }
+                    else if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(v)) kind = "video";
+                    else if (/\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/i.test(v)) kind = "audio";
+                    else if (/\.(png|jpe?g|webp|gif|avif|svg)(\?|$)/i.test(v)) kind = "image";
+                    else kind = portType === "any" || portType === "text" ? "image" : portType;
                     items.push({ y: from.position.y, kind, value: v, label });
                   };
                   if (from.results && from.results.length > 1) {
@@ -1863,6 +1864,7 @@ export default function Canvas({
                   try { localStorage.setItem(`flowlab.editor.import.v1:${workflowId}`, JSON.stringify({ tracks: composerTracks ?? [] })); } catch { /* */ }
                   window.open(`/editor?wf=${workflowId}&proj=${workflowMeta.projectId}`, "_blank");
                 } : undefined}
+                onOpenEditorOnly={node.type === "composer" ? () => { window.open(`/editor?wf=${workflowId}&proj=${workflowMeta.projectId}`, "_blank"); } : undefined}
               />
               );
             })}

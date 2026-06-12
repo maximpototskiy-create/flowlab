@@ -52,6 +52,7 @@ function CanvasNodeImpl({
   workflowMeta,
   composerTracks,
   onOpenInEditor,
+  onOpenEditorOnly,
 }: {
   node: GraphNode;
   edges: GraphEdge[];
@@ -77,6 +78,8 @@ function CanvasNodeImpl({
   composerTracks?: { kind: string; value: string; label: string }[];
   /** Composer node only: stash tracks + open /editor */
   onOpenInEditor?: () => void;
+  /** Composer node only: open this workflow's editor without replacing its timeline */
+  onOpenEditorOnly?: () => void;
 }) {
   const def = NODE_TYPES[node.type];
   if (!def) return null;
@@ -420,7 +423,11 @@ function CanvasNodeImpl({
             {(composerTracks?.length ?? 0) > 8 && <div className="text-fg-subtle">…and {(composerTracks?.length ?? 0) - 8} more</div>}
             <button onClick={onOpenInEditor} disabled={(composerTracks?.length ?? 0) === 0}
               className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-40">
-              Open in editor{(composerTracks?.length ?? 0) > 0 ? ` (${composerTracks!.length} track${composerTracks!.length === 1 ? "" : "s"})` : ""}
+              Send tracks → editor{(composerTracks?.length ?? 0) > 0 ? ` (${composerTracks!.length})` : ""}
+            </button>
+            <button onClick={() => { if (onOpenEditorOnly) onOpenEditorOnly(); }}
+              className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]">
+              Open editor (keep current timeline)
             </button>
           </div>
         )}

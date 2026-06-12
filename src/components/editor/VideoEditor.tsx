@@ -526,6 +526,48 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [saveState, setSaveState] = useState<"" | "saved" | "saving">("");
   useEffect(() => {
     if (restoredRef.current) return; restoredRef.current = true;
+    // Canvas hand-off first: a send from the Editor node REPLACES this
+    // workflow's project, so when it exists the regular restore is skipped.
+    let imported = false;
+    try {
+      const rawImp = localStorage.getItem(IMPORT_KEY);
+      if (rawImp) {
+        localStorage.removeItem(IMPORT_KEY);
+        const imp = JSON.parse(rawImp) as { tracks?: { kind: string; value: string; label: string }[] };
+        const tracks = (imp.tracks ?? []).filter((t) => t && typeof t.value === "string" && t.value);
+        if (tracks.length) {
+          // kind by URL extension first — port types lie (brand kit "image" port can carry mp4)
+          const kindOf = (t: { kind: string; value: string }): Kind => {
+            const v = t.value;
+            if (!v.startsWith("http")) return "text";
+            if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(v)) return "video";
+            if (/\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/i.test(v)) return "audio";
+            if (/\.(png|jpe?g|webp|gif|avif|svg)(\?|$)/i.test(v)) return "image";
+            return t.kind === "video" ? "video" : t.kind === "audio" ? "audio" : t.kind === "text" ? "text" : "image";
+          };
+          const newLayers: Layer[] = [];
+          const newClips: EditClip[] = [];
+          tracks.forEach((t, i) => {
+            const kind = kindOf(t);
+            const ltype = clipLayerType(kind);
+            const lid = `${ltype[0]}imp_${Date.now()}_${i}_${_l++}`; // one fresh layer per track — guaranteed unique
+            newLayers.push({ id: lid, type: ltype });
+            if (kind === "text") {
+              newClips.push({ id: uid(), kind, layer: lid, label: t.label || "Text", start: 0, duration: DEFAULTS.text, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, text: t.value, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 } });
+            } else {
+              newClips.push({ id: uid(), kind, layer: lid, url: t.value, label: t.label || kind, start: 0, duration: DEFAULTS[kind], fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, ...(kind === "video" || kind === "audio" ? { autoDur: true } : {}) });
+            }
+          });
+          if (!newLayers.some((l) => l.type === "video")) newLayers.push({ id: `vimp_${Date.now()}_${_l++}`, type: "video" });
+          if (!newLayers.some((l) => l.type === "audio")) newLayers.push({ id: `aimp_${Date.now()}_${_l++}`, type: "audio" });
+          setLayers(newLayers);
+          setClips(newClips);
+          setSelectedIds([]);
+          imported = true;
+        }
+      }
+    } catch { /* malformed hand-off — ignore */ }
+    if (imported) return;
     try {
       const raw = localStorage.getItem(PROJECT_KEY); if (!raw) return;
       const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string };
@@ -534,34 +576,6 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
         if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
       }
     } catch { /* ignore corrupt saves */ }
-    // Canvas hand-off: tracks stashed by the Editor node become layers.
-    // A send from the canvas REPLACES this workflow's editor project (fresh start).
-    try {
-      const rawImp = localStorage.getItem(IMPORT_KEY);
-      if (rawImp) {
-        localStorage.removeItem(IMPORT_KEY);
-        const imp = JSON.parse(rawImp) as { tracks?: { kind: string; value: string; label: string }[] };
-        const tracks = (imp.tracks ?? []).filter((t) => t && typeof t.value === "string" && t.value);
-        if (tracks.length) {
-          const newLayers: Layer[] = [];
-          const newClips: EditClip[] = [];
-          for (const t of tracks) {
-            const kind: Kind = t.kind === "video" ? "video" : t.kind === "audio" ? "audio" : t.kind === "text" ? "text" : "image";
-            const ltype = clipLayerType(kind);
-            const lid = `${ltype[0]}imp_${Date.now()}_${newLayers.length}`;
-            newLayers.push({ id: lid, type: ltype });
-            if (kind === "text") {
-              newClips.push({ id: uid(), kind, layer: lid, label: t.label || "Text", start: 0, duration: DEFAULTS.text, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, text: t.value, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 } });
-            } else {
-              newClips.push({ id: uid(), kind, layer: lid, url: t.value, label: t.label || kind, start: 0, duration: DEFAULTS[kind], fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, ...(kind === "video" || kind === "audio" ? { autoDur: true } : {}) });
-            }
-          }
-          setLayers(newLayers.length ? newLayers : [{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]);
-          setClips(newClips);
-          setSelectedIds([]);
-        }
-      }
-    } catch { /* malformed hand-off — ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveProject = useCallback(() => {
