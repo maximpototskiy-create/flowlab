@@ -17,6 +17,7 @@ export type EditorAsset = {
   label: string;
   duration: number | null;
   category?: string;
+  subpath?: string;
 };
 
 type LayerType = "video" | "image" | "text" | "effect" | "audio";
@@ -187,12 +188,27 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [binProject, setBinProject] = useState("");
   const [binSource, setBinSource] = useState("");
   const [binCategory, setBinCategory] = useState("all");
+  const [binSub, setBinSub] = useState("all");
   const [brands, setBrands] = useState<{ value: string; label: string }[]>([]);
   const [projects, setProjects] = useState<{ value: string; label: string }[]>([]);
   const [binLoading, setBinLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [resKey, setResKey] = useState("9:16");
   const [pxPerSec, setPxPerSec] = useState(60);
+  const [laneH, setLaneH] = useState(48); // track height (vertical timeline zoom)
+  const [leftW, setLeftW] = useState(240);   // library panel width (0 = collapsed)
+  const [rightW, setRightW] = useState(256); // tools panel width (0 = collapsed)
+  const dragPanel = (side: "left" | "right") => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX, startW = side === "left" ? leftW : rightW;
+    const move = (ev: PointerEvent) => {
+      const d = side === "left" ? ev.clientX - startX : startX - ev.clientX;
+      const w = Math.min(440, Math.max(180, startW + d));
+      if (side === "left") setLeftW(w); else setRightW(w);
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
   const [playing, setPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
   const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 });
@@ -237,7 +253,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   selectedRef.current = selectedIds;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
-  const bin = library.filter((a) => (binFilter === "all" || a.kind === binFilter) && (binCategory === "all" || a.category === binCategory));
+  const bin = library.filter((a) =>
+    (binFilter === "all" || a.kind === binFilter) &&
+    (binCategory === "all" || a.category === binCategory) &&
+    (binSub === "all" || (a.subpath || "").split("/")[0] === binSub));
+  const libSubs = binCategory === "all" ? [] : Array.from(new Set(library.filter((a) => a.category === binCategory && a.subpath).map((a) => (a.subpath as string).split("/")[0]))).sort();
   const libCats = Array.from(new Set(library.map((a) => a.category).filter((c): c is string => !!c)));
   const selTextCount = selectedIds.filter((id) => clips.find((c) => c.id === id)?.kind === "text").length;
   // ---- undo/redo (snapshots of clips+layers, debounced) ----
@@ -284,7 +304,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         wantBrand ? fetch(`/api/brand-assets/browse?${bp.toString()}`).then((r) => r.json()).catch(() => ({})) : Promise.resolve({}),
       ]);
       const aj = aR as { assets?: { id: string; cdnUrl: string; kind: string; prompt: string | null; brandName: string | null; durationSec: number | null }[]; brands?: { value: string; label: string }[]; projects?: { value: string; label: string }[] };
-      const bj = bR as { assets?: { id: string; url: string; kind: string; category: string; label: string | null }[] };
+      const bj = bR as { assets?: { id: string; url: string; kind: string; category: string; subpath?: string | null; label: string | null }[] };
       const seen = new Set<string>();
       const items: EditorAsset[] = [];
       for (const a of aj.assets || []) {
@@ -294,7 +314,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       for (const r of bj.assets || []) {
         if (!r.url?.startsWith("http") || seen.has(r.url)) continue;
         seen.add(r.url); const kind: EditorAsset["kind"] = r.kind === "video" ? "video" : r.kind === "audio" ? "audio" : "image";
-        items.push({ id: `ba-${r.id}`, url: r.url, kind, label: r.label || CAT_LABEL[r.category] || r.category || "asset", duration: null, category: r.category });
+        items.push({ id: `ba-${r.id}`, url: r.url, kind, label: r.label || CAT_LABEL[r.category] || r.category || "asset", duration: null, category: r.category, subpath: r.subpath || undefined });
       }
       setLibrary(items);
       if (Array.isArray(aj.brands)) setBrands(aj.brands);
@@ -492,12 +512,29 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       return out;
     });
   }, []);
-  // duplicate selected clips right after themselves
+  // duplicate selected clips onto a NEW layer (same type), keeping their time position
   const duplicateSelected = useCallback(() => {
     const sel = selectedRef.current; if (!sel.length) return;
+    const src = clipsRef.current.filter((c) => sel.includes(c.id));
+    if (!src.length) return;
+    // one new layer per source layer, inserted right below the original
+    const byLayer = new Map<string, EditClip[]>();
+    for (const c of src) { const a = byLayer.get(c.layer) ?? []; a.push(c); byLayer.set(c.layer, a); }
+    const layerMap = new Map<string, string>();
+    setLayers((prev) => {
+      const next = [...prev];
+      for (const [lid] of byLayer) {
+        const idx = next.findIndex((l) => l.id === lid);
+        const type = next[idx]?.type ?? "video";
+        const nid = `${type[0]}${Date.now()}_${_l++}`;
+        next.splice(idx === -1 ? next.length : idx + 1, 0, { id: nid, type });
+        layerMap.set(lid, nid);
+      }
+      return next;
+    });
     setClips((prev) => {
       const copies: EditClip[] = [];
-      for (const c of prev) if (sel.includes(c.id)) copies.push({ ...c, id: uid(), start: +(c.start + c.duration).toFixed(3) });
+      for (const c of prev) if (sel.includes(c.id)) copies.push({ ...c, id: uid(), layer: layerMap.get(c.layer) ?? c.layer });
       return [...prev, ...copies];
     });
   }, []);
@@ -562,7 +599,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         try { el.volume = alphaAt(c, tt); } catch { /* */ }
         if (playingRef.current && el.paused) el.play().catch(() => {});
         if (!playingRef.current && !el.paused) el.pause();
-      } else if (!el.paused) el.pause();
+      } else {
+        if (!el.paused) el.pause();
+        // pre-seek soon-to-start clips to their in-point so the cut is seamless
+        const ahead = c.start - tt;
+        if (ahead > 0 && ahead < 2) {
+          const want = c.inset || 0;
+          if (Math.abs(el.currentTime - want) > 0.05) { try { el.currentTime = want; } catch { /* */ } }
+        }
+      }
     }
   }, []);
   const stop = useCallback(() => {
@@ -596,8 +641,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       if (e.code === "Space") { e.preventDefault(); play(); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
-      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); }
-      else if (!e.metaKey && !e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); splitAtPlayhead(); }
+      else if ((e.metaKey || e.ctrlKey) && e.code === "KeyD") { e.preventDefault(); duplicateSelected(); }
+      else if ((e.metaKey || e.ctrlKey) && e.code === "KeyB") { e.preventDefault(); splitAtPlayhead(); }
+      else if (!e.metaKey && !e.ctrlKey && e.code === "KeyS") { e.preventDefault(); splitAtPlayhead(); }
       else if (e.key === "Delete" || e.key === "Backspace") { if (selectedRef.current.length) { e.preventDefault(); removeMany(selectedRef.current); } }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
@@ -856,9 +902,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   return (
     <div className="flex-1 flex min-h-0">
-      {/* Library (left) */}
-      <aside className="w-60 shrink-0 border-r border-border flex flex-col min-h-0">
-        <div className="h-11 shrink-0 border-b border-border flex items-center px-3 text-[12px] font-medium text-fg">Library</div>
+      {/* Library (left) — resizable & collapsible */}
+      {leftW === 0 && (
+        <button onClick={() => setLeftW(240)} title="Show Library" className="shrink-0 w-5 border-r border-border text-fg-subtle hover:text-fg text-[10px]">›</button>
+      )}
+      <aside style={{ width: leftW, display: leftW === 0 ? "none" : undefined }} className="relative shrink-0 border-r border-border flex flex-col min-h-0">
+        <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 text-[12px] font-medium text-fg">Library
+          <button onClick={() => setLeftW(0)} title="Hide panel" className="text-fg-subtle hover:text-fg">‹</button>
+        </div>
+        <div onPointerDown={dragPanel("left")} className="absolute top-0 -right-1 w-2 h-full cursor-col-resize z-20" title="Drag to resize" />
         <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
           <div className="flex gap-1.5">
             <button onClick={() => fileInputRef.current?.click()} className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]"><Plus size={12} /> Upload</button>
@@ -887,9 +939,18 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           </select>
           {libCats.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap text-[10px]">
-              <button onClick={() => setBinCategory("all")} className={`px-2 py-0.5 rounded ${binCategory === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
+              <button onClick={() => { setBinCategory("all"); setBinSub("all"); }} className={`px-2 py-0.5 rounded ${binCategory === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
               {libCats.map((c) => (
-                <button key={c} onClick={() => setBinCategory(c)} className={`px-2 py-0.5 rounded ${binCategory === c ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{CAT_LABEL[c] ?? c}</button>
+                <button key={c} onClick={() => { setBinCategory(c); setBinSub("all"); }} className={`px-2 py-0.5 rounded ${binCategory === c ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{CAT_LABEL[c] ?? c}</button>
+              ))}
+            </div>
+          )}
+          {libSubs.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap text-[10px]">
+              <span className="text-fg-subtle">↳</span>
+              <button onClick={() => setBinSub("all")} className={`px-2 py-0.5 rounded ${binSub === "all" ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>all</button>
+              {libSubs.map((sp) => (
+                <button key={sp} onClick={() => setBinSub(sp)} className={`px-2 py-0.5 rounded ${binSub === sp ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{sp}</button>
               ))}
             </div>
           )}
@@ -1020,8 +1081,9 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           <button onClick={() => removeMany(selectedIds)} disabled={!selectedIds.length} title="Delete selected" className="hover:text-red-400 disabled:opacity-30"><Trash2 size={13} /></button>
           <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={() => setPxPerSec((z) => Math.max(20, z - 20))} className="hover:text-fg"><ZoomOut size={13} /></button>
-            <button onClick={() => setPxPerSec((z) => Math.min(200, z + 20))} className="hover:text-fg"><ZoomIn size={13} /></button>
+            <button onClick={() => setPxPerSec((z) => Math.max(10, Math.round(z * 0.8)))} className="hover:text-fg" title="Zoom out (Cmd/Ctrl+wheel)"><ZoomOut size={13} /></button>
+            <button onClick={() => setPxPerSec((z) => Math.min(400, Math.round(z * 1.25)))} className="hover:text-fg" title="Zoom in (Cmd/Ctrl+wheel)"><ZoomIn size={13} /></button>
+            <input type="range" min={28} max={96} step={2} value={laneH} onChange={(e) => setLaneH(Number(e.target.value))} title="Track height (Alt+wheel)" className="w-14" />
           </div>
           {status && <span className="text-fg-subtle truncate max-w-[35%]">· {status}</span>}
         </div>
@@ -1034,7 +1096,11 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
         {/* Timeline */}
         <div className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
-          onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
+          onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}
+          onWheel={(e) => {
+            if (e.metaKey || e.ctrlKey) { e.preventDefault(); setPxPerSec((z) => Math.min(400, Math.max(10, Math.round(z * (e.deltaY < 0 ? 1.12 : 0.89))))); }
+            else if (e.altKey) { e.preventDefault(); setLaneH((h) => Math.min(96, Math.max(28, h + (e.deltaY < 0 ? 4 : -4)))); }
+          }}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
               <div className="w-28 shrink-0 border-r border-border/40" />
@@ -1077,7 +1143,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     </>)}
                   </div>
                   <div ref={(el) => { if (el) laneRefs.current.set(layer.id, el); else laneRefs.current.delete(layer.id); }}
-                    className={`relative flex-1 h-12 ${dropHint?.type === "lane" && dropHint.id === layer.id ? "bg-brand/10 ring-1 ring-inset ring-brand/50" : selectedLayer === layer.id ? "bg-brand/[0.04]" : ""}`}
+                    style={{ height: laneH }} className={`relative flex-1 ${dropHint?.type === "lane" && dropHint.id === layer.id ? "bg-brand/10 ring-1 ring-inset ring-brand/50" : selectedLayer === layer.id ? "bg-brand/[0.04]" : ""}`}
                     onClick={() => setSelectedLayer(layer.id)}
                     onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "lane", id: layer.id }); }}
                     onDragLeave={() => setDropHint((h) => (h?.type === "lane" && h.id === layer.id ? null : h))}
@@ -1085,8 +1151,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                     <div className="absolute top-0 bottom-0 w-0.5 bg-brand/60 pointer-events-none z-20" style={{ left: playhead * pxPerSec }} />
                     {onLayer(layer.id).map((c) => (
                       <div key={c.id} data-clip onPointerDown={(e) => onClipPointerDown(e, c, "move")} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => onClipContext(e, c)}
-                        style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec) }}
-                        className={`absolute top-1.5 h-9 rounded text-[10px] cursor-grab active:cursor-grabbing border touch-none overflow-hidden flex items-center ${
+                        style={{ left: c.start * pxPerSec, width: Math.max(24, c.duration * pxPerSec), top: 6, height: laneH - 12 }}
+                        className={`absolute rounded text-[10px] cursor-grab active:cursor-grabbing border touch-none overflow-hidden flex items-center ${
                           selectedIds.includes(c.id) ? "border-brand bg-brand/20 text-brand z-10"
                           : c.kind === "fx" ? "border-purple-500/50 bg-purple-500/15 text-purple-300"
                           : c.kind === "adjust" ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
@@ -1166,12 +1232,17 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
         </div>
       </div>
 
-      {/* Tools (right) */}
-      <aside className="w-64 shrink-0 border-l border-border flex flex-col min-h-0">
+      {/* Tools (right) — resizable & collapsible */}
+      {rightW === 0 && (
+        <button onClick={() => setRightW(256)} title="Show Tools" className="shrink-0 w-5 border-l border-border text-fg-subtle hover:text-fg text-[10px]">‹</button>
+      )}
+      <aside style={{ width: rightW, display: rightW === 0 ? "none" : undefined }} className="relative shrink-0 border-l border-border flex flex-col min-h-0">
+        <div onPointerDown={dragPanel("right")} className="absolute top-0 -left-1 w-2 h-full cursor-col-resize z-20" title="Drag to resize" />
         <div className="h-11 shrink-0 border-b border-border flex items-center gap-1 px-2 text-[11px]">
           {([["effects", "Effects"], ["filters", "Filters"], ["text", "Text"], ["subs", "Subtitles"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setPanelTab(k)} className={`px-2 py-1 rounded ${panelTab === k ? "bg-brand/15 text-brand" : "text-fg-muted hover:text-fg"}`}>{l}</button>
           ))}
+          <button onClick={() => setRightW(0)} title="Hide panel" className="ml-auto text-fg-subtle hover:text-fg">›</button>
         </div>
 
         {panelTab === "effects" && (

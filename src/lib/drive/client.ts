@@ -15,6 +15,7 @@ export type DriveFile = {
   name: string;
   mimeType: string;
   category: string; // hook | body | packshot | other
+  subpath: string;  // path inside the category folder ("" at category root), e.g. "EN" or "EN/Promo"
   sizeBytes: number | null;
 };
 
@@ -110,13 +111,15 @@ export async function collectBrandFiles(brandFolderId: string): Promise<DriveFil
   const drive = driveClient();
   const files: DriveFile[] = [];
 
-  async function walk(folderId: string, inheritedCategory: string): Promise<void> {
+  async function walk(folderId: string, inheritedCategory: string, subpath: string): Promise<void> {
     const children = await listChildren(drive, folderId);
     for (const c of children) {
       if (!c.id || !c.name) continue;
       if (c.mimeType === FOLDER_MIME) {
         const mapped = FOLDER_CATEGORY[c.name.trim().toLowerCase()];
-        await walk(c.id, mapped ?? inheritedCategory);
+        // entering a known category folder resets the subpath; any other folder extends it
+        if (mapped) await walk(c.id, mapped, "");
+        else await walk(c.id, inheritedCategory, subpath ? `${subpath}/${c.name.trim()}` : c.name.trim());
       } else if (
         (c.mimeType ?? "").startsWith("image/") ||
         (c.mimeType ?? "").startsWith("video/") ||
@@ -127,13 +130,14 @@ export async function collectBrandFiles(brandFolderId: string): Promise<DriveFil
           name: c.name,
           mimeType: c.mimeType ?? "",
           category: inheritedCategory,
+          subpath,
           sizeBytes: c.size ? Number(c.size) : null,
         });
       }
     }
   }
 
-  await walk(brandFolderId, "other");
+  await walk(brandFolderId, "other", "");
   return files;
 }
 

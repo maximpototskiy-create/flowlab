@@ -69,6 +69,14 @@ export async function importBrandBatch(brandId: string, maxPerRun: number): Prom
   const have = new Set(existing.map((e: { driveFileId: string | null }) => e.driveFileId));
   const fresh = driveFiles.filter((f) => !have.has(f.id));
 
+  // backfill subpath on rows imported before the column existed (no re-download)
+  try {
+    const withPath = driveFiles.filter((f) => have.has(f.id) && f.subpath);
+    for (const f of withPath.slice(0, 100)) {
+      await prisma.brandAsset.updateMany({ where: { brandId, driveFileId: f.id, subpath: null }, data: { subpath: f.subpath } });
+    }
+  } catch { /* non-fatal */ }
+
   let imported = 0;
   let embeddedImages = 0;
   let videos = 0;
@@ -101,7 +109,7 @@ export async function importBrandBatch(brandId: string, maxPerRun: number): Prom
       const { cdnUrl } = await uploadBytes(bytes, `brands/${brandId}/drive/${f.id}_${safeName}`, mime);
 
       const asset = await prisma.brandAsset.create({
-        data: { brandId, url: cdnUrl, kind, category: f.category, label: f.name, driveFileId: f.id },
+        data: { brandId, url: cdnUrl, kind, category: f.category, subpath: f.subpath || null, label: f.name, driveFileId: f.id },
       });
       imported++;
 

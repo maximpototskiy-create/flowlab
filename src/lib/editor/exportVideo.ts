@@ -311,7 +311,14 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
           if (Math.abs(el.currentTime - loc) > 0.35) { try { el.currentTime = loc; } catch { /* */ } }
           try { (el as HTMLMediaElement).volume = alphaAt(c, tt); } catch { /* */ }
           if (el.paused) el.play().catch(() => {});
-        } else if (!el.paused) el.pause();
+        } else {
+          if (!el.paused) el.pause();
+          const ahead = c.start - tt;
+          if (ahead > 0 && ahead < 2) {
+            const want = c.inset || 0;
+            if (Math.abs(el.currentTime - want) > 0.05) { try { el.currentTime = want; } catch { /* */ } }
+          }
+        }
       }
 
       // draw frame — single bottom→top pass (clips arrive z-ordered)

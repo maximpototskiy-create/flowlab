@@ -34,7 +34,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     where,
     orderBy,
     take: limit,
-    select: { id: true, url: true, kind: true, category: true, label: true, embedStatus: true, brandId: true, createdAt: true },
+    select: { id: true, url: true, kind: true, category: true, subpath: true, label: true, embedStatus: true, brandId: true, createdAt: true },
   });
 
   return NextResponse.json({ assets: rows });

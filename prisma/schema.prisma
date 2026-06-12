@@ -75,6 +75,7 @@ model BrandAsset {
   url       String
   kind      String   // image | video | audio
   category  String   // logo | ui | graphic | overlay | music | sound | reference | hook | body | packshot | other
+  subpath   String?  // subfolder path inside the category folder, e.g. "EN" or "EN/Promo"
   label     String?
   createdAt DateTime @default(now()) @map("created_at")
 
