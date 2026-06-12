@@ -47,6 +47,7 @@ export type ExportClip = {
   anim?: string;
   fx?: string;
   transType?: string;
+  inset?: number; // media in-point (s)
   tstyle?: TextStyle;
   words?: CapWord[];
 };
@@ -306,7 +307,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         if (!el) continue;
         const active = tt >= c.start && tt < c.start + c.duration;
         if (active) {
-          const loc = tt - c.start;
+          const loc = tt - c.start + (c.inset || 0);
           if (Math.abs(el.currentTime - loc) > 0.35) { try { el.currentTime = loc; } catch { /* */ } }
           try { (el as HTMLMediaElement).volume = alphaAt(c, tt); } catch { /* */ }
           if (el.paused) el.play().catch(() => {});

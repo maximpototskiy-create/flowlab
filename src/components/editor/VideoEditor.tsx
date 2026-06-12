@@ -7,6 +7,7 @@ import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
+  Scissors, Eye, EyeOff, Lock, Unlock,
 } from "lucide-react";
 
 export type EditorAsset = {
@@ -19,7 +20,7 @@ export type EditorAsset = {
 };
 
 type LayerType = "video" | "image" | "text" | "effect" | "audio";
-type Layer = { id: string; name?: string; type: LayerType };
+type Layer = { id: string; name?: string; type: LayerType; hidden?: boolean; locked?: boolean };
 type Kind = "video" | "image" | "audio" | "text" | "fx" | "adjust";
 const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3, audio: 4 };
 const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
@@ -134,6 +135,7 @@ type EditClip = {
   fx?: string;
   transType?: string;
   autoDur?: boolean;
+  inset?: number; // media in-point (s) — used after razor splits
   tstyle?: TextStyle;
   words?: CapWord[];
 };
@@ -320,15 +322,16 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     const rects: { id: string; x: number; y: number; w: number; h: number }[] = [];
+    const hiddenL = new Set(layers.filter((l) => l.hidden).map((l) => l.id));
     for (const c of clips) {
-      if (c.kind !== "text") continue;
+      if (c.kind !== "text" || hiddenL.has(c.layer)) continue;
       if (playhead < c.start || playhead >= c.start + c.duration) continue;
       const r = drawCaption(ctx, c as unknown as ExportClip, playhead, W, H, 1, { opacity: alphaAt(c as CompClip, playhead) || 1, scaleMul: 1, offX: 0, offY: 0 });
       if (r) rects.push({ id: c.id, ...r });
     }
     // interactive handles only when paused (kept light during playback)
     setCapRects((prev) => (playing ? (prev.length ? [] : prev) : rects));
-  }, [clips, playhead, previewSize.w, previewSize.h, playing, fontsTick]);
+  }, [clips, layers, playhead, previewSize.w, previewSize.h, playing, fontsTick]);
   const runSearch = async () => {
     const q = binQuery.trim();
     if (!q) { loadLibrary(); return; }
@@ -457,8 +460,47 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     } finally { setSubBusy(false); }
   };
   const update = (id: string, patch: Partial<EditClip>) => setClips((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  // for x/y/scale inspector fields: edit the whole selection when several clips are selected
+  const updateSel = (id: string, patch: Partial<EditClip>) => {
+    const ids = selectedRef.current.includes(id) && selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([id]);
+    setClips((p) => p.map((c) => (ids.has(c.id) ? { ...c, ...patch } : c)));
+  };
   const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelectedIds((s) => s.filter((x) => x !== id)); }, []);
   const removeMany = useCallback((ids: string[]) => { const set = new Set(ids); setClips((p) => p.filter((c) => !set.has(c.id))); setSelectedIds([]); }, []);
+  // razor: split clips at the playhead (selected ones, or every clip under the playhead)
+  const splitAtPlayhead = useCallback(() => {
+    const t = playheadRef.current;
+    const sel = selectedRef.current;
+    setClips((prev) => {
+      const targets = prev.filter((c) => t > c.start + 0.05 && t < c.start + c.duration - 0.05 && (sel.length ? sel.includes(c.id) : true));
+      if (!targets.length) return prev;
+      const out: EditClip[] = [];
+      for (const c of prev) {
+        if (!targets.includes(c)) { out.push(c); continue; }
+        const cut = +(t - c.start).toFixed(3);
+        const first: EditClip = { ...c, duration: cut };
+        const second: EditClip = { ...c, id: uid(), start: +t.toFixed(3), duration: +(c.duration - cut).toFixed(3), inset: +((c.inset || 0) + cut).toFixed(3), fadeIn: 0 };
+        first.fadeOut = 0;
+        if (c.kind === "text" && c.words?.length) {
+          const fw = c.words.filter((w) => w.t < cut);
+          const sw = c.words.filter((w) => w.t >= cut).map((w) => ({ ...w, t: +(w.t - cut).toFixed(3) }));
+          first.words = fw; first.text = fw.map((w) => w.text).join(" ") || c.text;
+          second.words = sw; second.text = sw.map((w) => w.text).join(" ") || c.text;
+        }
+        out.push(first, second);
+      }
+      return out;
+    });
+  }, []);
+  // duplicate selected clips right after themselves
+  const duplicateSelected = useCallback(() => {
+    const sel = selectedRef.current; if (!sel.length) return;
+    setClips((prev) => {
+      const copies: EditClip[] = [];
+      for (const c of prev) if (sel.includes(c.id)) copies.push({ ...c, id: uid(), start: +(c.start + c.duration).toFixed(3) });
+      return [...prev, ...copies];
+    });
+  }, []);
   const duplicate = (id: string) => setClips((p) => { const c = p.find((x) => x.id === id); return c ? [...p, { ...c, id: uid(), start: c.start + 0.3 }] : p; });
   const layerType = (c: { kind: Kind }): LayerType => clipLayerType(c.kind);
   const createLayerAt = (index: number, type: LayerType): string => {
@@ -507,12 +549,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     compute(); const ro = new ResizeObserver(compute); ro.observe(c); return () => ro.disconnect();
   }, [res]);
 
+  const layersRef = useRef<Layer[]>([]);
+  layersRef.current = layers;
   const syncMedia = useCallback((tt: number) => {
+    const hidden = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
     for (const c of clipsRef.current) {
       const el = mediaRefs.current.get(c.id); if (!el) continue;
-      const active = tt >= c.start && tt < c.start + c.duration;
+      const active = tt >= c.start && tt < c.start + c.duration && !hidden.has(c.layer);
       if (active) {
-        const local = tt - c.start;
+        const local = tt - c.start + (c.inset || 0);
         if (Math.abs(el.currentTime - local) > 0.3) { try { el.currentTime = local; } catch { /* */ } }
         try { el.volume = alphaAt(c, tt); } catch { /* */ }
         if (playingRef.current && el.paused) el.play().catch(() => {});
@@ -551,10 +596,12 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
       if (e.code === "Space") { e.preventDefault(); play(); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
+      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); }
+      else if (!e.metaKey && !e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); splitAtPlayhead(); }
       else if (e.key === "Delete" || e.key === "Backspace") { if (selectedRef.current.length) { e.preventDefault(); removeMany(selectedRef.current); } }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
-  }, [play, removeMany, undo, redo]);
+  }, [play, removeMany, undo, redo, duplicateSelected, splitAtPlayhead]);
 
   useEffect(() => {
     if (!menu && !transMenu) return;
@@ -568,12 +615,13 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     setExporting(true); setProgress(0); setStatus("Recording…"); stop();
     try {
       const vis = layers.filter((l) => l.type !== "audio");
+      const hiddenIds = new Set(layers.filter((l) => l.hidden).map((l) => l.id));
       const z: EditClip[] = [];
-      for (let i = vis.length - 1; i >= 0; i--) z.push(...clips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start));
-      const ordered = [...z, ...clips.filter((c) => !z.includes(c))];
+      for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...clips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
+      const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, tstyle: c.tstyle, words: c.words })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, tstyle: c.tstyle, words: c.words })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -591,8 +639,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     for (const [id, el] of laneRefs.current) { const r = el.getBoundingClientRect(); if (clientY >= r.top && clientY <= r.bottom) { const lane = layers.find((l) => l.id === id); return lane && lane.type === type ? { type: "lane", id } : null; } }
     return null;
   };
+  const isLocked = (c: EditClip) => !!layersRef.current.find((l) => l.id === c.layer)?.locked;
   const onClipPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim") => {
-    e.stopPropagation(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    e.stopPropagation();
+    if (isLocked(c)) return; (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     const ids = additive ? (selectedRef.current.includes(c.id) ? selectedRef.current.filter((x) => x !== c.id) : [...selectedRef.current, c.id]) : (selectedRef.current.includes(c.id) ? selectedRef.current : [c.id]);
     setSelectedIds(ids);
@@ -684,6 +734,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const onVpDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "scale") => {
     if (e.button === 1) return; // middle button → let the viewport pan
     e.stopPropagation();
+    if (isLocked(c)) return;
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     const ids = additive ? (selectedRef.current.includes(c.id) ? selectedRef.current.filter((x) => x !== c.id) : [...selectedRef.current, c.id]) : (selectedRef.current.includes(c.id) ? selectedRef.current : [c.id]);
     setSelectedIds(ids);
@@ -715,13 +766,18 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const onCapDown = (e: React.PointerEvent, c: EditClip) => {
     if (e.button !== 0) return;
     e.stopPropagation();
+    if (isLocked(c)) return;
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     const ids = additive ? (selectedRef.current.includes(c.id) ? selectedRef.current.filter((x) => x !== c.id) : [...selectedRef.current, c.id]) : (selectedRef.current.includes(c.id) ? selectedRef.current : [c.id]);
     setSelectedIds(ids);
-    const s = { sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y };
+    // group move: same delta to every selected text clip
+    const group = (ids.length ? ids : [c.id]).filter((id) => clipsRef.current.find((x) => x.id === id)?.kind === "text");
+    const orig = new Map(group.map((id) => { const cc = clipsRef.current.find((x) => x.id === id)!; return [id, { x: cc.x, y: cc.y }]; }));
+    const s = { sx: e.clientX, sy: e.clientY };
     const move = (ev: PointerEvent) => {
       const z = viewZoomRef.current || 1;
-      update(c.id, { x: Math.round(s.ox + (ev.clientX - s.sx) / z), y: Math.round(s.oy + (ev.clientY - s.sy) / z) });
+      const dx = (ev.clientX - s.sx) / z, dy = (ev.clientY - s.sy) / z;
+      setClips((prev) => prev.map((x) => { const o = orig.get(x.id); return o ? { ...x, x: Math.round(o.x + dx), y: Math.round(o.y + dy) } : x; }));
     };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
@@ -729,11 +785,15 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const onCapScale = (e: React.PointerEvent, c: EditClip) => {
     if (e.button !== 0) return;
     e.stopPropagation();
-    const s = { sx: e.clientX, sy: e.clientY, os: c.scale };
+    if (isLocked(c)) return;
+    // group scale: same delta applied to each selected caption's own scale
+    const group = (selectedRef.current.includes(c.id) ? selectedRef.current : [c.id]).filter((id) => clipsRef.current.find((x) => x.id === id)?.kind === "text");
+    const orig = new Map(group.map((id) => [id, clipsRef.current.find((x) => x.id === id)!.scale]));
+    const s = { sx: e.clientX, sy: e.clientY };
     const move = (ev: PointerEvent) => {
       const z = viewZoomRef.current || 1;
-      const d = ((ev.clientX - s.sx) + (ev.clientY - s.sy)) / z;
-      update(c.id, { scale: Math.min(8, Math.max(0.2, +(s.os + d / 250).toFixed(2))) });
+      const d = ((ev.clientX - s.sx) + (ev.clientY - s.sy)) / z / 250;
+      setClips((prev) => prev.map((x) => { const o = orig.get(x.id); return o != null ? { ...x, scale: Math.min(8, Math.max(0.2, +(o + d).toFixed(2))) } : x; }));
     };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
@@ -792,7 +852,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
 
   // z-order (bottom → top) of all visual-layer clips
   const zClips: EditClip[] = [];
-  for (let i = visualLayers.length - 1; i >= 0; i--) zClips.push(...onLayer(visualLayers[i].id));
+  for (let i = visualLayers.length - 1; i >= 0; i--) { if (visualLayers[i].hidden) continue; zClips.push(...onLayer(visualLayers[i].id)); }
 
   return (
     <div className="flex-1 flex min-h-0">
@@ -954,6 +1014,10 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           <button onClick={play} className="text-fg hover:text-brand">{playing ? <Pause size={16} /> : <Play size={16} />}</button>
           <button onClick={undo} title="Undo (Cmd/Ctrl+Z)" className="hover:text-fg text-[13px] leading-none">↺</button>
           <button onClick={redo} title="Redo (Shift+Cmd/Ctrl+Z)" className="hover:text-fg text-[13px] leading-none">↻</button>
+          <span className="w-px h-4 bg-border" />
+          <button onClick={splitAtPlayhead} title="Split at playhead (S)" className="hover:text-fg"><Scissors size={13} /></button>
+          <button onClick={duplicateSelected} disabled={!selectedIds.length} title="Duplicate (Cmd/Ctrl+D)" className="hover:text-fg disabled:opacity-30"><Copy size={13} /></button>
+          <button onClick={() => removeMany(selectedIds)} disabled={!selectedIds.length} title="Delete selected" className="hover:text-red-400 disabled:opacity-30"><Trash2 size={13} /></button>
           <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
           <div className="ml-auto flex items-center gap-2">
             <button onClick={() => setPxPerSec((z) => Math.max(20, z - 20))} className="hover:text-fg"><ZoomOut size={13} /></button>
@@ -973,7 +1037,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
           onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
-              <div className="w-20 shrink-0 border-r border-border/40" />
+              <div className="w-28 shrink-0 border-r border-border/40" />
               <div className="relative flex-1 h-6 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
                 {Array.from({ length: Math.ceil(totalDur) + 1 }).map((_, s) => (
                   <div key={s} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pointer-events-none" style={{ left: s * pxPerSec }}>{s}s</div>
@@ -985,7 +1049,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
               <div key={layer.id}>
                 {/* insertion strip above this layer */}
                 <div className="flex h-2.5 items-center">
-                  <div className="w-20 shrink-0" />
+                  <div className="w-28 shrink-0" />
                   <div ref={(el) => { if (el) stripRefs.current.set(`strip-${li}`, el); else stripRefs.current.delete(`strip-${li}`); }}
                     onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li}` }); }}
                     onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li}` ? null : h))}
@@ -994,15 +1058,23 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 </div>
                 <div className="flex items-stretch border-b border-border/40 min-h-[48px]">
                   <div data-label onClick={() => setSelectedLayer(layer.id)} onDoubleClick={() => setRenamingLayer(layer.id)}
-                    className={`w-20 shrink-0 flex items-center px-1.5 text-[9px] uppercase tracking-wider border-r border-border/40 cursor-pointer ${selectedLayer === layer.id ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>
+                    className={`w-28 shrink-0 flex items-center gap-1 px-1.5 text-[9px] uppercase tracking-wider border-r border-border/40 cursor-pointer ${selectedLayer === layer.id ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>
                     {renamingLayer === layer.id ? (
                       <input autoFocus defaultValue={labelFor(layer)} onClick={(e) => e.stopPropagation()}
                         onBlur={(e) => { renameLayer(layer.id, e.target.value); setRenamingLayer(null); }}
                         onKeyDown={(e) => { if (e.key === "Enter") { renameLayer(layer.id, (e.target as HTMLInputElement).value); setRenamingLayer(null); } if (e.key === "Escape") setRenamingLayer(null); }}
                         className="w-full bg-bg border border-brand rounded px-1 py-0.5 text-fg outline-none normal-case" />
-                    ) : (
-                      <span className="truncate" title="Click to select · double-click to rename">{labelFor(layer)}</span>
-                    )}
+                    ) : (<>
+                      <span className="truncate flex-1" title="Click to select · double-click to rename">{labelFor(layer)}</span>
+                      <button onClick={(e) => { e.stopPropagation(); setLayers((p) => p.map((l) => (l.id === layer.id ? { ...l, hidden: !l.hidden } : l))); }}
+                        title={layer.hidden ? "Show layer" : "Hide layer"} className={layer.hidden ? "text-fg-subtle/50" : "hover:text-fg"}>
+                        {layer.hidden ? <EyeOff size={11} /> : <Eye size={11} />}
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); setLayers((p) => p.map((l) => (l.id === layer.id ? { ...l, locked: !l.locked } : l))); }}
+                        title={layer.locked ? "Unlock layer" : "Lock layer"} className={layer.locked ? "text-amber-400" : "hover:text-fg"}>
+                        {layer.locked ? <Lock size={11} /> : <Unlock size={11} />}
+                      </button>
+                    </>)}
                   </div>
                   <div ref={(el) => { if (el) laneRefs.current.set(layer.id, el); else laneRefs.current.delete(layer.id); }}
                     className={`relative flex-1 h-12 ${dropHint?.type === "lane" && dropHint.id === layer.id ? "bg-brand/10 ring-1 ring-inset ring-brand/50" : selectedLayer === layer.id ? "bg-brand/[0.04]" : ""}`}
@@ -1056,7 +1128,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                 {/* bottom insertion strip after the last layer */}
                 {li === layers.length - 1 && (
                   <div className="flex h-2.5 items-center">
-                    <div className="w-20 shrink-0" />
+                    <div className="w-28 shrink-0" />
                     <div ref={(el) => { if (el) stripRefs.current.set(`strip-${li + 1}`, el); else stripRefs.current.delete(`strip-${li + 1}`); }}
                       onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li + 1}` }); }}
                       onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li + 1}` ? null : h))}
@@ -1083,7 +1155,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
             {(sel.kind === "video" || sel.kind === "image" || sel.kind === "text") && (
               <>
                 <label className="flex items-center gap-1 text-fg-muted">anim<select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
-                <label className="flex items-center gap-1 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => update(sel.id, { scale: Number(e.target.value) })} className="w-16" /></label>
+                <label className="flex items-center gap-1 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => updateSel(sel.id, { scale: Number(e.target.value) })} className="w-16" /></label>
               </>
             )}
             <label className="flex items-center gap-1 text-fg-muted">in<input type="number" min={0} step={0.1} value={sel.fadeIn} onChange={(e) => update(sel.id, { fadeIn: Math.max(0, Number(e.target.value) || 0) })} className="bg-bg-card border border-border rounded px-1.5 py-1 w-12 text-fg outline-none focus:border-brand" />s</label>
