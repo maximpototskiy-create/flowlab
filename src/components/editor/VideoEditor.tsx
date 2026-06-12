@@ -258,6 +258,7 @@ type EditClip = {
   autoDur?: boolean;
   inset?: number; // media in-point (s) — used after razor splits and left-trim
   srcDur?: number; // full source media duration (s) — auto-detected, allows un-trim
+  section?: string; // Hook | Body | Packshot | CTA — set by the canvas hand-off
   volume?: number; // 0..2, default 1
   muted?: boolean;
   blend?: string;    // "" | "screen" | "multiply"
@@ -553,10 +554,11 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
             const ltype = clipLayerType(kind);
             const lid = `${ltype[0]}imp_${Date.now()}_${i}_${_l++}`; // one fresh layer per track — guaranteed unique
             newLayers.push({ id: lid, type: ltype, ...(t.section ? { name: t.section } : {}) });
+            const sec = t.section ? { section: t.section } : {};
             if (kind === "text") {
-              newClips.push({ id: uid(), kind, layer: lid, label: t.label || "Text", start: 0, duration: DEFAULTS.text, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, text: t.value, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 } });
+              newClips.push({ id: uid(), kind, layer: lid, label: t.label || "Text", start: 0, duration: DEFAULTS.text, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, text: t.value, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 }, ...sec });
             } else {
-              newClips.push({ id: uid(), kind, layer: lid, url: t.value, label: t.label || kind, start: 0, duration: DEFAULTS[kind], fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, ...(kind === "video" || kind === "audio" ? { autoDur: true } : {}) });
+              newClips.push({ id: uid(), kind, layer: lid, url: t.value, label: t.label || kind, start: 0, duration: DEFAULTS[kind], fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, ...(kind === "video" || kind === "audio" ? { autoDur: true } : {}), ...sec });
             }
           });
           if (!newLayers.some((l) => l.type === "video")) newLayers.push({ id: `vimp_${Date.now()}_${_l++}`, type: "video" });
@@ -564,6 +566,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
           setLayers(newLayers);
           setClips(newClips);
           setSelectedIds([]);
+          if (newClips.some((c) => c.section)) sectionLayoutRef.current = true; // lay out sequentially once real durations arrive
           imported = true;
         }
       }
@@ -840,6 +843,31 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     setLayers((p) => { const n = [...p]; n.splice(Math.max(0, Math.min(index, n.length)), 0, { id, type }); return n; });
     return id;
   };
+  // Section auto-layout: after a canvas hand-off with Hook/Body/Packshot/CTA,
+  // place the sections back-to-back (section start = end of the previous one)
+  // as soon as every sectioned media clip knows its real duration. Runs once
+  // per import; manual edits afterwards are never overwritten.
+  const sectionLayoutRef = useRef(false);
+  useEffect(() => {
+    if (!sectionLayoutRef.current) return;
+    const sec = clips.filter((c) => c.section);
+    if (!sec.length) { sectionLayoutRef.current = false; return; }
+    if (sec.some((c) => c.autoDur)) return; // durations still loading
+    sectionLayoutRef.current = false;
+    const ORDER = ["Hook", "Body", "Packshot", "CTA"];
+    const names = Array.from(new Set(sec.map((c) => c.section as string)))
+      .sort((a, b) => (ORDER.indexOf(a) === -1 ? 99 : ORDER.indexOf(a)) - (ORDER.indexOf(b) === -1 ? 99 : ORDER.indexOf(b)));
+    let cursor = 0;
+    const startBy = new Map<string, number>();
+    for (const name of names) {
+      startBy.set(name, cursor);
+      // a section lasts as long as its longest visual (video/image); audio/text ride along
+      const span = Math.max(...sec.filter((c) => c.section === name && (c.kind === "video" || c.kind === "image")).map((c) => c.duration), 1);
+      cursor = +(cursor + span).toFixed(2);
+    }
+    setClips((prev) => prev.map((c) => (c.section && startBy.has(c.section) ? { ...c, start: startBy.get(c.section) as number } : c)));
+  }, [clips]);
+
   // auto-prune empty layers (keep ≥1 video + ≥1 audio baseline) — never while dragging.
   // The first (mount) run is skipped: it closes over the pre-restore empty clips
   // and would prune freshly restored/imported layers, piling clips onto one track.
@@ -1747,6 +1775,22 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                     const sec = i * step;
                     return (
                       <div key={i} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pointer-events-none" style={{ left: sec * pxPerSec }}>{fmtTick(sec)}</div>
+                    );
+                  });
+                })()}
+                {(() => {
+                  const sec = clips.filter((c) => c.section);
+                  if (!sec.length) return null;
+                  const names = Array.from(new Set(sec.map((c) => c.section as string)));
+                  const COLORS: Record<string, string> = { Hook: "#f59e0b", Body: "#38bdf8", Packshot: "#a78bfa", CTA: "#34d399" };
+                  return names.map((name) => {
+                    const cs = sec.filter((c) => c.section === name);
+                    const s0 = Math.min(...cs.map((c) => c.start));
+                    const s1 = Math.max(...cs.map((c) => c.start + c.duration));
+                    return (
+                      <div key={name} className="absolute bottom-0 h-1.5 rounded-sm pointer-events-none flex items-center" style={{ left: s0 * pxPerSec, width: Math.max(8, (s1 - s0) * pxPerSec), background: (COLORS[name] ?? "#888") + "66", boxShadow: `inset 0 -1.5px 0 ${COLORS[name] ?? "#888"}` }}>
+                        <span className="text-[7px] leading-none px-1 -translate-y-2.5" style={{ color: COLORS[name] ?? "#888" }}>{name}</span>
+                      </div>
                     );
                   });
                 })()}
