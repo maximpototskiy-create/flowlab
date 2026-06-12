@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import { Check, Package, Music, Video as VideoIcon } from "lucide-react";
+import { useEffect, useState, useMemo , useRef} from "react";
+import { Check, Package, Music, Video as VideoIcon , Play, Pause} from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BrandAssetsPicker — UI for the Brand Assets canvas node.
@@ -46,6 +46,17 @@ export default function BrandAssetsPicker({
   onChange: (next: string[]) => void;
   expanded?: boolean;
 }) {
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewingUrl, setPreviewingUrl] = useState<string | null>(null);
+  const togglePreview = (url: string) => {
+    const cur = previewAudioRef.current;
+    if (previewingUrl === url && cur) { cur.pause(); setPreviewingUrl(null); return; }
+    if (cur) cur.pause();
+    const a = new Audio(url); a.volume = 0.9; a.onended = () => setPreviewingUrl(null);
+    previewAudioRef.current = a; setPreviewingUrl(url);
+    a.play().catch(() => setPreviewingUrl(null));
+  };
+  useEffect(() => () => { previewAudioRef.current?.pause(); }, []);
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("all");
@@ -210,6 +221,8 @@ export default function BrandAssetsPicker({
               onMouseDown={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); toggle(a.url); }}
+              onMouseEnter={(e) => { const v = e.currentTarget.querySelector("video"); if (v) (v as HTMLVideoElement).play().catch(() => {}); }}
+              onMouseLeave={(e) => { const v = e.currentTarget.querySelector("video"); if (v) { (v as HTMLVideoElement).pause(); (v as HTMLVideoElement).currentTime = 0; } }}
               className={`relative aspect-[9/16] rounded-md overflow-hidden border transition ${
                 isOn ? "border-brand ring-1 ring-brand" : visuallyActive ? "border-border" : "border-border opacity-40"
               }`}
@@ -221,12 +234,20 @@ export default function BrandAssetsPicker({
               )}
               {a.kind === "video" && (
                 <div className="w-full h-full flex items-center justify-center bg-black">
-                  <video src={a.url} className="w-full h-full object-cover" muted preload="metadata" />
-                  <VideoIcon size={14} className="absolute text-white/80" />
+                  <video src={a.url} className="w-full h-full object-cover pointer-events-none" muted loop preload="metadata" />
+                  <VideoIcon size={14} className="absolute text-white/80 pointer-events-none" />
                 </div>
               )}
               {a.kind === "audio" && (
-                <div className="w-full h-full flex items-center justify-center"><Music size={16} className="text-fg-subtle" /></div>
+                <div className="w-full h-full flex items-center justify-center relative"><Music size={16} className="text-fg-subtle" />
+                  <span role="button" tabIndex={0}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); togglePreview(a.url); }}
+                    title={previewingUrl === a.url ? "Stop" : "Preview"}
+                    className="absolute bottom-1 right-1 w-6 h-6 grid place-items-center rounded-full bg-black/70 text-white hover:bg-black/90 cursor-pointer">
+                    {previewingUrl === a.url ? <Pause size={11} /> : <Play size={11} />}
+                  </span>
+                </div>
               )}
               <span className="absolute top-1 left-1 px-1 rounded bg-black/55 text-[7px] uppercase text-white/85">
                 {CAT_LABEL[a.category] ?? a.category}

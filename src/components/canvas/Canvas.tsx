@@ -1881,64 +1881,72 @@ export default function Canvas({
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 bg-bg-card border border-border rounded-full px-2 py-1 shadow-node">
             <button
               onClick={() => setZoom((z) => Math.max(0.4, z - 0.1))}
-              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Zoom out"
             >
               <Minus size={12} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Zoom out</span>
             </button>
             <span className="text-[10px] text-fg-muted px-1 tabular-nums">{Math.round(zoom * 100)}%</span>
             <button
               onClick={() => setZoom((z) => Math.min(2, z + 0.1))}
-              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Zoom in"
             >
               <Plus size={12} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Zoom in</span>
             </button>
             <div className="w-px h-4 bg-border mx-1" />
             <button
               onClick={undo}
-              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Undo (⌘/Ctrl+Z)"
             >
               <Undo2 size={12} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Undo</span>
             </button>
             <button
               onClick={redo}
-              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Redo (⌘/Ctrl+Shift+Z)"
             >
               <Redo2 size={12} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Redo</span>
             </button>
             <div className="w-px h-4 bg-border mx-1" />
             <button
               onClick={() => { setZoom(1); setPan({ x: 200, y: 100 }); }}
-              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Reset view"
             >
               <Maximize size={11} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Reset view</span>
             </button>
             <button
               onClick={organizeNodes}
-              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Auto-organize (arrange nodes by flow)"
             >
               <Network size={12} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Auto-organize</span>
             </button>
             <button
               onClick={() => setShowHelp((v) => !v)}
-              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted"
+              className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Keyboard shortcuts & gestures"
             >
               <HelpCircle size={12} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Keyboard shortcuts & gestures</span>
             </button>
             <button
               onClick={() => setShowAssets((v) => !v)}
-              className={`w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover ${
+              className={`w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover group relative hover:text-fg ${
                 showAssets ? "text-brand" : "text-fg-muted"
               }`}
               title="Asset library"
             >
               <Images size={12} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Asset library</span>
             </button>
           </div>
 

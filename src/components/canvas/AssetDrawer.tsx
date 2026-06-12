@@ -40,6 +40,8 @@ export default function AssetDrawer({
   const [source, setSource] = useState<"library" | "generated" | "ui">("generated");
   const [genSource, setGenSource] = useState<"projects" | "fal">("projects");
   const [libCategory, setLibCategory] = useState<string>("all");
+  const [libSub, setLibSub] = useState<string>("all");
+  const [subByUrl, setSubByUrl] = useState<Record<string, string>>({});
   const isFal = source === "generated" && genSource === "fal";
   const [kind, setKind] = useState("");
   const [q, setQ] = useState("");
@@ -98,7 +100,10 @@ export default function AssetDrawer({
           bp.set("limit", String(targetLimit));
           const bres = await fetch(`/api/brand-assets/browse?${bp.toString()}`);
           const bdata = await bres.json();
-          const brows: Array<{ url: string; kind: string; category: string | null }> = bdata.assets ?? [];
+          const brows: Array<{ url: string; kind: string; category: string | null; subpath?: string | null }> = bdata.assets ?? [];
+          const sm: Record<string, string> = {};
+          for (const r of brows) if (r.subpath) sm[r.url] = r.subpath.split("/")[0];
+          setSubByUrl(sm);
           setAssets(
             brows.map((r, i) => ({
               id: `lib-b-${i}-${r.url}`,
@@ -199,7 +204,8 @@ export default function AssetDrawer({
   }, [limit, loadPage]);
 
   // Tab filter is purely local now → instant switching, no refetch.
-  const visible = kind ? assets.filter((a) => a.kind === kind) : assets;
+  const visibleBase = source === "library" && libSub !== "all" ? assets.filter((a) => subByUrl[a.cdnUrl] === libSub) : assets;
+  const visible = kind ? visibleBase.filter((a) => a.kind === kind) : visibleBase;
 
   // Stop wheel from reaching the canvas. The canvas binds a NATIVE wheel
   // listener on its own element, which fires on bubble BEFORE React's
@@ -331,7 +337,7 @@ export default function AssetDrawer({
             {["all", "logo", "ui", "store", "graphic", "overlay", "music", "sound", "reference", "hook", "body", "packshot", "other"].map((c) => (
               <button
                 key={c}
-                onClick={() => setLibCategory(c)}
+                onClick={() => { setLibCategory(c); setLibSub("all"); }}
                 className={`px-2 py-0.5 rounded-full text-[9px] border transition ${
                   libCategory === c ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
                 }`}
@@ -341,6 +347,28 @@ export default function AssetDrawer({
             ))}
           </div>
         )}
+        {source === "library" && (() => {
+          const subs = Array.from(new Set(Object.values(subByUrl))).sort();
+          if (!subs.length) return null;
+          return subs.length <= 6 ? (
+            <div className="flex flex-wrap items-center gap-1 text-[9px]">
+              <span className="text-fg-subtle">↳</span>
+              {["all", ...subs].map((sp) => (
+                <button key={sp} onClick={() => setLibSub(sp)} title={sp}
+                  className={`px-2 py-0.5 rounded-full border max-w-[110px] truncate transition ${libSub === sp ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"}`}>
+                  {sp}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <label className="flex items-center gap-1.5 text-[10px] text-fg-subtle">↳
+              <select value={libSub} onChange={(e) => setLibSub(e.target.value)} className="flex-1 bg-bg border border-border rounded px-1.5 py-1 text-[11px] text-fg outline-none">
+                <option value="all">All subfolders ({subs.length})</option>
+                {subs.map((sp) => <option key={sp} value={sp}>{sp}</option>)}
+              </select>
+            </label>
+          );
+        })()}
         <div className="flex gap-1.5">
           <div className="relative flex-1">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />

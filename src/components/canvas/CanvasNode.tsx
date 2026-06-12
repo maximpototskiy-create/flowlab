@@ -81,6 +81,7 @@ function CanvasNodeImpl({
   /** Composer node only: stash the connected tracks right before navigation */
   onStashTracks?: () => void;
 }) {
+  const composerDownRef = useRef<{ x: number; y: number } | null>(null);
   const def = NODE_TYPES[node.type];
   if (!def) return null;
 
@@ -422,7 +423,14 @@ function CanvasNodeImpl({
             ))}
             {(composerTracks?.length ?? 0) > 8 && <div className="text-fg-subtle">…and {(composerTracks?.length ?? 0) - 8} more</div>}
             {(composerTracks?.length ?? 0) > 0 ? (
-              <a href={editorHref} target="_blank" rel="noreferrer" onClick={onStashTracks}
+              <a href={editorHref} target="_blank" rel="noreferrer" draggable={false}
+                onPointerDown={(e) => { e.stopPropagation(); composerDownRef.current = { x: e.clientX, y: e.clientY }; }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const d = composerDownRef.current;
+                  if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) { e.preventDefault(); return; } // it was a drag, not a click
+                  if (onStashTracks) onStashTracks();
+                }}
                 className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium hover:opacity-90">
                 Send tracks → editor ({composerTracks!.length})
               </a>
@@ -431,7 +439,13 @@ function CanvasNodeImpl({
                 Send tracks → editor
               </span>
             )}
-            <a href={editorHref} target="_blank" rel="noreferrer"
+            <a href={editorHref} target="_blank" rel="noreferrer" draggable={false}
+              onPointerDown={(e) => { e.stopPropagation(); composerDownRef.current = { x: e.clientX, y: e.clientY }; }}
+              onClick={(e) => {
+                e.stopPropagation();
+                const d = composerDownRef.current;
+                if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) { e.preventDefault(); return; }
+              }}
               className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]">
               Open editor (keep current timeline)
             </a>
