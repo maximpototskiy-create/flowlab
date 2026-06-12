@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
 import type { TextStyle, CapWord } from "@/lib/editor/exportVideo";
+import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
@@ -24,59 +25,6 @@ const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3
 const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
 const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" ? "text" : k === "image" ? "image" : "video");
 const CAT_LABEL: Record<string, string> = { logo: "Logo", ui: "UI", store: "Store", graphic: "Graphic", overlay: "Overlay", music: "Music", sound: "Sound", reference: "Reference", hook: "Hook", body: "Body", packshot: "Packshot", other: "Other" };
-// shared text measurement so the preview wraps EXACTLY like the canvas export
-let _measCtx: CanvasRenderingContext2D | null = null;
-function measureCtx(): CanvasRenderingContext2D | null {
-  if (!_measCtx && typeof document !== "undefined") { const cv = document.createElement("canvas"); _measCtx = cv.getContext("2d"); }
-  return _measCtx;
-}
-function capFontStr(st: TextStyle, fontPx: number) { return `${st.weight ?? 800} ${Math.round(fontPx)}px ${st.font || "sans-serif"}`; }
-function wrapCaption(words: string[], fontPx: number, st: TextStyle, maxW: number): { w: string; idx: number }[][] {
-  const ctx = measureCtx();
-  if (!ctx) return words.length ? [words.map((w, i) => ({ w, idx: i }))] : [];
-  ctx.font = capFontStr(st, fontPx);
-  const space = ctx.measureText(" ").width;
-  const lines: { w: string; idx: number }[][] = [[]];
-  let lineW = 0;
-  words.forEach((w, idx) => {
-    const ww = ctx.measureText(w).width;
-    const cur = lines[lines.length - 1];
-    const add = cur.length ? space + ww : ww;
-    if (lineW + add > maxW && cur.length) { lines.push([{ w, idx }]); lineW = ww; }
-    else { cur.push({ w, idx }); lineW += add; }
-  });
-  return lines[0].length ? lines : [];
-}
-function renderCaptionLines(lines: { w: string; idx: number }[][], activeIdx: number, st: TextStyle, fontPx: number) {
-  const shadow = st.shadow !== false ? "0 2px 8px rgba(0,0,0,0.85), 0 0 4px rgba(0,0,0,0.6)" : "none";
-  const strokePx = st.stroke ? fontPx * (st.strokeW ?? 0.08) : 0;
-  const strokeCss: React.CSSProperties = strokePx > 0 && st.stroke ? { WebkitTextStroke: `${strokePx}px ${st.stroke}`, paintOrder: "stroke fill" } : {};
-  const rad = fontPx * (st.radius ?? 0.22);
-  const word = (wo: { w: string; idx: number }) => {
-    const active = wo.idx === activeIdx;
-    const wordPlate = st.plate === "word" && active;
-    return (
-      <span key={wo.idx} style={{
-        ...(wordPlate ? { background: st.plateColor || "#FFD60A", color: "#111", borderRadius: rad, boxShadow: `0 0 0 ${fontPx * 0.12}px ${st.plateColor || "#FFD60A"}` } : {}),
-        ...(active && st.highlight && !wordPlate ? { color: st.highlight } : {}),
-      }}>{wo.w}</span>
-    );
-  };
-  return (
-    <div style={{ fontSize: fontPx, fontWeight: st.weight ?? 800, fontFamily: st.font || "sans-serif", color: st.color || "#fff", textShadow: shadow, lineHeight: 1.22, ...strokeCss }}>
-      {lines.map((ln, li) => (
-        <div key={li} style={{ whiteSpace: "nowrap", textAlign: "center" }}>
-          {st.plate === "full" ? (
-            <span style={{ background: st.plateColor || "rgba(0,0,0,0.78)", borderRadius: rad, padding: `${fontPx * 0.12}px ${fontPx * 0.28}px`, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" }}>
-              {ln.map((wo, i) => <span key={wo.idx}>{word(wo)}{i < ln.length - 1 ? " " : ""}</span>)}
-            </span>
-          ) : ln.map((wo, i) => <span key={wo.idx}>{word(wo)}{i < ln.length - 1 ? " " : ""}</span>)}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 const CAP_FONTS: { label: string; value: string }[] = [
   { label: "Sans", value: "sans-serif" },
   { label: "System", value: "system-ui, sans-serif" },
@@ -208,6 +156,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
   const [playing, setPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
   const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 });
+  const capCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -284,6 +233,21 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
     } catch { /* keep current */ } finally { setBinLoading(false); }
   };
   useEffect(() => { loadLibrary(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // draw captions on the overlay canvas using the SAME routine as the exporter (pixel parity)
+  useEffect(() => {
+    const cv = capCanvasRef.current; if (!cv) return;
+    const W = previewSize.w, H = previewSize.h; if (!W || !H) return;
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    const ctx = cv.getContext("2d"); if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    for (const c of clips) {
+      if (c.kind !== "text") continue;
+      if (playhead < c.start || playhead >= c.start + c.duration) continue;
+      drawCaption(ctx, c as unknown as ExportClip, playhead, W, H, 1, { opacity: alphaAt(c as CompClip, playhead) || 1, scaleMul: 1, offX: 0, offY: 0 });
+    }
+  }, [clips, playhead, previewSize.w, previewSize.h]);
   const runSearch = async () => {
     const q = binQuery.trim();
     if (!q) { loadLibrary(); return; }
@@ -797,6 +761,7 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                       if (c.kind === "adjust") return isActive(c, t) && c.fx
                         ? <div key={c.id} className="absolute inset-0 pointer-events-none" style={{ backdropFilter: c.fx, WebkitBackdropFilter: c.fx as string, opacity: alphaAt(c, t) || 1 }} />
                         : null;
+                      if (c.kind === "text") return null; // captions are drawn on the canvas overlay (pixel-identical to export)
                       const active = isActive(c, t);
                       const isSel = selectedIds.includes(c.id);
                       const v = clipVisual(c as CompClip, t, clips as CompClip[]);
@@ -812,31 +777,6 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                             <video src={c.url} playsInline preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
                               className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
                           )}
-                          {c.kind === "text" && (() => {
-                            const st = c.tstyle || {};
-                            let text = c.text || ""; if (st.upper) text = text.toUpperCase();
-                            const local = t - c.start;
-                            const fontPx = Math.max(14, previewSize.w / 16) * (st.size ?? 1);
-                            const ep = Math.min(1, local / 0.28);
-                            let alpha = 1, scl = 1;
-                            if (st.enter === "fade") alpha = ep;
-                            else if (st.enter === "scale") scl = 0.6 + 0.4 * (1 - Math.pow(1 - ep, 3));
-                            else if (st.enter === "bounce") { const c1 = 1.70158, c3 = c1 + 1; scl = Math.max(0.01, 1 + c3 * Math.pow(ep - 1, 3) + c1 * Math.pow(ep - 1, 2)); }
-                            if (st.enter === "typewriter") { const td = Math.min(0.9, c.duration * 0.6); text = text.slice(0, Math.max(1, Math.floor(Math.min(1, local / td) * text.length))); }
-                            const raw = (c.text || "").split(/\s+/).filter(Boolean);
-                            const wm: CapWord[] = c.words && c.words.length === raw.length ? c.words : raw.map((w, i) => ({ text: w, t: (c.duration / raw.length) * i, d: c.duration / raw.length }));
-                            const activeIdx = wm.findIndex((w) => local >= w.t && local < w.t + w.d);
-                            const shownWords = text.split(/\s+/).filter(Boolean);
-                            const lines = wrapCaption(shownWords, fontPx, st, previewSize.w * 0.86);
-                            const posStyle: React.CSSProperties = (st.pos || "bottom") === "bottom" ? { bottom: "15%" } : st.pos === "center" ? { top: "50%", transform: "translateY(-50%)" } : { top: "10%" };
-                            return (
-                              <div className="absolute inset-x-0 flex justify-center pointer-events-none" style={{ ...posStyle, opacity: alpha }}>
-                                <div style={{ transform: `scale(${scl})`, transformOrigin: "center center" }}>
-                                  {renderCaptionLines(lines, activeIdx, st, fontPx)}
-                                </div>
-                              </div>
-                            );
-                          })()}
                           {isSel && active && <div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />}
                           {selected === c.id && active && (
                             <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} />)}
@@ -844,6 +784,8 @@ export default function VideoEditor({ assets }: { assets: EditorAsset[] }) {
                       );
                     })}
                   </div>
+                  {/* captions drawn with the SAME routine as the MP4 export → preview == export */}
+                  <canvas ref={capCanvasRef} className="absolute inset-0 pointer-events-none z-[9]" style={{ width: previewSize.w, height: previewSize.h }} />
                   {/* dim everything outside the composition (pasteboard), content stays visible & grabbable */}
                   <div className="absolute inset-0 pointer-events-none z-10" style={{ boxShadow: "0 0 0 99999px rgba(0,0,0,0.55)" }} />
                   <div className="absolute inset-0 ring-1 ring-white/30 pointer-events-none z-10" />
