@@ -83,6 +83,22 @@ function CanvasNodeImpl({
 }) {
   const composerDownRef = useRef<{ x: number; y: number } | null>(null);
   const [tracksSent, setTracksSent] = useState(false);
+  // HeyGen node: account avatars/voices
+  const isHeygen = NODE_TYPES[node.type]?.custom === "heygen";
+  const [hg, setHg] = useState<{ avatars: HgAvatar[]; voices: HgVoice[] } | null>(hgCache);
+  const [hgErr, setHgErr] = useState<string | null>(null);
+  const [hgAvQ, setHgAvQ] = useState("");
+  const [hgVoQ, setHgVoQ] = useState("");
+  const hgAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [hgPlaying, setHgPlaying] = useState(false);
+  useEffect(() => {
+    if (!isHeygen || hg) return;
+    let alive = true;
+    loadHeygenOptions().then((d) => { if (alive) setHg(d); }).catch((e) => { if (alive) setHgErr(e instanceof Error ? e.message : "load failed"); });
+    return () => { alive = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHeygen]);
+  useEffect(() => () => { hgAudioRef.current?.pause(); }, []);
   const def = NODE_TYPES[node.type];
   if (!def) return null;
 
@@ -410,6 +426,89 @@ function CanvasNodeImpl({
         )}
 
         {/* Note custom */}
+        {def.custom === "heygen" && (
+          <div className="space-y-1.5 text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
+            {hgErr && <div className="text-red-400 text-[10px]">{hgErr}</div>}
+            {!hg && !hgErr && <div className="text-fg-subtle text-[10px]">Loading avatars & voices…</div>}
+            {hg && (() => {
+              const av = String(node.config?.avatar_id ?? "");
+              const vo = String(node.config?.voice_id ?? "");
+              const avSel = hg.avatars.find((a) => a.id === av) || null;
+              const voSel = hg.voices.find((v) => v.id === vo) || null;
+              const avList = (hgAvQ ? hg.avatars.filter((a) => a.name.toLowerCase().includes(hgAvQ.toLowerCase())) : hg.avatars).slice(0, 60);
+              const voList = (hgVoQ ? hg.voices.filter((v) => `${v.name} ${v.language ?? ""}`.toLowerCase().includes(hgVoQ.toLowerCase())) : hg.voices).slice(0, 80);
+              return (
+                <>
+                  <div className="flex items-center gap-2">
+                    {avSel?.preview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={avSel.preview} alt="" className="w-12 h-12 rounded-md object-cover border border-border" />
+                    ) : (
+                      <div className="w-12 h-12 rounded-md border border-dashed border-border grid place-items-center text-[8px] text-fg-subtle text-center leading-tight">prompt agent</div>
+                    )}
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <input value={hgAvQ} onChange={(e) => setHgAvQ(e.target.value)} placeholder={`Search ${hg.avatars.length} avatars…`}
+                        className="w-full bg-bg border border-border rounded px-1.5 py-1 text-[10px] outline-none" />
+                      <select value={av} onChange={(e) => onConfigChange("avatar_id", e.target.value)}
+                        className="w-full bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
+                        <option value="">— no avatar (prompt agent) —</option>
+                        {avSel && !avList.includes(avSel) && <option value={avSel.id}>{avSel.name}</option>}
+                        {avList.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" disabled={!voSel?.preview}
+                      onClick={() => {
+                        const cur = hgAudioRef.current;
+                        if (hgPlaying && cur) { cur.pause(); setHgPlaying(false); return; }
+                        if (!voSel?.preview) return;
+                        if (cur) cur.pause();
+                        const a = new Audio(voSel.preview); a.volume = 0.9; a.onended = () => setHgPlaying(false);
+                        hgAudioRef.current = a; setHgPlaying(true); a.play().catch(() => setHgPlaying(false));
+                      }}
+                      className="w-12 h-9 rounded-md border border-border grid place-items-center text-fg-muted hover:text-fg disabled:opacity-30">
+                      {hgPlaying ? "⏸" : "▶"}
+                    </button>
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <input value={hgVoQ} onChange={(e) => setHgVoQ(e.target.value)} placeholder={`Search ${hg.voices.length} voices…`}
+                        className="w-full bg-bg border border-border rounded px-1.5 py-1 text-[10px] outline-none" />
+                      <select value={vo} onChange={(e) => onConfigChange("voice_id", e.target.value)}
+                        className="w-full bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
+                        <option value="">— no voice (prompt agent) —</option>
+                        {voSel && !voList.includes(voSel) && <option value={voSel.id}>{voSel.name}{voSel.language ? ` · ${voSel.language}` : ""}</option>}
+                        {voList.map((v) => <option key={v.id} value={v.id}>{v.name}{v.language ? ` · ${v.language}` : ""}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  {av && vo && (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <select value={String(node.config?.avatar_style ?? "normal")} onChange={(e) => onConfigChange("avatar_style", e.target.value)}
+                        className="bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
+                        <option value="normal">Full body</option><option value="circle">Circle</option><option value="closeUp">Close-up</option>
+                      </select>
+                      <select value={String(node.config?.dimension ?? "720x1280")} onChange={(e) => onConfigChange("dimension", e.target.value)}
+                        className="bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
+                        <option value="720x1280">720×1280 (9:16)</option><option value="1080x1920">1080×1920 (9:16)</option>
+                        <option value="1280x720">1280×720 (16:9)</option><option value="1920x1080">1920×1080 (16:9)</option>
+                        <option value="1080x1080">1080×1080 (1:1)</option>
+                      </select>
+                      <input value={String(node.config?.background ?? "")} onChange={(e) => onConfigChange("background", e.target.value)} placeholder="BG #00FF00 (keyable)"
+                        className="bg-bg border border-border rounded px-1.5 py-1 text-[10px] outline-none" />
+                      <label className="flex items-center gap-1 text-[10px] text-fg-muted">Speed
+                        <input type="number" min={0.5} max={1.5} step={0.05} value={Number(node.config?.speed ?? 1)} onChange={(e) => onConfigChange("speed", Number(e.target.value) || 1)}
+                          className="w-full bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none" />
+                      </label>
+                    </div>
+                  )}
+                  <div className="text-[9px] text-fg-subtle leading-tight">
+                    {av && vo ? "Script is spoken verbatim by the chosen avatar/voice." : "No avatar/voice picked — HeyGen's prompt agent decides everything from the prompt."}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        )}
         {def.custom === "composer" && (
           <div className="space-y-1.5 text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
             {(composerTracks?.length ?? 0) === 0 && (
@@ -784,6 +883,24 @@ const CanvasNode = memo(CanvasNodeImpl, (prev, next) => {
   if (a.results !== b.results) return false;
   return true;
 });
+
+// HeyGen avatars/voices — fetched once per page, shared by every HeyGen node.
+type HgAvatar = { id: string; name: string; preview: string | null };
+type HgVoice = { id: string; name: string; language: string | null; preview: string | null };
+let hgCache: { avatars: HgAvatar[]; voices: HgVoice[] } | null = null;
+let hgPending: Promise<{ avatars: HgAvatar[]; voices: HgVoice[] }> | null = null;
+async function loadHeygenOptions() {
+  if (hgCache) return hgCache;
+  if (!hgPending) {
+    hgPending = fetch("/api/heygen/options").then(async (r) => {
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "failed to load HeyGen options");
+      hgCache = { avatars: j.avatars ?? [], voices: j.voices ?? [] };
+      return hgCache;
+    }).finally(() => { hgPending = null; });
+  }
+  return hgPending;
+}
 
 export default CanvasNode;
 

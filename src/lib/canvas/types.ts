@@ -194,7 +194,7 @@ export type NodeTypeDef = {
   examples?: string[];
   starters?: string[];
   /** Custom node body (file uploads etc.) */
-  custom?: "upload-image" | "upload-video" | "upload-audio" | "note" | "brand-assets" | "composer";
+  custom?: "upload-image" | "upload-video" | "upload-audio" | "note" | "brand-assets" | "composer" | "heygen";
   /** Special: force expanded modal (no primary textarea) */
   forceExpanded?: boolean;
 };
@@ -1062,11 +1062,12 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     name: "HeyGen Avatar",
     category: "video",
     icon: "user-round",
-    description: "Generate a talking-avatar video from a prompt/script via HeyGen (async, renders in minutes).",
+    description: "Talking-avatar video via HeyGen. Pick an avatar + voice from your account for full control, or leave both empty to use the prompt agent.",
     inputs: [{ name: "prompt", type: "text", optional: true }],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { instructions: "" },
+    defaults: { instructions: "", avatar_id: "", voice_id: "", avatar_style: "normal", dimension: "720x1280", background: "", speed: 1 },
     fields: [],
+    custom: "heygen",
     primaryField: "instructions",
     primaryLabel: "Prompt / script",
     primaryPlaceholder: "A friendly presenter explaining our product launch in 30 seconds…",

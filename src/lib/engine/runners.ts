@@ -3,7 +3,7 @@
 // Generated assets are uploaded to Supabase Storage and recorded in DB.
 
 import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
-import { createVideoFromPrompt, pollVideo } from "@/lib/heygen/client";
+import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 
@@ -834,8 +834,32 @@ export async function runNode(
     case "heygenVideo": {
       const prompt = String(config.instructions || inputs.prompt || "").trim();
       if (!prompt) throw new Error("Provide a prompt/script (input or instructions)");
-      const videoId = await createVideoFromPrompt(prompt);
-      const url = await pollVideo(videoId);
+      const avatarId = String(config.avatar_id || "").trim();
+      const voiceId = String(config.voice_id || "").trim();
+      let videoId: string;
+      let url: string;
+      if (avatarId && voiceId) {
+        // Full mode: explicit avatar + voice from the account (v2 generate).
+        // The script is spoken verbatim — instructions here are the SCRIPT.
+        const [w, h] = String(config.dimension || "720x1280").split("x").map((n) => parseInt(n, 10));
+        videoId = await createAvatarVideo({
+          script: prompt,
+          avatarId,
+          voiceId,
+          avatarStyle: String(config.avatar_style || "normal"),
+          width: w || 720,
+          height: h || 1280,
+          background: String(config.background || "").trim() || undefined,
+          speed: Number(config.speed) || 1,
+        });
+        url = await pollVideoStatus(videoId);
+      } else if (avatarId || voiceId) {
+        throw new Error("Pick BOTH an avatar and a voice (or clear both to use the prompt agent)");
+      } else {
+        // Prompt-agent mode: HeyGen decides avatar/voice from the prompt (v3).
+        videoId = await createVideoFromPrompt(prompt);
+        url = await pollVideo(videoId);
+      }
       const persisted = await persistAsset(url, ctx, "heygen");
       return {
         // Cost is billed by HeyGen in credits (plan-dependent); not mapped to
