@@ -72,7 +72,7 @@ export async function pollVideo(
   videoId: string,
   opts?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<string> {
-  const timeoutMs = opts?.timeoutMs ?? 240_000; // ~4 min
+  const timeoutMs = opts?.timeoutMs ?? 540_000; // 9 min — long renders need room
   const intervalMs = opts?.intervalMs ?? 8_000;
   const deadline = Date.now() + timeoutMs;
 
@@ -213,7 +213,7 @@ export async function pollVideoStatus(
   videoId: string,
   opts?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<string> {
-  const timeoutMs = opts?.timeoutMs ?? 240_000;
+  const timeoutMs = opts?.timeoutMs ?? 540_000; // 9 min — Avatar IV / long scripts render slowly
   const intervalMs = opts?.intervalMs ?? 8_000;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

@@ -7,6 +7,7 @@ import { NODE_TYPES, type FieldDef, type GraphNode } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import Lightbox from "./Lightbox";
 import SceneBuilder, { type Scene } from "./SceneBuilder";
+import VideoGenControls from "./VideoGenControls";
 
 export default function NodeExpandedModal({
   node,
@@ -41,13 +42,14 @@ export default function NodeExpandedModal({
   const color = CAT_COLORS[def.category] ?? "#71717a";
 
   const content = (
-    <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center p-4 animate-fade-in"
-      onClick={onClose}
-    >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 animate-fade-in">
+      {/* Close only on a real mousedown that STARTS on the backdrop. Using
+          mousedown (not click) avoids the phantom click a native <select>
+          dispatches after its dropdown closes, which used to shut the modal. */}
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onMouseDown={onClose} />
       <div
         className="relative bg-bg-card border border-border rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col md:flex-row overflow-hidden shadow-panel animate-fade-up"
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -159,17 +161,28 @@ export default function NodeExpandedModal({
           <h3 className="text-[13px] font-medium text-fg mb-4">Settings</h3>
 
           <div className="flex-1 space-y-4">
-            {def.fields.map((f) => (
-              <SettingsField
-                key={f.name}
-                field={f}
-                value={node.config[f.name]}
-                onChange={(v) => onConfigChange(f.name, v)}
-              />
-            ))}
-
-            {def.fields.length === 0 && (
-              <div className="text-[11px] text-fg-subtle italic">No settings for this node.</div>
+            {node.type === "videoGen" ? (
+              <>
+                <VideoGenControls config={node.config} onConfigChange={onConfigChange} size="large" />
+                {/* aspect is the one generic field kept here (Kling V3 i2v ignores it) */}
+                {def.fields.filter((f) => f.name === "aspect").map((f) => (
+                  <SettingsField key={f.name} field={f} value={node.config[f.name]} onChange={(v) => onConfigChange(f.name, v)} />
+                ))}
+              </>
+            ) : (
+              <>
+                {def.fields.map((f) => (
+                  <SettingsField
+                    key={f.name}
+                    field={f}
+                    value={node.config[f.name]}
+                    onChange={(v) => onConfigChange(f.name, v)}
+                  />
+                ))}
+                {def.fields.length === 0 && (
+                  <div className="text-[11px] text-fg-subtle italic">No settings for this node.</div>
+                )}
+              </>
             )}
           </div>
 

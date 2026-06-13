@@ -20,6 +20,7 @@ export type VideoModelDef = {
   modes: VideoMode[];
   duration: VideoDuration;
   audio?: boolean; // exposes the "Generate audio" toggle
+  resolutions?: string[]; // selectable output resolutions (omit = model has no choice)
   recommended?: boolean;
 };
 
@@ -53,20 +54,20 @@ export const VIDEO_MODELS: VideoModelDef[] = [
   { id: "fal-ai/kling-video/o3/standard/video-to-video/reference", label: "Kling O3 Standard — Restyle", family: "Kling O3", modes: ["video-to-video"], duration: RANGE_3_15, audio: true },
 
   // ─── Seedance 2.0 (ByteDance) — 4–15s, native audio, multi-modal refs ───
-  { id: "bytedance/seedance-2.0/image-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["image", "keyframes"], duration: RANGE_4_15, audio: true, recommended: true },
-  { id: "bytedance/seedance-2.0/fast/image-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["image", "keyframes"], duration: RANGE_4_15, audio: true },
-  { id: "bytedance/seedance-2.0/text-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["text"], duration: RANGE_4_15, audio: true },
-  { id: "bytedance/seedance-2.0/fast/text-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["text"], duration: RANGE_4_15, audio: true },
-  { id: "bytedance/seedance-2.0/reference-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["references"], duration: RANGE_4_15, audio: true },
-  { id: "bytedance/seedance-2.0/fast/reference-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["references"], duration: RANGE_4_15, audio: true },
+  { id: "bytedance/seedance-2.0/image-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["image", "keyframes"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"], recommended: true },
+  { id: "bytedance/seedance-2.0/fast/image-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["image", "keyframes"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "bytedance/seedance-2.0/text-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["text"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "bytedance/seedance-2.0/fast/text-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["text"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "bytedance/seedance-2.0/reference-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["references"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "bytedance/seedance-2.0/fast/reference-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["references"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
 
   // ─── Veo 3.1 (Google) — fixed 4/6/8s, audio ───
-  { id: "fal-ai/veo3.1/fast", label: "Veo 3.1 Fast", family: "Veo 3.1", modes: ["text"], duration: VEO_DUR, audio: true, recommended: true },
-  { id: "fal-ai/veo3.1", label: "Veo 3.1 Standard", family: "Veo 3.1", modes: ["text"], duration: VEO_DUR, audio: true },
-  { id: "fal-ai/veo3.1/fast/image-to-video", label: "Veo 3.1 Fast", family: "Veo 3.1", modes: ["image"], duration: VEO_DUR, audio: true, recommended: true },
-  { id: "fal-ai/veo3.1/image-to-video", label: "Veo 3.1 Standard", family: "Veo 3.1", modes: ["image"], duration: VEO_DUR, audio: true },
-  { id: "fal-ai/veo3.1/fast/first-last-frame-to-video", label: "Veo 3.1 Fast", family: "Veo 3.1", modes: ["keyframes"], duration: VEO_DUR, audio: true },
-  { id: "fal-ai/veo3.1/first-last-frame-to-video", label: "Veo 3.1 Standard", family: "Veo 3.1", modes: ["keyframes"], duration: VEO_DUR, audio: true },
+  { id: "fal-ai/veo3.1/fast", label: "Veo 3.1 Fast", family: "Veo 3.1", modes: ["text"], duration: VEO_DUR, audio: true, resolutions: ["720p", "1080p"], recommended: true },
+  { id: "fal-ai/veo3.1", label: "Veo 3.1 Standard", family: "Veo 3.1", modes: ["text"], duration: VEO_DUR, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "fal-ai/veo3.1/fast/image-to-video", label: "Veo 3.1 Fast", family: "Veo 3.1", modes: ["image"], duration: VEO_DUR, audio: true, resolutions: ["720p", "1080p"], recommended: true },
+  { id: "fal-ai/veo3.1/image-to-video", label: "Veo 3.1 Standard", family: "Veo 3.1", modes: ["image"], duration: VEO_DUR, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "fal-ai/veo3.1/fast/first-last-frame-to-video", label: "Veo 3.1 Fast", family: "Veo 3.1", modes: ["keyframes"], duration: VEO_DUR, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "fal-ai/veo3.1/first-last-frame-to-video", label: "Veo 3.1 Standard", family: "Veo 3.1", modes: ["keyframes"], duration: VEO_DUR, audio: true, resolutions: ["720p", "1080p"] },
 
   // ─── Older / budget models ───
   { id: "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", label: "Kling 2.5 Turbo Pro", family: "Other", modes: ["text"], duration: DUR_5_10 },

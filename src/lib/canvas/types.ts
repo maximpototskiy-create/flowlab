@@ -850,6 +850,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       scenes: [{ id: "scene-1", prompt: "", duration: "5" }],
       model: "fal-ai/kling-video/v3/pro/image-to-video",
       duration: "5",
+      resolution: "",
       aspect: "9:16",
       // keep_audio — used only in video-to-video mode. Whether to preserve
       // the original audio track from the source video (Kling O3 v2v

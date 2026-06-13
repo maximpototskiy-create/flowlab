@@ -456,6 +456,7 @@ export async function runNode(
       const prompt = `${basePrompt}\n\nIMPORTANT: Any on-screen text must be in English only.`;
       const model = String(config.model ?? "fal-ai/kling-video/v3/pro/image-to-video");
       const duration = String(config.duration ?? "5");
+      const resolution = String(config.resolution ?? "");
       const aspect = String(config.aspect ?? "9:16");
       const generateAudio = Boolean(config.generate_audio);
       const isImg2Vid =
@@ -723,7 +724,7 @@ export async function runNode(
           if (refList.length > 0) payload.image_urls = refList;
         }
         payload.duration = duration;
-        payload.resolution = "720p";
+        payload.resolution = resolution || "720p";
         payload.aspect_ratio = aspect;
         payload.generate_audio = generateAudio;
       } else if (model.includes("veo3")) {
@@ -784,6 +785,7 @@ export async function runNode(
 
         // Aspect: only auto / 16:9 / 9:16 supported.
         payload.aspect_ratio = ["auto", "16:9", "9:16"].includes(aspect) ? aspect : "auto";
+        if (resolution) payload.resolution = resolution; // Veo 3.1 accepts 720p / 1080p
 
         // Audio param: Veo 3.1 uses `audio`; older Veo 3 uses `generate_audio`.
         if (isVeo31) {

@@ -795,6 +795,9 @@ export default function Canvas({
             }
           } else if (key === "model") {
             next.config.duration = String(clampDuration(String(value), Number(next.config.duration ?? 5)));
+            const nm = getVideoModel(String(value));
+            const cur = String(next.config.resolution ?? "");
+            if (!nm?.resolutions || !nm.resolutions.includes(cur)) next.config.resolution = nm?.resolutions?.[0] ?? "";
           }
         }
         return next;
