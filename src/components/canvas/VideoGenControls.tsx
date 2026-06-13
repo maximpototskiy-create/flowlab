@@ -90,6 +90,13 @@ export default function VideoGenControls({
         </label>
       )}
 
+      {(mode === "video-to-video" || mode === "references") && (
+        <div className="rounded-md border border-border bg-bg/40 px-2 py-1.5 text-[10px] text-fg-muted leading-snug">
+          Connected inputs are referenced automatically — just describe what you want (e.g. “replace the phone screen with the reference”). To control placement yourself, write <span className="text-fg">@Image1</span> / <span className="text-fg">[Image1]</span> in the prompt.
+          {mode === "video-to-video" && <> Source video must be .mp4/.mov, 3–10s, ≥720px; duration & aspect follow the source.</>}
+        </div>
+      )}
+
       {model?.audio && (
         <label className="flex items-center gap-1.5 text-[10px] text-fg-muted">
           <input type="checkbox" checked={Boolean(config.generate_audio)} onChange={(e) => onConfigChange("generate_audio", e.target.checked)} />

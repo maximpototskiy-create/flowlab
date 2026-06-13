@@ -45,13 +45,17 @@ export const VIDEO_MODELS: VideoModelDef[] = [
   { id: "fal-ai/kling-video/o3/pro/text-to-video", label: "Kling O3 Pro", family: "Kling O3", modes: ["text", "multi-shot"], duration: RANGE_3_15, audio: true },
   { id: "fal-ai/kling-video/o3/standard/text-to-video", label: "Kling O3 Standard", family: "Kling O3", modes: ["text", "multi-shot"], duration: RANGE_3_15, audio: true },
   { id: "fal-ai/kling-video/o3/4k/text-to-video", label: "Kling O3 4K", family: "Kling O3", modes: ["text", "multi-shot"], duration: RANGE_3_15, audio: true },
-  { id: "fal-ai/kling-video/o3/pro/reference-to-video", label: "Kling O3 Pro", family: "Kling O3", modes: ["references"], duration: RANGE_3_15, audio: true },
-  { id: "fal-ai/kling-video/o3/standard/reference-to-video", label: "Kling O3 Standard", family: "Kling O3", modes: ["references"], duration: RANGE_3_15, audio: true },
-  { id: "fal-ai/kling-video/o3/4k/reference-to-video", label: "Kling O3 4K", family: "Kling O3", modes: ["references"], duration: RANGE_3_15, audio: true },
-  { id: "fal-ai/kling-video/o3/pro/video-to-video/edit", label: "Kling O3 Pro — Edit", family: "Kling O3", modes: ["video-to-video"], duration: RANGE_3_15, audio: true },
-  { id: "fal-ai/kling-video/o3/standard/video-to-video/edit", label: "Kling O3 Standard — Edit", family: "Kling O3", modes: ["video-to-video"], duration: RANGE_3_15, audio: true },
-  { id: "fal-ai/kling-video/o3/pro/video-to-video/reference", label: "Kling O3 Pro — Restyle", family: "Kling O3", modes: ["video-to-video"], duration: RANGE_3_15, audio: true },
-  { id: "fal-ai/kling-video/o3/standard/video-to-video/reference", label: "Kling O3 Standard — Restyle", family: "Kling O3", modes: ["video-to-video"], duration: RANGE_3_15, audio: true },
+  // Kling reference-to-video (Reference I2V) is on the O1 line, not o3, and runs
+  // at 5/10s. Refs go in as @Image1 / @Element1 (auto-injected into the prompt).
+  { id: "fal-ai/kling-video/o1/reference-to-video", label: "Kling O1 Pro", family: "Kling O1", modes: ["references"], duration: DUR_5_10 },
+  { id: "fal-ai/kling-video/o1/standard/reference-to-video", label: "Kling O1 Standard", family: "Kling O1", modes: ["references"], duration: DUR_5_10 },
+  // Video-to-Video lives on the Kling O1 (Omni) line, NOT o3. Pro has no
+  // "/pro/" segment; standard does. Duration/aspect derive from the source
+  // video (the endpoints have no duration/aspect_ratio fields).
+  { id: "fal-ai/kling-video/o1/video-to-video/edit", label: "Kling O1 Pro — Edit", family: "Kling O1", modes: ["video-to-video"], duration: RANGE_3_15 },
+  { id: "fal-ai/kling-video/o1/standard/video-to-video/edit", label: "Kling O1 Standard — Edit", family: "Kling O1", modes: ["video-to-video"], duration: RANGE_3_15 },
+  { id: "fal-ai/kling-video/o1/video-to-video/reference", label: "Kling O1 Pro — Restyle", family: "Kling O1", modes: ["video-to-video"], duration: RANGE_3_15 },
+  { id: "fal-ai/kling-video/o1/standard/video-to-video/reference", label: "Kling O1 Standard — Restyle", family: "Kling O1", modes: ["video-to-video"], duration: RANGE_3_15 },
 
   // ─── Seedance 2.0 (ByteDance) — 4–15s, native audio, multi-modal refs ───
   { id: "bytedance/seedance-2.0/image-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["image", "keyframes"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"], recommended: true },
@@ -88,7 +92,7 @@ export const VIDEO_MODE_LABELS: { value: VideoMode; label: string; hint: string 
   { value: "video-to-video", label: "Video → Video", hint: "Edit / restyle a source clip" },
 ];
 
-const FAMILY_ORDER = ["Kling 3.0", "Seedance 2.0", "Veo 3.1", "Kling O3", "Other"];
+const FAMILY_ORDER = ["Kling 3.0", "Seedance 2.0", "Veo 3.1", "Kling O3", "Kling O1", "Other"];
 
 /** Models that serve a given mode, grouped by family in display order. */
 export function modelsForMode(mode: VideoMode): { family: string; models: VideoModelDef[] }[] {

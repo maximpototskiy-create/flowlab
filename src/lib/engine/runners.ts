@@ -501,7 +501,7 @@ export async function runNode(
       if (mode === "video-to-video") {
         if (!isV2V) {
           throw new Error(
-            `Mode is Video-to-Video but model "${model}" isn't a V2V endpoint. Pick "Kling O3 (V2V Edit)" or "(V2V Reference)".`,
+            `Mode is Video-to-Video but model "${model}" isn't a V2V endpoint. Pick a "Kling O1 — Edit" or "— Restyle" model.`,
           );
         }
         if (!sourceVideo) {
@@ -595,7 +595,30 @@ export async function runNode(
         payload.multi_prompt = scenes;
         payload.shot_type = "customize";
       } else {
-        payload.prompt = prompt;
+        // Auto-reference connected inputs so users don't have to type @Image1 /
+        // [Image1] tokens by hand. Only for ref-using modes, only when the user
+        // hasn't already referenced inputs themselves. Seedance uses [Image1] /
+        // [Video1] (square brackets); Kling uses @Image1.
+        let promptOut = prompt;
+        if (
+          (mode === "references" || mode === "video-to-video") &&
+          referencesArr.length > 0 &&
+          !/[@\[]\s*(image|video|element|audio)\s*\d/i.test(promptOut)
+        ) {
+          const seed = model.includes("seedance");
+          const imgN = referencesArr.filter((u) => !isVideoUrl(u)).length;
+          const vidN = referencesArr.filter(isVideoUrl).length;
+          const toks: string[] = [];
+          if (seed) {
+            for (let i = 1; i <= imgN; i++) toks.push(`[Image${i}]`);
+            for (let i = 1; i <= vidN; i++) toks.push(`[Video${i}]`);
+          } else {
+            // Kling: image refs → @ImageN (videos are the source / filtered out)
+            for (let i = 1; i <= imgN; i++) toks.push(`@Image${i}`);
+          }
+          if (toks.length) promptOut = `${promptOut.trim()} Use ${toks.join(", ")} as reference${toks.length > 1 ? "s" : ""}.`;
+        }
+        payload.prompt = promptOut;
       }
 
       // ─── Video-to-Video branch ──────────────────────────────────────
@@ -618,12 +641,9 @@ export async function runNode(
           }
         }
         payload.keep_audio = keepAudio;
-        // The reference endpoint accepts duration + aspect_ratio; the edit
-        // endpoint derives them from the source video and ignores both.
-        if (model.includes("/video-to-video/reference")) {
-          payload.duration = duration;
-          payload.aspect_ratio = aspect;
-        }
+        // Kling O1 v2v (edit + reference) derive duration AND aspect ratio from
+        // the source video — neither endpoint has those fields, so sending them
+        // risks a 422. The source video must be .mp4/.mov, 3-10s, 720-2160px.
       } else if (model.includes("kling-video")) {
         // ─── Endpoint flavor detection ─────────────────────────────────
         // V3 is the newest, O3 is the older flagship line, V2.x is legacy.
