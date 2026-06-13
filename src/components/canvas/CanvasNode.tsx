@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, memo } from "react";
 import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand } from "lucide-react";
 import { WheelScroll } from "./WheelScroll";
+import { modelsForMode, getVideoModel, VIDEO_MODE_LABELS, type VideoMode } from "@/lib/canvas/videoModels";
 import Lightbox from "./Lightbox";
 import { NODE_TYPES, getActiveInputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
@@ -829,6 +830,71 @@ function CanvasNodeImpl({
             </div>
           )
         )}
+
+        {/* Video Generation: smart Mode → Model → Duration controls. The model
+            list is filtered to the chosen mode and grouped by family; duration
+            is a 1s slider where the model supports a range, fixed buttons where
+            it doesn't. Aspect stays in the footer below. */}
+        {node.type === "videoGen" && (() => {
+          const mode = String(node.config.mode ?? "image") as VideoMode;
+          const modelId = String(node.config.model ?? "");
+          const groups = modelsForMode(mode);
+          const model = getVideoModel(modelId);
+          const dur = Number(node.config.duration ?? 5);
+          const selStyle = "mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none";
+          return (
+            <div className="space-y-2 mt-1 text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
+              <label className="block">
+                <span className="text-[9px] uppercase tracking-wider text-fg-subtle font-medium">Mode</span>
+                <select value={mode} onChange={(e) => onConfigChange("mode", e.target.value)} className={selStyle}>
+                  {VIDEO_MODE_LABELS.map((m) => <option key={m.value} value={m.value}>{m.label} — {m.hint}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-[9px] uppercase tracking-wider text-fg-subtle font-medium">Model</span>
+                <select value={modelId} onChange={(e) => onConfigChange("model", e.target.value)} className={selStyle}>
+                  {!groups.some((g) => g.models.some((m) => m.id === modelId)) && modelId && (
+                    <option value={modelId}>{getVideoModel(modelId)?.label ?? "Current model"} (current)</option>
+                  )}
+                  {groups.map((g) => (
+                    <optgroup key={g.family} label={g.family}>
+                      {g.models.map((m) => <option key={m.id} value={m.id}>{m.label}{m.recommended ? " ⭐" : ""}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              {model && (model.duration.kind === "range" ? (
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] uppercase tracking-wider text-fg-subtle font-medium">Duration</span>
+                    <span className="text-fg font-medium">{dur}s</span>
+                  </div>
+                  <input type="range" min={model.duration.min} max={model.duration.max} step={model.duration.step} value={dur}
+                    onChange={(e) => onConfigChange("duration", String(Number(e.target.value)))}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="w-full mt-1 accent-brand cursor-pointer" />
+                  <div className="flex justify-between text-[8px] text-fg-subtle"><span>{model.duration.min}s</span><span>{model.duration.max}s</span></div>
+                </div>
+              ) : (
+                <div>
+                  <span className="text-[9px] uppercase tracking-wider text-fg-subtle font-medium">Duration</span>
+                  <div className="flex gap-1 mt-0.5">
+                    {model.duration.values.map((v) => (
+                      <button key={v} type="button" onClick={() => onConfigChange("duration", String(v))}
+                        className={`flex-1 py-1 rounded border text-[11px] ${dur === v ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>{v}s</button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {model?.audio && (
+                <label className="flex items-center gap-1.5 text-[10px] text-fg-muted">
+                  <input type="checkbox" checked={Boolean(node.config.generate_audio)} onChange={(e) => onConfigChange("generate_audio", e.target.checked)} />
+                  Generate audio
+                </label>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Quick controls + Run button. Custom-body nodes normally have no
             footer, but HeyGen is a real generative node and needs its Run. */}

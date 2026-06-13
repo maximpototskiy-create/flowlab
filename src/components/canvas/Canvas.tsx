@@ -5,6 +5,7 @@ import {
   NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti,
   type Graph, type GraphNode, type PortKind, type Group, EMPTY_GRAPH,
 } from "@/lib/canvas/types";
+import { getVideoModel, defaultModelForMode, clampDuration, type VideoMode } from "@/lib/canvas/videoModels";
 import CanvasNode, { NODE_WIDTH } from "./CanvasNode";
 import CanvasEdges from "./CanvasEdges";
 import Minimap from "./Minimap";
@@ -778,6 +779,23 @@ export default function Canvas({
           next.outputs = undefined;
           next.results = undefined;
           next.status = "idle";
+        }
+        // Video Generation: keep Mode → Model → Duration consistent. Changing
+        // the mode may make the current model invalid (e.g. a text-to-video
+        // model while switching to Image mode), and switching models may make
+        // the current duration unsupported (Veo only does 4/6/8). Fix both in
+        // the same atomic update so the UI never shows an impossible combo.
+        if (n.type === "videoGen") {
+          if (key === "mode") {
+            const m = getVideoModel(String(next.config.model ?? ""));
+            if (!m || !m.modes.includes(value as VideoMode)) {
+              const newModel = defaultModelForMode(value as VideoMode);
+              next.config.model = newModel;
+              next.config.duration = String(clampDuration(newModel, Number(next.config.duration ?? 5)));
+            }
+          } else if (key === "model") {
+            next.config.duration = String(clampDuration(String(value), Number(next.config.duration ?? 5)));
+          }
         }
         return next;
       }),

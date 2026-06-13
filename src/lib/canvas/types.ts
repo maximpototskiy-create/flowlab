@@ -975,7 +975,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     primaryPlaceholder: "Your prompt here…",
     examples: ["Product 360° orbit"],
     starters: ["Animated background for…"],
-    quickFields: ["mode", "model", "duration", "aspect"],
+    quickFields: ["aspect"],
   },
 
   talkingHead: {
