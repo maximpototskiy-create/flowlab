@@ -481,9 +481,13 @@ export async function runNode(
             (v): v is string => typeof v === "string" && v.length > 0,
           )
         : [];
-      // References can now be images OR videos (the References port is "any").
-      // Seedance reference-to-video is multimodal and accepts several videos
-      // via video_urls; Kling reference-to-video takes images only.
+      // References port is image-only; videos arrive on a dedicated
+      // `reference_videos` port (Seedance reference-to-video multimodal).
+      const referenceVideosArr = Array.isArray(inputs.reference_videos)
+        ? (inputs.reference_videos as unknown[]).filter(
+            (v): v is string => typeof v === "string" && v.length > 0,
+          )
+        : [];
       const isVideoUrl = (u: string) => /\.(mp4|mov|webm|m4v|avi|mkv)(\?|#|$)/i.test(u);
       // The mode field gates port visibility on the canvas. Legacy nodes
       // saved before patch 5.1 won't have it; treat absence as "image"
@@ -606,8 +610,8 @@ export async function runNode(
           !/[@\[]\s*(image|video|element|audio)\s*\d/i.test(promptOut)
         ) {
           const seed = model.includes("seedance");
-          const imgN = referencesArr.filter((u) => !isVideoUrl(u)).length;
-          const vidN = referencesArr.filter(isVideoUrl).length;
+          const imgN = referencesArr.length;
+          const vidN = referenceVideosArr.length;
           const toks: string[] = [];
           if (seed) {
             for (let i = 1; i <= imgN; i++) toks.push(`[Image${i}]`);
@@ -640,14 +644,10 @@ export async function runNode(
       if (isV2V) {
         payload.video_url = sourceVideo;
         if (referencesArr.length > 0) {
-          // O3 docs: max 4 total (elements + image refs) when using video.
-          // Kling v2v image refs are images only — drop any wired videos
-          // (Kling v2v takes a single source video; multi-video → Seedance refs).
-          const imgRefs = referencesArr.filter((u) => !isVideoUrl(u)).slice(0, 4);
-          if (imgRefs.length > 0) payload.image_urls = imgRefs;
-          if (referencesArr.some(isVideoUrl)) {
-            console.warn("[videoGen:v2v] Kling video-to-video uses one source video; extra videos wired to References are ignored. For multiple videos use References mode with Seedance 2.0.");
-          }
+          // Kling v2v: image references only (max 4 total when a video is
+          // present per Kling docs). The References port is image-typed, so
+          // these are already images.
+          payload.image_urls = referencesArr.slice(0, 4);
         }
         payload.keep_audio = keepAudio;
         // Kling O1 v2v (edit + reference) derive duration AND aspect ratio from
@@ -750,18 +750,16 @@ export async function runNode(
         if (startFrame) payload.image_url = startFrame;
         if (endFrame) payload.end_image_url = endFrame;
         if (model.includes("/reference-to-video")) {
-          const refList: string[] =
+          const imgs =
             referencesArr.length > 0
               ? referencesArr
               : legacyReference
                 ? [legacyReference]
                 : [];
-          const imgs = refList.filter((u) => !isVideoUrl(u));
-          const vids = refList.filter(isVideoUrl);
           if (imgs.length) payload.image_urls = imgs;
           // Seedance 2.0 is multimodal — reference up to 3 videos via video_urls
-          // (addressed as @Video1, @Video2 in the prompt).
-          if (vids.length) payload.video_urls = vids;
+          // (addressed as [Video1], [Video2] in the prompt).
+          if (referenceVideosArr.length) payload.video_urls = referenceVideosArr;
         }
         payload.duration = duration;
         payload.resolution = resolution || "720p";

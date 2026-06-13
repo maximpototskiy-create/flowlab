@@ -814,11 +814,23 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       // primary input. Order is edge-creation order.
       {
         name: "references",
-        type: "any",
+        type: "image",
         optional: true,
         multi: true,
-        label: "References — images / videos (multi)",
+        label: "Reference images (multi)",
         activeWhen: { field: "mode", values: ["references", "video-to-video"] },
+      },
+      // Video references are ONLY meaningful for Seedance reference-to-video
+      // (multimodal). Keep them on a dedicated video-typed port that shows
+      // only in References mode, so Video-to-Video can't accidentally take a
+      // second video (Kling v2v ignores video refs anyway).
+      {
+        name: "reference_videos",
+        type: "video",
+        optional: true,
+        multi: true,
+        label: "Reference videos (multi · Seedance)",
+        activeWhen: { field: "mode", values: ["references"] },
       },
       // Legacy single `reference` port. Kept in the schema so existing
       // workflows that wired something to it before patch 5.1 don't
