@@ -25,11 +25,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!/^https?:\/\//i.test(audioUrl)) return NextResponse.json({ error: "audioUrl must be a public http(s) URL" }, { status: 400 });
 
   const lang = (body.language || "auto").toLowerCase();
-  // NOTE: the field is `speech_model` (singular). The previous `speech_models`
+  // AssemblyAI deprecated `speech_model` (singular); it now wants a prioritised
+  // list `speech_models` (first available model wins). The previous singular
   // array was rejected for some inputs (e.g. wav uploads) with a 400.
   const payload: Record<string, unknown> = {
     audio_url: audioUrl,
-    speech_model: "universal",
+    speech_models: ["universal-3-pro", "universal-2"],
   };
   if (lang === "auto") { payload.language_detection = true; payload.language_detection_options = { fallback_language: "en" }; }
   else payload.language_code = lang;

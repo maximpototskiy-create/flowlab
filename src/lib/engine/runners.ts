@@ -1030,7 +1030,9 @@ export async function runNode(
       const key = process.env.ASSEMBLYAI_API_KEY;
       if (!key) throw new Error("ASSEMBLYAI_API_KEY is not set");
       const lang = String(config.language || "auto");
-      const payload: Record<string, unknown> = { audio_url: media, speech_model: "universal" };
+      // AssemblyAI deprecated the singular `speech_model`; it now wants a
+      // prioritised list `speech_models` (first available wins).
+      const payload: Record<string, unknown> = { audio_url: media, speech_models: ["universal-3-pro", "universal-2"] };
       if (lang === "auto") payload.language_detection = true; else payload.language_code = lang;
       const sub = await fetch("https://api.assemblyai.com/v2/transcript", {
         method: "POST", headers: { authorization: key, "content-type": "application/json" }, body: JSON.stringify(payload),

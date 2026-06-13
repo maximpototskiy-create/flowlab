@@ -135,8 +135,16 @@ export async function falLLM(
   imageUrls?: string | string[],
   systemPrompt?: string,
 ): Promise<string> {
-  const images = (Array.isArray(imageUrls) ? imageUrls : imageUrls ? [imageUrls] : [])
+  // Cap the number of images per vision call. Brand kits can hold dozens of
+  // UI screenshots; sending them all makes the OpenRouter vision wrapper reject
+  // the request with a 400 "Provider returned error". 6 is plenty of context.
+  const MAX_VISION_IMAGES = 6;
+  const allImages = (Array.isArray(imageUrls) ? imageUrls : imageUrls ? [imageUrls] : [])
     .filter((u): u is string => typeof u === "string" && u.length > 0);
+  const images = allImages.slice(0, MAX_VISION_IMAGES);
+  if (allImages.length > MAX_VISION_IMAGES) {
+    console.info(`[falLLM] ${allImages.length} images supplied; using first ${MAX_VISION_IMAGES} for the vision call.`);
+  }
 
   if (images.length === 0) {
     return falLLMText(prompt, model, temperature, systemPrompt);
@@ -157,7 +165,16 @@ export async function falLLM(
     );
   }
 
-  return falLLMVision(prompt, visionModel, images, temperature, systemPrompt);
+  // If the vision wrapper rejects the request (provider error, a bad/expired
+  // image URL, an unsupported format, etc.), don't fail the whole node — the
+  // images are auxiliary context for a TEXT deliverable. Retry text-only so the
+  // user still gets a script/voiceover instead of a red error node.
+  try {
+    return await falLLMVision(prompt, visionModel, images, temperature, systemPrompt);
+  } catch (e) {
+    console.warn(`[falLLM] Vision call failed (${e instanceof Error ? e.message : "unknown"}); retrying text-only without images.`);
+    return falLLMText(prompt, model, temperature, systemPrompt);
+  }
 }
 
 /** Text-only LLM call via fal's openrouter/router wrapper.
