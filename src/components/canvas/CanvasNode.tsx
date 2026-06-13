@@ -449,6 +449,7 @@ function CanvasNodeImpl({
                   {hasImageInput && (
                     <div className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1.5 text-[10px] text-fg">
                       <b>Custom avatar</b> — the connected image will speak as a HeyGen talking photo. Avatar library is ignored; just pick a voice below. (Pick the picture model on the connected Image Generation node.)
+                      <div className="mt-1 text-fg-muted">Note: each image becomes a permanent photo avatar in your HeyGen account. The free plan allows only 3 (not API-removable) — delete old ones in HeyGen → Avatars or upgrade. Library avatars have no limit.</div>
                     </div>
                   )}
                   {!hasImageInput && (

@@ -847,7 +847,20 @@ export async function runNode(
       if (avatarImage) {
         // Custom avatar: the connected image becomes a HeyGen Talking Photo.
         if (!voiceId) throw new Error("Custom avatar needs a voice — pick one in the node");
-        const talkingPhotoId = await uploadTalkingPhoto(avatarImage);
+        let talkingPhotoId: string;
+        try {
+          talkingPhotoId = await uploadTalkingPhoto(avatarImage);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          // Each uploaded photo becomes a PERMANENT photo avatar in the HeyGen
+          // account, and the API can't delete them. Free plan caps this at 3.
+          if (/limit|exceed|photo avatar/i.test(msg)) {
+            throw new Error(
+              "HeyGen photo-avatar limit reached. Every custom-avatar image becomes a permanent photo avatar in your HeyGen account, the free plan allows only 3, and they can't be removed via API. Delete old ones in HeyGen → Avatars, or upgrade your HeyGen plan for unlimited photo avatars. Tip: library avatars (no image connected) have no such limit.",
+            );
+          }
+          throw e;
+        }
         const eng = engine || "av4"; // default Avatar IV for photos
         if (eng === "av5") {
           videoId = await createVideoV3({ script: prompt, voiceId, talkingPhotoId, width: w || 720, height: h || 1280, background });
