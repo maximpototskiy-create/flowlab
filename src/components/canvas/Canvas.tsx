@@ -1947,6 +1947,42 @@ export default function Canvas({
                 });
                 composerTracks = items.map(({ kind, value, label, section }) => ({ kind, value, label, section }));
               }
+              // videoGen: resolve connected reference inputs (with thumbnail
+              // URLs) so the node can show numbered chips and insert
+              // @Image1 / [Video1] tokens into the prompt by click. Order
+              // follows edge order to match the runner's numbering.
+              let videoRefs: { port: string; kind: "image" | "video"; url: string }[] | undefined;
+              if (node.type === "videoGen") {
+                const REF_PORTS = ["references", "reference_videos", "source_video", "start_frame", "end_frame"];
+                const out: { port: string; kind: "image" | "video"; url: string }[] = [];
+                const pushUrl = (port: string, v: unknown) => {
+                  if (typeof v !== "string" || !v.startsWith("http")) return;
+                  const isVid = port === "source_video" || port === "reference_videos" || /\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/i.test(v);
+                  out.push({ port, kind: isVid ? "video" : "image", url: v });
+                };
+                for (const e of graph.edges.filter((x) => x.to.nodeId === node.id && REF_PORTS.includes(x.to.port))) {
+                  const from = graph.nodes.find((n) => n.id === e.from.nodeId);
+                  if (!from) continue;
+                  if (from.type === "brandAssets") {
+                    const sel = from.config?.selected;
+                    if (Array.isArray(sel) && sel.length) sel.forEach((u) => pushUrl(e.to.port, u));
+                    else if (from.results) from.results.forEach((r) => pushUrl(e.to.port, r.value));
+                    continue;
+                  }
+                  let v: unknown = from.outputs?.[e.from.port];
+                  if (from.results && from.results.length > 1 && typeof from.config?._selectedResultIdx === "number") {
+                    const picked = from.results[from.config._selectedResultIdx as number];
+                    if (picked?.value) v = picked.value;
+                  }
+                  if (v == null) {
+                    const cfg = from.config ?? {};
+                    if (from.type === "uploadVideo" || from.type === "uploadAudio") v = (cfg.cdnUrl as string) || (cfg.url as string);
+                    else if (from.type === "uploadImage") v = cfg.cdnUrl as string;
+                  }
+                  pushUrl(e.to.port, v);
+                }
+                videoRefs = out;
+              }
               return (
               <CanvasNode
                 key={node.id}
@@ -1973,6 +2009,7 @@ export default function Canvas({
                 onUploadFile={uploadFile}
                 workflowMeta={{ ...workflowMeta, workflowId }}
                 composerTracks={composerTracks}
+                videoRefs={videoRefs}
                 editorHref={node.type === "composer" ? `/editor?wf=${workflowId}&proj=${workflowMeta.projectId}` : undefined}
                 onStashTracks={node.type === "composer" ? () => {
                   try { localStorage.setItem(`flowlab.editor.import.v1:${workflowId}`, JSON.stringify({ tracks: composerTracks ?? [] })); } catch { /* */ }

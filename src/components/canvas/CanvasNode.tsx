@@ -53,6 +53,7 @@ function CanvasNodeImpl({
   onUploadFile,
   workflowMeta,
   composerTracks,
+  videoRefs,
   editorHref,
   onStashTracks,
 }: {
@@ -78,6 +79,9 @@ function CanvasNodeImpl({
   workflowMeta: { brandId: string | null; brandSlug?: string | null; projectId: string; workflowId: string };
   /** Composer node only: ordered upstream tracks resolved by Canvas */
   composerTracks?: { kind: string; value: string; label: string; section?: string }[];
+  /** videoGen only: connected reference inputs (images/videos) with thumbnails,
+   *  in edge order, so the node can show numbered click-to-insert chips. */
+  videoRefs?: { port: string; kind: "image" | "video"; url: string }[];
   /** Composer node only: href of this workflow's editor */
   editorHref?: string;
   /** Composer node only: stash the connected tracks right before navigation */
@@ -822,6 +826,61 @@ function CanvasNodeImpl({
             </div>
           )
         )}
+
+        {/* Video Generation: connected inputs as numbered chips. Tap an image
+            or video chip to drop its reference token (@Image1 / [Video1]) into
+            the prompt, so users don't have to guess which input is which. */}
+        {node.type === "videoGen" && videoRefs && videoRefs.length > 0 && (() => {
+          const seed = String(node.config.model || "").includes("seedance");
+          let imgN = 0, vidN = 0;
+          return (
+            <div className="mt-1 rounded-md bg-bg-subtle border border-border p-2">
+              <div className="text-[9px] uppercase tracking-wider text-fg-subtle font-medium mb-1.5">
+                Connected inputs — tap to add to prompt
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {videoRefs.map((r, i) => {
+                  let token: string | null = null;
+                  let badge = "";
+                  if (r.port === "references") { imgN++; token = seed ? `[Image${imgN}]` : `@Image${imgN}`; badge = token; }
+                  else if (r.port === "reference_videos") { vidN++; token = seed ? `[Video${vidN}]` : `@Video${vidN}`; badge = token; }
+                  else if (r.port === "source_video") badge = "Source";
+                  else if (r.port === "start_frame") badge = "Start";
+                  else if (r.port === "end_frame") badge = "End";
+                  const clickable = token != null;
+                  return (
+                    <button
+                      key={`${r.port}-${i}`}
+                      type="button"
+                      disabled={!clickable}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={() => {
+                        if (!token) return;
+                        const cur = String(node.config.instructions || "").trim();
+                        onConfigChange("instructions", `${cur} ${token}`.trim());
+                      }}
+                      title={clickable ? `Insert ${token} into the prompt` : badge}
+                      className={`relative w-12 h-12 rounded overflow-hidden border bg-black/20 nodrag ${
+                        clickable ? "border-border cursor-pointer hover:border-brand" : "border-border/60 opacity-70 cursor-default"
+                      }`}
+                    >
+                      {r.kind === "video" ? (
+                        <video src={r.url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" />
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={r.url} alt="" className="w-full h-full object-cover pointer-events-none" />
+                      )}
+                      <span className="absolute bottom-0 inset-x-0 bg-black/75 text-white text-[8px] font-medium text-center leading-tight py-[1px]">
+                        {badge}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Video Generation: smart Mode → Model → Duration → Resolution. */}
         {node.type === "videoGen" && (
