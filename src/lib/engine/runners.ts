@@ -859,6 +859,9 @@ export async function runNode(
         payload.aspect_ratio = aspect;
       }
 
+      // Log the exact payload so failures (wrong field, bad duration, source
+      // video out of Kling's 3-10s range, etc.) are traceable in Vercel logs.
+      console.log("[videoGen] submitting", model, "mode=" + mode, JSON.stringify(payload).slice(0, 800));
       const r = await falRun(model, payload);
       const url =
         (r.video as { url: string } | undefined)?.url ??

@@ -52,7 +52,10 @@ export async function falStatus(
   const res = await fetch(`https://queue.fal.run/${baseModel}/requests/${requestId}/status`, {
     headers: { Authorization: `Key ${apiKey}` },
   });
-  if (!res.ok) throw new Error(`fal.ai status ${res.status}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`fal.ai status ${res.status}: ${text.slice(0, 400)}`);
+  }
   return (await res.json()) as never;
 }
 
@@ -66,7 +69,10 @@ export async function falResult(
   const res = await fetch(`https://queue.fal.run/${baseModel}/requests/${requestId}`, {
     headers: { Authorization: `Key ${apiKey}` },
   });
-  if (!res.ok) throw new Error(`fal.ai result ${res.status}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`fal.ai result ${res.status}: ${text.slice(0, 400)}`);
+  }
   return (await res.json()) as Record<string, unknown>;
 }
 
