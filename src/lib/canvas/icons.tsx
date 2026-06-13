@@ -6,7 +6,7 @@ import {
   FileVideo, Film, ImageDown, ImagePlus, Languages, Layers, Maximize, Megaphone,
   MousePointerClick, Move3d, Monitor, Mic, Music, Music2, NotebookPen, Package,
   Package2, PersonStanding, ScanEye, Scissors, ScrollText, Settings, Smartphone,
-  Sparkles, Speech, StickyNote, Type, User, Video, WandSparkles, Webhook, ZoomIn,
+  Sparkles, Speech, StickyNote, Type, User, UserRound, Video, WandSparkles, Webhook, ZoomIn,
   type LucideIcon,
 } from "lucide-react";
 
@@ -21,7 +21,7 @@ const MAP: Record<string, LucideIcon> = {
   music: Music, "music-2": Music2, "notebook-pen": NotebookPen, package: Package,
   "package-2": Package2, "person-standing": PersonStanding, "scan-eye": ScanEye,
   scissors: Scissors, "scroll-text": ScrollText, settings: Settings, smartphone: Smartphone,
-  sparkles: Sparkles, speech: Speech, "sticky-note": StickyNote, type: Type, user: User,
+  sparkles: Sparkles, speech: Speech, "sticky-note": StickyNote, type: Type, user: User, "user-round": UserRound,
   video: Video, "wand-sparkles": WandSparkles, webhook: Webhook, "zoom-in": ZoomIn,
 };
 

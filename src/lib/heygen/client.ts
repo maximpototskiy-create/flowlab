@@ -100,10 +100,23 @@ export type HeyGenAvatar = { id: string; name: string; preview: string | null; g
 export type HeyGenVoice = { id: string; name: string; language: string | null; gender?: string | null; preview: string | null };
 
 export async function listAvatars(): Promise<HeyGenAvatar[]> {
-  const data = await heygen<{ data?: { avatars?: { avatar_id: string; avatar_name?: string; preview_image_url?: string; gender?: string }[] } }>("GET", "/v2/avatars");
-  return (data.data?.avatars ?? []).map((a) => ({
-    id: a.avatar_id, name: a.avatar_name || a.avatar_id, preview: a.preview_image_url || null, gender: a.gender ?? null,
-  }));
+  // /v2/avatars returns the full set in one call for most accounts, but some
+  // paginate via ?page / token. We follow up to a few pages defensively so the
+  // list isn't silently truncated to the first letters of the alphabet.
+  const out: HeyGenAvatar[] = [];
+  type Raw = { avatar_id: string; avatar_name?: string; preview_image_url?: string; gender?: string };
+  type Resp = { data?: { avatars?: Raw[]; talking_photos?: { talking_photo_id: string; talking_photo_name?: string; preview_image_url?: string }[]; token?: string | null; next_page?: string | null } };
+  let path = "/v2/avatars";
+  for (let i = 0; i < 8; i++) {
+    const data = await heygen<Resp>("GET", path);
+    for (const a of data.data?.avatars ?? []) out.push({ id: a.avatar_id, name: a.avatar_name || a.avatar_id, preview: a.preview_image_url || null, gender: a.gender ?? null });
+    const tok = data.data?.token || data.data?.next_page;
+    if (!tok) break;
+    path = `/v2/avatars?token=${encodeURIComponent(tok)}`;
+  }
+  // de-dupe by id (pagination overlaps can repeat the boundary item)
+  const seen = new Set<string>();
+  return out.filter((a) => (seen.has(a.id) ? false : (seen.add(a.id), true)));
 }
 
 export async function listVoices(): Promise<HeyGenVoice[]> {
@@ -115,18 +128,22 @@ export async function listVoices(): Promise<HeyGenVoice[]> {
 
 export async function createAvatarVideo(opts: {
   script: string;
-  avatarId: string;
   voiceId: string;
+  avatarId?: string;        // library avatar
+  talkingPhotoId?: string;  // custom avatar built from an uploaded image
   avatarStyle?: string;     // normal | circle | closeUp
   width?: number;
   height?: number;
   background?: string;      // hex color, e.g. "#008000" — keyable later in the editor
   speed?: number;           // 0.5 – 1.5
 }): Promise<string> {
+  const character = opts.talkingPhotoId
+    ? { type: "talking_photo", talking_photo_id: opts.talkingPhotoId }
+    : { type: "avatar", avatar_id: opts.avatarId, avatar_style: opts.avatarStyle || "normal" };
   const body = {
     video_inputs: [
       {
-        character: { type: "avatar", avatar_id: opts.avatarId, avatar_style: opts.avatarStyle || "normal" },
+        character,
         voice: { type: "text", input_text: opts.script, voice_id: opts.voiceId, ...(opts.speed && opts.speed !== 1 ? { speed: opts.speed } : {}) },
         ...(opts.background ? { background: { type: "color", value: opts.background } } : {}),
       },
@@ -137,6 +154,24 @@ export async function createAvatarVideo(opts: {
   const id = data.data?.video_id;
   if (!id) throw new Error(data.error?.message || "HeyGen did not return a video_id");
   return id;
+}
+
+// Upload an image (by URL) to HeyGen as a Talking Photo → returns its id, so a
+// generated/brand avatar picture can speak. Upload host differs from the API host.
+export async function uploadTalkingPhoto(imageUrl: string): Promise<string> {
+  const img = await fetch(imageUrl);
+  if (!img.ok) throw new Error(`Could not fetch avatar image (${img.status})`);
+  const ct = img.headers.get("content-type") || "image/jpeg";
+  const contentType = ct.includes("png") ? "image/png" : ct.includes("webp") ? "image/webp" : "image/jpeg";
+  const buf = Buffer.from(await img.arrayBuffer());
+  const res = await fetch("https://upload.heygen.com/v1/talking_photo", {
+    method: "POST",
+    headers: { "X-Api-Key": key(), "Content-Type": contentType },
+    body: buf,
+  });
+  const j = (await res.json()) as { data?: { talking_photo_id?: string }; message?: string };
+  if (!res.ok || !j.data?.talking_photo_id) throw new Error(j.message || `HeyGen talking-photo upload failed (${res.status})`);
+  return j.data.talking_photo_id;
 }
 
 // v1 status endpoint — the documented way to poll v2 generations.

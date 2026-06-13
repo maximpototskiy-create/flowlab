@@ -435,29 +435,53 @@ function CanvasNodeImpl({
               const vo = String(node.config?.voice_id ?? "");
               const avSel = hg.avatars.find((a) => a.id === av) || null;
               const voSel = hg.voices.find((v) => v.id === vo) || null;
-              const avList = (hgAvQ ? hg.avatars.filter((a) => a.name.toLowerCase().includes(hgAvQ.toLowerCase())) : hg.avatars).slice(0, 60);
-              const voList = (hgVoQ ? hg.voices.filter((v) => `${v.name} ${v.language ?? ""}`.toLowerCase().includes(hgVoQ.toLowerCase())) : hg.voices).slice(0, 80);
+              const hasImageInput = edgesTo.some((e) => e.to.port === "image");
+              const avFiltered = hgAvQ ? hg.avatars.filter((a) => a.name.toLowerCase().includes(hgAvQ.toLowerCase())) : hg.avatars;
+              const renderCap = inlineExpanded ? 80 : 24;
+              const avList = avFiltered.slice(0, renderCap);
+              const voList = (hgVoQ ? hg.voices.filter((v) => `${v.name} ${v.language ?? ""}`.toLowerCase().includes(hgVoQ.toLowerCase())) : hg.voices).slice(0, 200);
+              const needVoice = (av || hasImageInput);
               return (
                 <>
-                  <div className="flex items-center gap-2">
-                    {avSel?.preview ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={avSel.preview} alt="" className="w-12 h-12 rounded-md object-cover border border-border" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-md border border-dashed border-border grid place-items-center text-[8px] text-fg-subtle text-center leading-tight">prompt agent</div>
-                    )}
-                    <div className="flex-1 min-w-0 space-y-1">
-                      <input value={hgAvQ} onChange={(e) => setHgAvQ(e.target.value)} placeholder={`Search ${hg.avatars.length} avatars…`}
-                        className="w-full bg-bg border border-border rounded px-1.5 py-1 text-[10px] outline-none" />
-                      <select value={av} onChange={(e) => onConfigChange("avatar_id", e.target.value)}
-                        className="w-full bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
-                        <option value="">— no avatar (prompt agent) —</option>
-                        {avSel && !avList.includes(avSel) && <option value={avSel.id}>{avSel.name}</option>}
-                        {avList.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                      </select>
+                  {hasImageInput && (
+                    <div className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1.5 text-[10px] text-fg">
+                      <b>Custom avatar</b> — the connected image will speak as a HeyGen talking photo. Avatar library is ignored; just pick a voice below. (Pick the picture model on the connected Image Generation node.)
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
+                  )}
+                  {!hasImageInput && (
+                    <>
+                      <div className="flex items-center justify-between gap-2">
+                        <input value={hgAvQ} onChange={(e) => setHgAvQ(e.target.value)} placeholder={`Search ${hg.avatars.length} avatars…`}
+                          className="flex-1 bg-bg border border-border rounded px-1.5 py-1 text-[10px] outline-none" />
+                        {av && <button type="button" onClick={() => onConfigChange("avatar_id", "")} className="text-[9px] text-fg-subtle hover:text-fg whitespace-nowrap">clear</button>}
+                      </div>
+                      <div className={`grid grid-cols-3 gap-1 overflow-y-auto ${inlineExpanded ? "max-h-72" : "max-h-36"}`}>
+                        {/* prompt-agent tile */}
+                        <button type="button" onClick={() => onConfigChange("avatar_id", "")}
+                          className={`relative rounded-md border aspect-[3/4] grid place-items-center text-[8px] text-center leading-tight p-1 ${av === "" ? "border-brand ring-1 ring-brand text-brand" : "border-dashed border-border text-fg-subtle hover:border-brand/50"}`}>
+                          Prompt agent (auto)
+                        </button>
+                        {avList.map((a) => (
+                          <button key={a.id} type="button" onClick={() => onConfigChange("avatar_id", a.id)}
+                            title={a.name}
+                            className={`relative rounded-md overflow-hidden border aspect-[3/4] ${av === a.id ? "border-brand ring-1 ring-brand" : "border-border hover:border-brand/50"}`}>
+                            {a.preview ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={a.preview} alt="" loading="lazy" className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full grid place-items-center text-[7px] text-fg-subtle p-0.5 text-center">{a.name}</div>
+                            )}
+                            <span className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[7px] px-0.5 py-px truncate">{a.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {avFiltered.length > avList.length && (
+                        <div className="text-[9px] text-fg-subtle">Showing {avList.length} of {avFiltered.length}. {inlineExpanded ? "Refine the search to narrow down." : "Expand the node (⤢) or search to see more."}</div>
+                      )}
+                    </>
+                  )}
+                  {/* Voice */}
+                  <div className="flex items-center gap-2 pt-0.5">
                     <button type="button" disabled={!voSel?.preview}
                       onClick={() => {
                         const cur = hgAudioRef.current;
@@ -467,7 +491,7 @@ function CanvasNodeImpl({
                         const a = new Audio(voSel.preview); a.volume = 0.9; a.onended = () => setHgPlaying(false);
                         hgAudioRef.current = a; setHgPlaying(true); a.play().catch(() => setHgPlaying(false));
                       }}
-                      className="w-12 h-9 rounded-md border border-border grid place-items-center text-fg-muted hover:text-fg disabled:opacity-30">
+                      className="w-9 h-9 rounded-md border border-border grid place-items-center text-fg-muted hover:text-fg disabled:opacity-30 shrink-0">
                       {hgPlaying ? "⏸" : "▶"}
                     </button>
                     <div className="flex-1 min-w-0 space-y-1">
@@ -475,34 +499,52 @@ function CanvasNodeImpl({
                         className="w-full bg-bg border border-border rounded px-1.5 py-1 text-[10px] outline-none" />
                       <select value={vo} onChange={(e) => onConfigChange("voice_id", e.target.value)}
                         className="w-full bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
-                        <option value="">— no voice (prompt agent) —</option>
+                        <option value="">{needVoice ? "— pick a voice —" : "— no voice (prompt agent) —"}</option>
                         {voSel && !voList.includes(voSel) && <option value={voSel.id}>{voSel.name}{voSel.language ? ` · ${voSel.language}` : ""}</option>}
                         {voList.map((v) => <option key={v.id} value={v.id}>{v.name}{v.language ? ` · ${v.language}` : ""}</option>)}
                       </select>
                     </div>
                   </div>
-                  {av && vo && (
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <select value={String(node.config?.avatar_style ?? "normal")} onChange={(e) => onConfigChange("avatar_style", e.target.value)}
-                        className="bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
-                        <option value="normal">Full body</option><option value="circle">Circle</option><option value="closeUp">Close-up</option>
-                      </select>
-                      <select value={String(node.config?.dimension ?? "720x1280")} onChange={(e) => onConfigChange("dimension", e.target.value)}
-                        className="bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
-                        <option value="720x1280">720×1280 (9:16)</option><option value="1080x1920">1080×1920 (9:16)</option>
-                        <option value="1280x720">1280×720 (16:9)</option><option value="1920x1080">1920×1080 (16:9)</option>
-                        <option value="1080x1080">1080×1080 (1:1)</option>
-                      </select>
-                      <input value={String(node.config?.background ?? "")} onChange={(e) => onConfigChange("background", e.target.value)} placeholder="BG #00FF00 (keyable)"
-                        className="bg-bg border border-border rounded px-1.5 py-1 text-[10px] outline-none" />
-                      <label className="flex items-center gap-1 text-[10px] text-fg-muted">Speed
-                        <input type="number" min={0.5} max={1.5} step={0.05} value={Number(node.config?.speed ?? 1)} onChange={(e) => onConfigChange("speed", Number(e.target.value) || 1)}
-                          className="w-full bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none" />
-                      </label>
+                  {/* Output settings — shown once we're in full mode */}
+                  {(needVoice && vo) && (
+                    <div className="space-y-1.5">
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {!hasImageInput && (
+                          <select value={String(node.config?.avatar_style ?? "normal")} onChange={(e) => onConfigChange("avatar_style", e.target.value)}
+                            className="bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
+                            <option value="normal">Full body</option><option value="circle">Circle</option><option value="closeUp">Close-up</option>
+                          </select>
+                        )}
+                        <select value={String(node.config?.dimension ?? "720x1280")} onChange={(e) => onConfigChange("dimension", e.target.value)}
+                          className="bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
+                          <option value="720x1280">720×1280 (9:16)</option><option value="1080x1920">1080×1920 (9:16)</option>
+                          <option value="1280x720">1280×720 (16:9)</option><option value="1920x1080">1920×1080 (16:9)</option>
+                          <option value="1080x1080">1080×1080 (1:1)</option>
+                        </select>
+                        <label className="flex items-center gap-1 text-[10px] text-fg-muted">Speed
+                          <input type="number" min={0.5} max={1.5} step={0.05} value={Number(node.config?.speed ?? 1)} onChange={(e) => onConfigChange("speed", Number(e.target.value) || 1)}
+                            className="w-full bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none" />
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-fg-muted">
+                        <label className="flex items-center gap-1">
+                          <input type="checkbox" checked={Boolean(node.config?.bgEnabled)} onChange={(e) => onConfigChange("bgEnabled", e.target.checked)} />
+                          Background
+                        </label>
+                        {Boolean(node.config?.bgEnabled) && (
+                          <>
+                            <input type="color" value={String(node.config?.bgColor ?? "#00FF00")} onChange={(e) => onConfigChange("bgColor", e.target.value)}
+                              className="w-7 h-6 rounded border border-border bg-transparent cursor-pointer p-0" />
+                            <button type="button" onClick={() => onConfigChange("bgColor", "#00FF00")} className="px-1.5 py-0.5 rounded border border-border hover:border-brand text-[9px]">Green screen</button>
+                            <span className="text-fg-subtle">{String(node.config?.bgColor ?? "#00FF00")}</span>
+                          </>
+                        )}
+                      </div>
+                      {Boolean(node.config?.bgEnabled) && <div className="text-[9px] text-fg-subtle">Tip: green background → drop into the editor → chroma key it out to place the avatar over any footage.</div>}
                     </div>
                   )}
                   <div className="text-[9px] text-fg-subtle leading-tight">
-                    {av && vo ? "Script is spoken verbatim by the chosen avatar/voice." : "No avatar/voice picked — HeyGen's prompt agent decides everything from the prompt."}
+                    {hasImageInput ? "Script is spoken by the connected image (talking photo)." : (av && vo) ? "Script is spoken verbatim by the chosen avatar/voice." : "Nothing picked — HeyGen's prompt agent decides everything from the prompt."}
                   </div>
                 </>
               );
