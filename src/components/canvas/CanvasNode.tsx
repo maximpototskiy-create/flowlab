@@ -827,6 +827,13 @@ function CanvasNodeImpl({
           )
         )}
 
+        {/* Screen Replace (Wan): usage hint. */}
+        {node.type === "screenReplace" && (
+          <div className="mt-1 rounded-md border border-brand/40 bg-brand/5 px-2 py-1.5 text-[10px] text-fg leading-snug">
+            Connect a <b>green-screen</b> video to <b>Source video</b> and the app screenshot to <b>Screen image</b>. The green is auto-keyed as the area to replace (mask tracks the phone; fingers stay on top). Result is <b>AI-generated</b> (approximate UI), not a pixel-exact composite. Tune <b>Key strength</b> if green is uneven.
+          </div>
+        )}
+
         {/* Video Generation: connected inputs as numbered chips. Tap an image
             or video chip to drop its reference token (@Image1 / [Video1]) into
             the prompt, so users don't have to guess which input is which. */}

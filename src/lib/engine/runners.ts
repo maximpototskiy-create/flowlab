@@ -5,7 +5,8 @@
 import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
 import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, createAvatarIVVideo } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
-import { uploadFromUrl, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
+import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
+import { buildGreenScreenMask } from "@/lib/video";
 
 export type RunnerContext = {
   brandId?: string | null;
@@ -870,6 +871,68 @@ export async function runNode(
       return {
         outputs: { video: persisted },
         costUsd: estimateCost(model, { duration: Number(duration) }),
+        durationMs: Date.now() - t0,
+      };
+    }
+
+    case "screenReplace": {
+      // Replace a green-screen phone/device screen with a connected image via
+      // Wan VACE inpainting. Pipeline: source video → ffmpeg green→mask video →
+      // Wan inpainting (mask localizes the edit, ref image = the new screen).
+      const sourceVideo = String(inputs.source_video || "").trim();
+      const screenImg = String(inputs.screen || "").trim();
+      if (!sourceVideo) throw new Error("Connect the green-screen source video to the Source video port");
+      if (!screenImg) throw new Error("Connect the replacement screen image to the Screen image port");
+      const keyColor = String(config.key_color || "#00FF00").trim();
+      const similarity = Number(config.key_similarity) || 0.3;
+      const resolution = String(config.resolution || "auto");
+      const userPrompt = String(config.instructions || "").trim();
+      const prompt =
+        userPrompt ||
+        "The phone screen displays the reference user interface, shown crisp, bright and clearly legible, matching the screen's angle, perspective and motion. The person, hand, phone body and background stay exactly as in the source video.";
+
+      // 1. download the source video
+      const srcResp = await fetch(sourceVideo);
+      if (!srcResp.ok) throw new Error(`Could not fetch the source video (${srcResp.status})`);
+      const srcBuf = Buffer.from(await srcResp.arrayBuffer());
+
+      // 2. ffmpeg: green → per-frame mask video (white = the screen)
+      let maskBuf: Buffer;
+      try {
+        maskBuf = await buildGreenScreenMask(srcBuf, keyColor, similarity);
+      } catch (e) {
+        throw new Error(`Mask build failed (ffmpeg): ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      // 3. upload the mask → public URL
+      const maskPath = buildStoragePath({
+        brandId: ctx.brandId, projectId: ctx.projectId, workflowId: ctx.workflowId,
+        runStepId: ctx.runStepId, prefix: "mask", ext: "mp4",
+      });
+      const { cdnUrl: maskUrl } = await uploadBytes(maskBuf, maskPath, "video/mp4");
+      if (!maskUrl) throw new Error("Failed to upload the generated mask");
+
+      // 4. Wan VACE inpainting — mask localizes the edit, ref image is the new screen
+      const payload: Record<string, unknown> = {
+        prompt,
+        video_url: sourceVideo,
+        mask_video_url: maskUrl,
+        ref_image_urls: [screenImg],
+        match_input_num_frames: true,
+        match_input_frames_per_second: true,
+        resolution,
+      };
+      console.log("[screenReplace] wan-vace", JSON.stringify({ video_url: sourceVideo.slice(0, 60), mask: maskUrl.slice(0, 60), ref: screenImg.slice(0, 60), resolution }));
+      const r = await falRun("fal-ai/wan-vace-14b/inpainting", payload, { timeoutMs: 600_000 });
+      const url =
+        (r.video as { url: string } | undefined)?.url ??
+        (r.video_url as string | undefined) ??
+        ((r.videos as { url: string }[] | undefined)?.[0]?.url);
+      if (!url) throw new Error("Wan VACE returned no video");
+      const persisted = await persistAsset(url, ctx, "screen");
+      return {
+        outputs: { video: persisted },
+        costUsd: 0.2,
         durationMs: Date.now() - t0,
       };
     }

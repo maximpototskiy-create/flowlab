@@ -35,6 +35,36 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
+// Build a per-frame mask video from a GREEN-SCREEN clip: the keyed green area
+// becomes WHITE (the region to replace) and everything else BLACK. The green
+// moves with the phone, so the mask tracks the screen automatically and finger
+// occlusions are excluded for free (a finger isn't green). Drives Wan VACE.
+export async function buildGreenScreenMask(
+  input: Buffer,
+  keyColorHex = "#00FF00",
+  similarity = 0.3,
+): Promise<Buffer> {
+  const dir = os.tmpdir();
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const inPath = path.join(dir, `${id}_src.mp4`);
+  const outPath = path.join(dir, `${id}_mask.mp4`);
+  const hex = keyColorHex.replace(/^#/, "").padStart(6, "0").slice(0, 6);
+  const sim = Math.min(0.9, Math.max(0.01, similarity || 0.3));
+  await writeFile(inPath, input);
+  try {
+    await runFfmpeg([
+      "-y", "-i", inPath,
+      "-vf", `chromakey=0x${hex}:${sim}:0.0,alphaextract,negate`,
+      "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+      outPath,
+    ]);
+    return await readFile(outPath);
+  } finally {
+    await unlink(inPath).catch(() => {});
+    await unlink(outPath).catch(() => {});
+  }
+}
+
 // Transcode any video buffer to browser-friendly MP4 (H.264/AAC). Used for
 // .mov (QuickTime) which Chrome/Firefox won't play in <video>.
 export async function convertToMp4(input: Buffer): Promise<Buffer> {

@@ -1071,6 +1071,48 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     quickFields: ["model"],
   },
 
+  screenReplace: {
+    name: "Screen Replace (Wan)",
+    category: "video",
+    icon: "smartphone",
+    description: "Replace a GREEN-SCREEN phone/device screen in a video with a connected image, via Wan VACE inpainting. The green area is auto-keyed as the region to replace; the mask tracks the screen and finger occlusions are kept for free.",
+    inputs: [
+      { name: "source_video", type: "video", label: "Source video (green screen)" },
+      { name: "screen", type: "image", label: "Screen image (replacement)" },
+    ],
+    outputs: [{ name: "video", type: "video" }],
+    defaults: { key_color: "#00FF00", key_similarity: "0.30", resolution: "auto", instructions: "" },
+    fields: [
+      { name: "key_color", label: "Green key color", type: "text", placeholder: "#00FF00" },
+      {
+        name: "key_similarity",
+        label: "Key strength",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "0.20", label: "Tight (clean even green)" },
+          { value: "0.30", label: "Normal" },
+          { value: "0.45", label: "Loose (uneven / spill)" },
+        ],
+      },
+      {
+        name: "resolution",
+        label: "Resolution",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "auto", label: "Auto (match source)" },
+          { value: "480p", label: "480p" },
+          { value: "580p", label: "580p" },
+          { value: "720p", label: "720p" },
+        ],
+      },
+    ],
+    quickFields: ["key_similarity", "resolution"],
+    primaryField: "instructions",
+    primaryLabel: "Prompt (optional)",
+    primaryPlaceholder: "Describe the new screen, e.g. 'the phone screen shows the reference app UI, crisp and bright'. Leave empty for a sensible default.",
+  },
   heygenVideo: {
     name: "HeyGen Avatar",
     category: "video",
