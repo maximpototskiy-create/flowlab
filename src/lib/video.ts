@@ -6,7 +6,7 @@
 // only the embedding is computed from the padded version.
 // ─────────────────────────────────────────────────────────────────────────
 import { spawn } from "child_process";
-import { writeFile, readFile, unlink } from "fs/promises";
+import { writeFile, readFile, unlink, mkdtemp, mkdir, readdir, rm } from "fs/promises";
 import { existsSync } from "fs";
 import os from "os";
 import path from "path";
@@ -56,78 +56,135 @@ function ffprobeBasic(inPath: string): Promise<{ width: number; height: number; 
   });
 }
 
-// Find the bounding box of the green region in a single frame (PNG). Generic
-// "green dominates" test — robust for typical green screens.
-async function detectGreenBBox(
-  framePath: string,
-): Promise<{ x: number; y: number; w: number; h: number } | null> {
-  const { data, info } = await sharp(framePath).raw().toBuffer({ resolveWithObject: true });
-  const { width, height, channels } = info;
-  let minX = width, minY = height, maxX = -1, maxY = -1;
-  for (let yy = 0; yy < height; yy++) {
-    for (let xx = 0; xx < width; xx++) {
-      const i = (yy * width + xx) * channels;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      if (g > 80 && g > r * 1.4 && g > b * 1.4) {
-        if (xx < minX) minX = xx;
-        if (xx > maxX) maxX = xx;
-        if (yy < minY) minY = yy;
-        if (yy > maxY) maxY = yy;
-      }
-    }
-  }
-  if (maxX < 0) return null;
-  let w = maxX - minX + 1, h = maxY - minY + 1;
-  w -= w % 2; h -= h % 2; // keep even for yuv420p
-  return { x: minX, y: minY, w: Math.max(2, w), h: Math.max(2, h) };
-}
+type GBBox = { x: number; y: number; w: number; h: number } | null;
 
-// Chroma-key composite: place `content` (image OR video) into the GREEN region
-// of `source`, revealing it through the keyed green and keeping non-green pixels
-// (fingers, phone body) on top. Pixel-exact. The screen position is taken from
-// the green bounding box in a sampled frame, so this is best for steady/frontal
-// shots; heavy phone rotation needs true planar tracking (backlog).
+// Per-frame chroma-key composite WITH tracking. The green screen is detected in
+// every frame, so the inserted content (image OR video) follows the screen's
+// position and size as the phone moves; the actual per-frame green pixels are
+// used as the alpha, so fingers / phone body (non-green) stay on top. This
+// tracks translation + scale (good for steady, frontal and slight-angle shots);
+// strong perspective rotation is not corrected (that needs planar tracking).
 export async function compositeGreenScreen(opts: {
   source: Buffer;
   content: Buffer;
   contentIsVideo: boolean;
-  keyColorHex?: string;
+  keyColorHex?: string; // kept for API symmetry; detection is generic-green
   similarity?: number;
 }): Promise<Buffer> {
-  const dir = os.tmpdir();
-  const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const srcPath = path.join(dir, `${id}_src.mp4`);
-  const framePath = path.join(dir, `${id}_frame.png`);
-  const contentPath = path.join(dir, `${id}_content${opts.contentIsVideo ? ".mp4" : ".png"}`);
-  const outPath = path.join(dir, `${id}_out.mp4`);
-  const hex = (opts.keyColorHex || "#00FF00").replace(/^#/, "").padStart(6, "0").slice(0, 6);
-  const sim = Math.min(0.9, Math.max(0.01, opts.similarity || 0.3));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
+  const srcPath = path.join(dir, "src.mp4");
+  const contentPath = path.join(dir, opts.contentIsVideo ? "content.mp4" : "content.png");
+  const framesDir = path.join(dir, "frames");
+  const cframesDir = path.join(dir, "cframes");
+  const masksDir = path.join(dir, "masks");
+  const outDir = path.join(dir, "out");
+  const outPath = path.join(dir, "out.mp4");
+  await mkdir(framesDir);
+  await mkdir(masksDir);
+  await mkdir(outDir);
   await writeFile(srcPath, opts.source);
   await writeFile(contentPath, opts.content);
   try {
-    const { width: W, height: H, fps } = await ffprobeBasic(srcPath);
-    if (!W || !H) throw new Error("Could not read source video dimensions");
-    await runFfmpeg(["-y", "-ss", "0.2", "-i", srcPath, "-frames:v", "1", framePath]);
-    const bbox = await detectGreenBBox(framePath);
-    if (!bbox) throw new Error("No green screen detected in the source — check the Green key color and lighting");
-    const { x, y, w, h } = bbox;
-    const args = [
-      "-y",
-      ...(opts.contentIsVideo ? ["-stream_loop", "-1", "-i", contentPath] : ["-loop", "1", "-i", contentPath]),
-      "-i", srcPath,
-      "-filter_complex",
-      `[0:v]format=rgba,scale=${w}:${h},fps=${fps},pad=${W}:${H}:${x}:${y}:color=0x00000000[bg];` +
-        `[1:v]chromakey=0x${hex}:${sim}:0.05[keyed];` +
-        `[bg][keyed]overlay=0:0:format=auto,format=yuv420p[out]`,
-      "-map", "[out]", "-map", "1:a?",
-      "-r", String(fps),
+    const { fps } = await ffprobeBasic(srcPath);
+    // Extract source frames as JPEG (small) so /tmp stays well under serverless limits.
+    await runFfmpeg(["-y", "-i", srcPath, "-fps_mode", "passthrough", "-q:v", "3", path.join(framesDir, "f_%05d.jpg")]);
+    const frameFiles = (await readdir(framesDir)).filter((f) => f.endsWith(".jpg")).sort();
+    if (frameFiles.length === 0) throw new Error("No frames extracted from the source video");
+    if (frameFiles.length > 1500) throw new Error("Clip is too long for composite tracking — trim it shorter or use the Wan method");
+
+    let contentIsVideo = opts.contentIsVideo;
+    let contentFiles: string[] = [];
+    if (contentIsVideo) {
+      await mkdir(cframesDir);
+      await runFfmpeg(["-y", "-i", contentPath, "-fps_mode", "passthrough", "-q:v", "3", path.join(cframesDir, "c_%05d.jpg")]);
+      contentFiles = (await readdir(cframesDir)).filter((f) => f.endsWith(".jpg")).sort();
+      if (contentFiles.length === 0) contentIsVideo = false;
+    }
+
+    const meta0 = await sharp(path.join(framesDir, frameFiles[0])).metadata();
+    const W = meta0.width ?? 0, H = meta0.height ?? 0;
+    if (!W || !H) throw new Error("Could not read source frame dimensions");
+
+    // Pass 1 — per-frame green bbox; the binary mask is written to disk
+    // (not kept in RAM) so memory stays flat regardless of clip length.
+    const bboxes: GBBox[] = [];
+    for (const f of frameFiles) {
+      const { data, info } = await sharp(path.join(framesDir, f)).raw().toBuffer({ resolveWithObject: true });
+      const ch = info.channels;
+      const mask = Buffer.alloc(W * H, 0);
+      let minX = W, minY = H, maxX = -1, maxY = -1;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * ch;
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          if (g > 80 && g > r * 1.4 && g > b * 1.4) {
+            mask[y * W + x] = 255;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      bboxes.push(maxX < 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 });
+      await sharp(mask, { raw: { width: W, height: H, channels: 1 } }).png().toFile(path.join(masksDir, f.replace(/\.jpg$/, ".png")));
+    }
+    // Hold last-known bbox across frames where the screen is briefly not detected.
+    let last: GBBox = null;
+    for (let i = 0; i < bboxes.length; i++) {
+      if (bboxes[i]) last = bboxes[i];
+      else bboxes[i] = last;
+    }
+    const firstBB = bboxes.find((b) => b) ?? null;
+    for (let i = 0; i < bboxes.length && !bboxes[i]; i++) bboxes[i] = firstBB;
+    if (!bboxes.some((b) => b)) throw new Error("No green screen detected in any frame — check the green color and lighting");
+
+    // Smooth the track (moving average ±2) to avoid jitter from detection noise.
+    const sm: { x: number; y: number; w: number; h: number }[] = [];
+    const win = 2;
+    for (let i = 0; i < bboxes.length; i++) {
+      let sx = 0, sy = 0, sw = 0, sh = 0, n = 0;
+      for (let j = Math.max(0, i - win); j <= Math.min(bboxes.length - 1, i + win); j++) {
+        const o = bboxes[j];
+        if (o) { sx += o.x; sy += o.y; sw += o.w; sh += o.h; n++; }
+      }
+      const o = bboxes[i]!;
+      sm.push(n ? { x: Math.round(sx / n), y: Math.round(sy / n), w: Math.round(sw / n), h: Math.round(sh / n) } : o);
+    }
+
+    // Pass 2 — place content at the (smoothed) bbox, alpha = actual green mask.
+    const M = 6; // expand slightly so content fully covers the green (no fringe)
+    for (let k = 0; k < frameFiles.length; k++) {
+      const t = sm[k];
+      const mask = await sharp(path.join(masksDir, frameFiles[k].replace(/\.jpg$/, ".png"))).greyscale().raw().toBuffer();
+      const rx = Math.max(0, t.x - M), ry = Math.max(0, t.y - M);
+      const rw = Math.min(W - rx, t.w + 2 * M), rh = Math.min(H - ry, t.h + 2 * M);
+      const cPath = contentIsVideo ? path.join(cframesDir, contentFiles[k % contentFiles.length]) : contentPath;
+      const cont = await sharp(cPath).resize(rw, rh, { fit: "fill" }).removeAlpha().raw().toBuffer();
+      const canvas = Buffer.alloc(W * H * 4, 0);
+      for (let y = 0; y < rh; y++) {
+        for (let x = 0; x < rw; x++) {
+          const dx = rx + x, dy = ry + y;
+          if (mask[dy * W + dx] > 0) {
+            const si = (y * rw + x) * 3, di = (dy * W + dx) * 4;
+            canvas[di] = cont[si]; canvas[di + 1] = cont[si + 1]; canvas[di + 2] = cont[si + 2]; canvas[di + 3] = 255;
+          }
+        }
+      }
+      const overlay = await sharp(canvas, { raw: { width: W, height: H, channels: 4 } }).png().toBuffer();
+      await sharp(path.join(framesDir, frameFiles[k])).composite([{ input: overlay }]).jpeg({ quality: 95 }).toFile(path.join(outDir, frameFiles[k]));
+    }
+
+    // Re-encode composited frames with the original audio.
+    await runFfmpeg([
+      "-y", "-framerate", String(fps), "-i", path.join(outDir, "f_%05d.jpg"),
+      "-i", srcPath, "-map", "0:v", "-map", "1:a?",
       "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-movflags", "+faststart",
       outPath,
-    ];
-    await runFfmpeg(args);
+    ]);
     return await readFile(outPath);
   } finally {
-    await Promise.all([srcPath, framePath, contentPath, outPath].map((f) => unlink(f).catch(() => {})));
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -150,7 +207,7 @@ export async function buildGreenScreenMask(
   try {
     await runFfmpeg([
       "-y", "-i", inPath,
-      "-vf", `chromakey=0x${hex}:${sim}:0.0,alphaextract,negate`,
+      "-vf", `format=rgba,colorkey=0x${hex}:${sim}:0.10,alphaextract,negate`,
       "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
       outPath,
     ]);
