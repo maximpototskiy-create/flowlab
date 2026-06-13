@@ -190,6 +190,57 @@ export async function createVideoV3(opts: {
   return id;
 }
 
+// Upload an image (by URL) to HeyGen's asset store → returns an image_key.
+// Unlike a Talking Photo, an asset does NOT create a permanent photo avatar
+// (no plan-based "3 photo avatars" limit) — it just feeds the Avatar IV
+// generation endpoint, which is billed from the credits pool.
+export async function uploadAsset(imageUrl: string): Promise<string> {
+  const img = await fetch(imageUrl);
+  if (!img.ok) throw new Error(`Could not fetch avatar image (${img.status})`);
+  const ct = img.headers.get("content-type") || "image/jpeg";
+  const contentType = ct.includes("png") ? "image/png" : ct.includes("webp") ? "image/webp" : "image/jpeg";
+  const buf = Buffer.from(await img.arrayBuffer());
+  const res = await fetch("https://upload.heygen.com/v1/asset", {
+    method: "POST",
+    headers: { "X-Api-Key": key(), "Content-Type": contentType },
+    body: buf,
+  });
+  const j = (await res.json()) as { data?: { image_key?: string; id?: string; url?: string }; message?: string; error?: { message?: string } };
+  if (!res.ok) throw new Error(j.error?.message || j.message || `HeyGen asset upload failed (${res.status})`);
+  const d = j.data;
+  // Response may carry image_key directly, or just an id we turn into the key.
+  if (d?.image_key) return d.image_key;
+  if (d?.id) return `image/${d.id}/original`;
+  throw new Error("HeyGen asset upload returned no image_key");
+}
+
+// Avatar IV from a single photo — the credits-based endpoint (/v2/video/av4/generate).
+// This is the right path for "custom avatar from an image": it consumes credits
+// and does NOT register a permanent photo avatar, so it never hits the photo-
+// avatar slot limit. Poll with pollVideoStatus.
+export async function createAvatarIVVideo(opts: {
+  imageKey: string;
+  script: string;
+  voiceId: string;
+  width?: number;
+  height?: number;
+  title?: string;
+  motionPrompt?: string;
+}): Promise<string> {
+  const body: Record<string, unknown> = {
+    image_key: opts.imageKey,
+    video_title: opts.title || "FlowLab Avatar IV",
+    script: opts.script,
+    voice_id: opts.voiceId,
+    dimension: { width: opts.width ?? 720, height: opts.height ?? 1280 },
+  };
+  if (opts.motionPrompt) { body.custom_motion_prompt = opts.motionPrompt; body.enhance_custom_motion_prompt = true; }
+  const data = await heygen<{ data?: { video_id?: string }; error?: { message?: string } }>("POST", "/v2/video/av4/generate", body);
+  const id = data.data?.video_id;
+  if (!id) throw new Error(data.error?.message || "HeyGen (Avatar IV) did not return a video_id");
+  return id;
+}
+
 // Upload an image (by URL) to HeyGen as a Talking Photo → returns its id, so a
 // generated/brand avatar picture can speak. Upload host differs from the API host.
 export async function uploadTalkingPhoto(imageUrl: string): Promise<string> {

@@ -3,7 +3,7 @@
 // Generated assets are uploaded to Supabase Storage and recorded in DB.
 
 import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
-import { createVideoFromPrompt, pollVideo, createAvatarVideo, createVideoV3, pollVideoStatus, uploadTalkingPhoto } from "@/lib/heygen/client";
+import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, uploadAsset, createAvatarIVVideo } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 
@@ -845,33 +845,27 @@ export async function runNode(
       let url: string;
       const engine = String(config.engine || "");
       if (avatarImage) {
-        // Custom avatar: the connected image becomes a HeyGen Talking Photo.
+        // Custom avatar from a connected image → Avatar IV via the credits-based
+        // av4 endpoint (Upload Asset → image_key → /v2/video/av4/generate).
+        // This consumes credits and does NOT create a permanent photo avatar,
+        // so it never hits the plan's photo-avatar slot limit.
         if (!voiceId) throw new Error("Custom avatar needs a voice — pick one in the node");
-        let talkingPhotoId: string;
         try {
-          talkingPhotoId = await uploadTalkingPhoto(avatarImage);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          // Each uploaded photo becomes a PERMANENT photo avatar in the HeyGen
-          // account, and the API can't delete them. Free plan caps this at 3.
-          if (/limit|exceed|photo avatar/i.test(msg)) {
-            throw new Error(
-              "HeyGen photo-avatar limit reached. Every custom-avatar image becomes a permanent photo avatar in your HeyGen account, the free plan allows only 3, and they can't be removed via API. Delete old ones in HeyGen → Avatars, or upgrade your HeyGen plan for unlimited photo avatars. Tip: library avatars (no image connected) have no such limit.",
-            );
-          }
-          throw e;
-        }
-        const eng = engine || "av4"; // default Avatar IV for photos
-        if (eng === "av5") {
-          videoId = await createVideoV3({ script: prompt, voiceId, talkingPhotoId, width: w || 720, height: h || 1280, background });
-          url = await pollVideo(videoId);
-        } else {
-          videoId = await createAvatarVideo({
-            script: prompt, voiceId, talkingPhotoId,
-            width: w || 720, height: h || 1280, background, speed: Number(config.speed) || 1,
-            useAvatarIV: true,
+          const imageKey = await uploadAsset(avatarImage);
+          videoId = await createAvatarIVVideo({
+            imageKey, script: prompt, voiceId,
+            width: w || 720, height: h || 1280,
           });
           url = await pollVideoStatus(videoId);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (/credit|insufficient|quota/i.test(msg)) {
+            throw new Error("HeyGen credits exhausted for this Avatar IV render. Top up credits in your HeyGen account, then re-run.");
+          }
+          if (/limit|photo avatar/i.test(msg)) {
+            throw new Error("HeyGen rejected the custom-avatar request. Avatar IV from a photo runs on credits — check your HeyGen credit balance and API plan.");
+          }
+          throw e;
         }
       } else if (avatarId && voiceId) {
         // Full mode: explicit library avatar + voice (v2). Script spoken verbatim.

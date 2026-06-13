@@ -448,8 +448,7 @@ function CanvasNodeImpl({
                 <>
                   {hasImageInput && (
                     <div className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1.5 text-[10px] text-fg">
-                      <b>Custom avatar</b> — the connected image will speak as a HeyGen talking photo. Avatar library is ignored; just pick a voice below. (Pick the picture model on the connected Image Generation node.)
-                      <div className="mt-1 text-fg-muted">Note: each image becomes a permanent photo avatar in your HeyGen account. The free plan allows only 3 (not API-removable) — delete old ones in HeyGen → Avatars or upgrade. Library avatars have no limit.</div>
+                      <b>Custom avatar (Avatar IV)</b> — the connected image speaks via HeyGen Avatar IV. Just pick a voice below. This runs on your HeyGen <b>credits</b> (no photo-avatar slot is created, so no 3-avatar limit). Pick the picture model on the connected Image Generation node.
                     </div>
                   )}
                   {!hasImageInput && (
@@ -516,23 +515,15 @@ function CanvasNodeImpl({
                       </select>
                     </div>
                   </div>
-                  {/* Engine picker — different generations per mode */}
-                  {(needVoice && vo) && (
+                  {/* Engine picker — library avatars only; custom-avatar (image)
+                      always uses Avatar IV on credits, so no picker there. */}
+                  {(needVoice && vo && !hasImageInput) && (
                     <label className="flex items-center justify-between gap-2 text-[10px] text-fg-muted">
                       <span>Engine</span>
                       <select value={String(node.config?.engine ?? "")} onChange={(e) => onConfigChange("engine", e.target.value)}
                         className="flex-1 bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
-                        {hasImageInput ? (
-                          <>
-                            <option value="">Avatar IV — expressive (recommended)</option>
-                            <option value="av5">Avatar V — max consistency (trained avatars)</option>
-                          </>
-                        ) : (
-                          <>
-                            <option value="">Avatar III — fast / cheap</option>
-                            <option value="av4">Avatar IV — expressive</option>
-                          </>
-                        )}
+                        <option value="">Avatar III — fast / cheap</option>
+                        <option value="av4">Avatar IV — expressive</option>
                       </select>
                     </label>
                   )}
