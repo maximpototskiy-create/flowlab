@@ -616,7 +616,16 @@ export async function runNode(
             // Kling: image refs → @ImageN (videos are the source / filtered out)
             for (let i = 1; i <= imgN; i++) toks.push(`@Image${i}`);
           }
-          if (toks.length) promptOut = `${promptOut.trim()} Use ${toks.join(", ")} as reference${toks.length > 1 ? "s" : ""}.`;
+          if (toks.length) {
+            if (mode === "video-to-video") {
+              // EDIT must transform the source video, not regenerate from the
+              // image. Anchor hard: apply the ref only to the described area and
+              // keep everything else from the source clip.
+              promptOut = `${promptOut.trim()} Apply ${toks.join(", ")} only to the area described above; keep the source video's subjects, hands, motion, camera movement, framing and lighting exactly unchanged. Do not regenerate the scene from the reference image.`;
+            } else {
+              promptOut = `${promptOut.trim()} Use ${toks.join(", ")} as reference${toks.length > 1 ? "s" : ""}.`;
+            }
+          }
         }
         payload.prompt = promptOut;
       }
