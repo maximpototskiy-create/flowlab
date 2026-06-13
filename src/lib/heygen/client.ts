@@ -214,34 +214,35 @@ export async function uploadAsset(imageUrl: string): Promise<string> {
   throw new Error("HeyGen asset upload returned no image_key");
 }
 
-// Avatar IV from a single photo — the credits-based endpoint (/v2/video/av4/generate).
-// This is the right path for "custom avatar from an image": it consumes credits
-// and does NOT register a permanent photo avatar, so it never hits the photo-
-// avatar slot limit. Poll with pollVideoStatus.
+// Avatar IV from a single photo — the documented /v2/videos endpoint with
+// DIRECT image input. This is the correct credits-based path: it accepts a
+// public image_url (no Upload Asset needed), exposes a real aspect_ratio
+// (16:9 / 9:16) and resolution, supports a background colour, and does NOT
+// create a permanent photo avatar (no slot limit). Poll with pollVideoStatus.
 export async function createAvatarIVVideo(opts: {
-  imageKey: string;
+  imageUrl?: string;       // public image URL (preferred — no upload step)
+  imageAssetId?: string;   // OR an uploaded asset id
   script: string;
   voiceId: string;
-  width?: number;
-  height?: number;
-  aspectRatio?: string; // "9:16" | "16:9" | "1:1" — av4 needs this or it defaults to square
+  aspectRatio?: "16:9" | "9:16"; // endpoint only supports these two (no 1:1)
+  resolution?: "720p" | "1080p";
+  background?: string;     // hex colour, e.g. "#00FF00" for chroma key
+  speed?: number;
   title?: string;
-  motionPrompt?: string;
 }): Promise<string> {
-  const w = opts.width ?? 720;
-  const h = opts.height ?? 1280;
-  const aspect = opts.aspectRatio || (w === h ? "1:1" : w < h ? "9:16" : "16:9");
   const body: Record<string, unknown> = {
-    image_key: opts.imageKey,
-    video_title: opts.title || "FlowLab Avatar IV",
+    ...(opts.imageUrl ? { image_url: opts.imageUrl } : {}),
+    ...(opts.imageAssetId ? { image_asset_id: opts.imageAssetId } : {}),
     script: opts.script,
     voice_id: opts.voiceId,
-    aspect_ratio: aspect,
-    dimension: { width: w, height: h },
+    title: opts.title || "FlowLab Avatar IV",
+    aspect_ratio: opts.aspectRatio || "9:16",
+    resolution: opts.resolution || "720p",
+    ...(opts.background ? { background: { type: "color", value: opts.background } } : {}),
+    ...(opts.speed && opts.speed !== 1 ? { voice_settings: { speed: opts.speed } } : {}),
   };
-  if (opts.motionPrompt) { body.custom_motion_prompt = opts.motionPrompt; body.enhance_custom_motion_prompt = true; }
-  const data = await heygen<{ data?: { video_id?: string }; error?: { message?: string } }>("POST", "/v2/video/av4/generate", body);
-  const id = data.data?.video_id;
+  const data = await heygen<{ video_id?: string; data?: { video_id?: string }; error?: { message?: string } }>("POST", "/v2/videos", body);
+  const id = data.video_id || data.data?.video_id;
   if (!id) throw new Error(data.error?.message || "HeyGen (Avatar IV) did not return a video_id");
   return id;
 }

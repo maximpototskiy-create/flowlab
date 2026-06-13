@@ -448,7 +448,7 @@ function CanvasNodeImpl({
                 <>
                   {hasImageInput && (
                     <div className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1.5 text-[10px] text-fg">
-                      <b>Custom avatar (Avatar IV)</b> — the connected image speaks via HeyGen Avatar IV. Just pick a voice below. This runs on your HeyGen <b>credits</b> (no photo-avatar slot is created, so no 3-avatar limit). Pick the picture model on the connected Image Generation node.
+                      <b>Custom avatar (Avatar IV)</b> — the connected image speaks via HeyGen Avatar IV. Pick a voice below; aspect (9:16 / 16:9) follows the Dimension setting, and the Background colour is supported (e.g. green for chroma key). Runs on your HeyGen <b>credits</b> — no photo-avatar slot, no 3-avatar limit. Pick the picture model on the connected Image Generation node.
                     </div>
                   )}
                   {!hasImageInput && (

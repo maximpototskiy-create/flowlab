@@ -3,7 +3,7 @@
 // Generated assets are uploaded to Supabase Storage and recorded in DB.
 
 import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
-import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, uploadAsset, createAvatarIVVideo } from "@/lib/heygen/client";
+import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, createAvatarIVVideo } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 
@@ -845,18 +845,22 @@ export async function runNode(
       let url: string;
       const engine = String(config.engine || "");
       if (avatarImage) {
-        // Custom avatar from a connected image → Avatar IV via the credits-based
-        // av4 endpoint (Upload Asset → image_key → /v2/video/av4/generate).
-        // This consumes credits and does NOT create a permanent photo avatar,
+        // Custom avatar from a connected image → Avatar IV via the documented
+        // /v2/videos endpoint with direct image_url. Credits-based, exposes a
+        // real aspect_ratio (16:9 / 9:16) + resolution + background, and does
+        // NOT create a permanent photo avatar (no slot limit).
         // so it never hits the plan's photo-avatar slot limit.
         if (!voiceId) throw new Error("Custom avatar needs a voice — pick one in the node");
         try {
-          const imageKey = await uploadAsset(avatarImage);
           const ww = w || 720, hh = h || 1280;
-          const aspectRatio = ww === hh ? "1:1" : ww < hh ? "9:16" : "16:9";
+          // Endpoint supports only 16:9 / 9:16 (no 1:1) — square falls back to 16:9.
+          const aspectRatio: "16:9" | "9:16" = ww < hh ? "9:16" : "16:9";
+          const resolution: "720p" | "1080p" = Math.max(ww, hh) >= 1920 ? "1080p" : "720p";
           videoId = await createAvatarIVVideo({
-            imageKey, script: prompt, voiceId,
-            width: ww, height: hh, aspectRatio,
+            imageUrl: avatarImage, script: prompt, voiceId,
+            aspectRatio, resolution,
+            background: background || undefined,
+            speed: Number(config.speed) || 1,
           });
           url = await pollVideoStatus(videoId);
         } catch (e) {
