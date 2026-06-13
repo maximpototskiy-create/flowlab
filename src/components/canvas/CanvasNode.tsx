@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, memo } from "react";
 import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand } from "lucide-react";
+import { WheelScroll } from "./WheelScroll";
 import Lightbox from "./Lightbox";
 import { NODE_TYPES, getActiveInputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
@@ -89,6 +90,8 @@ function CanvasNodeImpl({
   const [hgErr, setHgErr] = useState<string | null>(null);
   const [hgAvQ, setHgAvQ] = useState("");
   const [hgVoQ, setHgVoQ] = useState("");
+  const [hgCap, setHgCap] = useState(60);
+  useEffect(() => { setHgCap(60); }, [hgAvQ]);
   const hgAudioRef = useRef<HTMLAudioElement | null>(null);
   const [hgPlaying, setHgPlaying] = useState(false);
   useEffect(() => {
@@ -157,7 +160,7 @@ function CanvasNodeImpl({
       style={{
         top: 0,
         left: 0,
-        width: NODE_WIDTH,
+        width: NODE_TYPES[node.type]?.custom === "heygen" && inlineExpanded ? NODE_WIDTH * 2 : NODE_WIDTH,
         transform: `translate(${node.position.x}px, ${node.position.y}px)`,
         willChange: "transform",
       }}
@@ -437,8 +440,7 @@ function CanvasNodeImpl({
               const voSel = hg.voices.find((v) => v.id === vo) || null;
               const hasImageInput = edgesTo.some((e) => e.to.port === "image");
               const avFiltered = hgAvQ ? hg.avatars.filter((a) => a.name.toLowerCase().includes(hgAvQ.toLowerCase())) : hg.avatars;
-              const renderCap = inlineExpanded ? 80 : 24;
-              const avList = avFiltered.slice(0, renderCap);
+              const avList = avFiltered.slice(0, hgCap);
               const voList = (hgVoQ ? hg.voices.filter((v) => `${v.name} ${v.language ?? ""}`.toLowerCase().includes(hgVoQ.toLowerCase())) : hg.voices).slice(0, 200);
               const needVoice = (av || hasImageInput);
               return (
@@ -452,10 +454,16 @@ function CanvasNodeImpl({
                     <>
                       <div className="flex items-center justify-between gap-2">
                         <input value={hgAvQ} onChange={(e) => setHgAvQ(e.target.value)} placeholder={`Search ${hg.avatars.length} avatars…`}
+                          onPointerDown={(e) => e.stopPropagation()}
                           className="flex-1 bg-bg border border-border rounded px-1.5 py-1 text-[10px] outline-none" />
                         {av && <button type="button" onClick={() => onConfigChange("avatar_id", "")} className="text-[9px] text-fg-subtle hover:text-fg whitespace-nowrap">clear</button>}
                       </div>
-                      <div className={`grid grid-cols-3 gap-1 overflow-y-auto ${inlineExpanded ? "max-h-72" : "max-h-36"}`}>
+                      <WheelScroll
+                        className={`grid gap-1 overflow-y-auto ${inlineExpanded ? "grid-cols-5 max-h-[60vh]" : "grid-cols-3 max-h-36"}`}
+                        onScroll={(e) => {
+                          const el = e.currentTarget;
+                          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 240) setHgCap((c) => (c < avFiltered.length ? c + 60 : c));
+                        }}>
                         {/* prompt-agent tile */}
                         <button type="button" onClick={() => onConfigChange("avatar_id", "")}
                           className={`relative rounded-md border aspect-[3/4] grid place-items-center text-[8px] text-center leading-tight p-1 ${av === "" ? "border-brand ring-1 ring-brand text-brand" : "border-dashed border-border text-fg-subtle hover:border-brand/50"}`}>
@@ -474,10 +482,11 @@ function CanvasNodeImpl({
                             <span className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[7px] px-0.5 py-px truncate">{a.name}</span>
                           </button>
                         ))}
+                      </WheelScroll>
+                      <div className="flex items-center justify-between text-[9px] text-fg-subtle">
+                        <span>{avList.length < avFiltered.length ? `Showing ${avList.length} of ${avFiltered.length} — scroll for more` : `${avFiltered.length} avatar${avFiltered.length === 1 ? "" : "s"}`}</span>
+                        {!inlineExpanded && <span>⤢ to enlarge</span>}
                       </div>
-                      {avFiltered.length > avList.length && (
-                        <div className="text-[9px] text-fg-subtle">Showing {avList.length} of {avFiltered.length}. {inlineExpanded ? "Refine the search to narrow down." : "Expand the node (⤢) or search to see more."}</div>
-                      )}
                     </>
                   )}
                   {/* Voice */}
@@ -505,6 +514,26 @@ function CanvasNodeImpl({
                       </select>
                     </div>
                   </div>
+                  {/* Engine picker — different generations per mode */}
+                  {(needVoice && vo) && (
+                    <label className="flex items-center justify-between gap-2 text-[10px] text-fg-muted">
+                      <span>Engine</span>
+                      <select value={String(node.config?.engine ?? "")} onChange={(e) => onConfigChange("engine", e.target.value)}
+                        className="flex-1 bg-bg border border-border rounded px-1 py-1 text-[10px] outline-none">
+                        {hasImageInput ? (
+                          <>
+                            <option value="">Avatar IV — expressive (recommended)</option>
+                            <option value="av5">Avatar V — max consistency (trained avatars)</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="">Avatar III — fast / cheap</option>
+                            <option value="av4">Avatar IV — expressive</option>
+                          </>
+                        )}
+                      </select>
+                    </label>
+                  )}
                   {/* Output settings — shown once we're in full mode */}
                   {(needVoice && vo) && (
                     <div className="space-y-1.5">

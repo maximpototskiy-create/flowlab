@@ -1068,7 +1068,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "image", type: "image", optional: true, label: "Avatar image" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { instructions: "", avatar_id: "", voice_id: "", avatar_style: "normal", dimension: "720x1280", bgEnabled: false, bgColor: "#00FF00", speed: 1 },
+    defaults: { instructions: "", avatar_id: "", voice_id: "", avatar_style: "normal", dimension: "720x1280", bgEnabled: false, bgColor: "#00FF00", speed: 1, engine: "" },
     fields: [],
     custom: "heygen",
     primaryField: "instructions",

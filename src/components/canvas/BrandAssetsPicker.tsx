@@ -46,6 +46,13 @@ export default function BrandAssetsPicker({
   onChange: (next: string[]) => void;
   expanded?: boolean;
 }) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = gridRef.current; if (!el) return;
+    const stop = (e: WheelEvent) => e.stopPropagation();
+    el.addEventListener("wheel", stop, { passive: true });
+    return () => el.removeEventListener("wheel", stop);
+  }, []);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [previewingUrl, setPreviewingUrl] = useState<string | null>(null);
   const togglePreview = (url: string) => {
@@ -208,8 +215,8 @@ export default function BrandAssetsPicker({
 
       {/* Grid */}
       <div
+        ref={gridRef}
         className={`grid gap-1.5 overflow-y-auto pr-1 ${expanded ? "grid-cols-4 max-h-[480px]" : "grid-cols-3 max-h-[240px]"}`}
-        onWheel={(e) => e.stopPropagation()}
       >
         {visible.map((a) => {
           const isOn = selected.includes(a.url);

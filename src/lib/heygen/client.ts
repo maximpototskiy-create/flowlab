@@ -136,11 +136,12 @@ export async function createAvatarVideo(opts: {
   height?: number;
   background?: string;      // hex color, e.g. "#008000" — keyable later in the editor
   speed?: number;           // 0.5 – 1.5
+  useAvatarIV?: boolean;    // Avatar IV motion engine (more expressive) on the v2 Studio endpoint
 }): Promise<string> {
   const character = opts.talkingPhotoId
     ? { type: "talking_photo", talking_photo_id: opts.talkingPhotoId }
     : { type: "avatar", avatar_id: opts.avatarId, avatar_style: opts.avatarStyle || "normal" };
-  const body = {
+  const body: Record<string, unknown> = {
     video_inputs: [
       {
         character,
@@ -150,9 +151,42 @@ export async function createAvatarVideo(opts: {
     ],
     dimension: { width: opts.width ?? 720, height: opts.height ?? 1280 },
   };
+  // Avatar IV engine (vs the default Avatar III / Unlimited). Flag documented
+  // on /v2/video/generate for talking photos; harmless for studio avatars that
+  // support it, and HeyGen returns a clear error if a given avatar can't use it.
+  if (opts.useAvatarIV) body.use_avatar_iv_model = true;
   const data = await heygen<{ data?: { video_id?: string }; error?: { message?: string } }>("POST", "/v2/video/generate", body);
   const id = data.data?.video_id;
   if (!id) throw new Error(data.error?.message || "HeyGen did not return a video_id");
+  return id;
+}
+
+// Avatar V (newest engine, strongest character consistency) — lives on the
+// unified /v3/videos endpoint with engine.type = "avatar_v". Best for trained
+// avatars/digital twins; arbitrary talking photos may be rejected by HeyGen,
+// in which case the caller should fall back to Avatar IV. Poll with getVideo
+// (which already targets /v3/videos/{id}) via pollVideo.
+export async function createVideoV3(opts: {
+  script: string;
+  voiceId: string;
+  avatarId?: string;
+  talkingPhotoId?: string;
+  width?: number;
+  height?: number;
+  background?: string;
+}): Promise<string> {
+  const body: Record<string, unknown> = {
+    type: opts.talkingPhotoId ? "talking_photo" : "avatar",
+    ...(opts.talkingPhotoId ? { talking_photo_id: opts.talkingPhotoId } : { avatar_id: opts.avatarId }),
+    engine: { type: "avatar_v" },
+    script: opts.script,
+    voice_id: opts.voiceId,
+    dimension: { width: opts.width ?? 720, height: opts.height ?? 1280 },
+    ...(opts.background ? { background: { type: "color", value: opts.background } } : {}),
+  };
+  const data = await heygen<{ data?: { video_id?: string }; video_id?: string; error?: { message?: string } }>("POST", "/v3/videos", body);
+  const id = data.data?.video_id || data.video_id;
+  if (!id) throw new Error(data.error?.message || "HeyGen (Avatar V) did not return a video_id");
   return id;
 }
 

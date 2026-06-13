@@ -3,7 +3,7 @@
 // Generated assets are uploaded to Supabase Storage and recorded in DB.
 
 import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
-import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, uploadTalkingPhoto } from "@/lib/heygen/client";
+import { createVideoFromPrompt, pollVideo, createAvatarVideo, createVideoV3, pollVideoStatus, uploadTalkingPhoto } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 
@@ -841,21 +841,31 @@ export async function runNode(
       const [w, h] = String(config.dimension || "720x1280").split("x").map((n) => parseInt(n, 10));
       let videoId: string;
       let url: string;
+      const engine = String(config.engine || "");
       if (avatarImage) {
         // Custom avatar: the connected image becomes a HeyGen Talking Photo.
         if (!voiceId) throw new Error("Custom avatar needs a voice — pick one in the node");
         const talkingPhotoId = await uploadTalkingPhoto(avatarImage);
-        videoId = await createAvatarVideo({
-          script: prompt, voiceId, talkingPhotoId,
-          width: w || 720, height: h || 1280, background, speed: Number(config.speed) || 1,
-        });
-        url = await pollVideoStatus(videoId);
+        const eng = engine || "av4"; // default Avatar IV for photos
+        if (eng === "av5") {
+          videoId = await createVideoV3({ script: prompt, voiceId, talkingPhotoId, width: w || 720, height: h || 1280, background });
+          url = await pollVideo(videoId);
+        } else {
+          videoId = await createAvatarVideo({
+            script: prompt, voiceId, talkingPhotoId,
+            width: w || 720, height: h || 1280, background, speed: Number(config.speed) || 1,
+            useAvatarIV: true,
+          });
+          url = await pollVideoStatus(videoId);
+        }
       } else if (avatarId && voiceId) {
         // Full mode: explicit library avatar + voice (v2). Script spoken verbatim.
+        const eng = engine || "av3"; // default Avatar III for library avatars
         videoId = await createAvatarVideo({
           script: prompt, avatarId, voiceId,
           avatarStyle: String(config.avatar_style || "normal"),
           width: w || 720, height: h || 1280, background, speed: Number(config.speed) || 1,
+          useAvatarIV: eng === "av4",
         });
         url = await pollVideoStatus(videoId);
       } else if (avatarId || voiceId) {
