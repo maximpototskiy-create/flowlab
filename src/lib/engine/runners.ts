@@ -481,6 +481,10 @@ export async function runNode(
             (v): v is string => typeof v === "string" && v.length > 0,
           )
         : [];
+      // References can now be images OR videos (the References port is "any").
+      // Seedance reference-to-video is multimodal and accepts several videos
+      // via video_urls; Kling reference-to-video takes images only.
+      const isVideoUrl = (u: string) => /\.(mp4|mov|webm|m4v|avi|mkv)(\?|#|$)/i.test(u);
       // The mode field gates port visibility on the canvas. Legacy nodes
       // saved before patch 5.1 won't have it; treat absence as "image"
       // for routing decisions but fall back gracefully if frames came
@@ -605,11 +609,12 @@ export async function runNode(
         payload.video_url = sourceVideo;
         if (referencesArr.length > 0) {
           // O3 docs: max 4 total (elements + image refs) when using video.
-          payload.image_urls = referencesArr.slice(0, 4);
-          if (referencesArr.length > 4) {
-            console.warn(
-              `[videoGen:v2v] image refs capped from ${referencesArr.length} → 4 for ${model}`,
-            );
+          // Kling v2v image refs are images only — drop any wired videos
+          // (Kling v2v takes a single source video; multi-video → Seedance refs).
+          const imgRefs = referencesArr.filter((u) => !isVideoUrl(u)).slice(0, 4);
+          if (imgRefs.length > 0) payload.image_urls = imgRefs;
+          if (referencesArr.some(isVideoUrl)) {
+            console.warn("[videoGen:v2v] Kling video-to-video uses one source video; extra videos wired to References are ignored. For multiple videos use References mode with Seedance 2.0.");
           }
         }
         payload.keep_audio = keepAudio;
@@ -671,7 +676,8 @@ export async function runNode(
               : [];
         if (refList.length > 0) {
           if (isKlingRefToVid) {
-            payload.image_urls = refList;
+            // Kling reference-to-video accepts image references only.
+            payload.image_urls = refList.filter((u) => !isVideoUrl(u));
           } else if (!isV3OrO3) {
             // V2.x legacy compat — only the first ref fits the single field
             payload.reference_image_url = refList[0];
@@ -721,7 +727,12 @@ export async function runNode(
               : legacyReference
                 ? [legacyReference]
                 : [];
-          if (refList.length > 0) payload.image_urls = refList;
+          const imgs = refList.filter((u) => !isVideoUrl(u));
+          const vids = refList.filter(isVideoUrl);
+          if (imgs.length) payload.image_urls = imgs;
+          // Seedance 2.0 is multimodal — reference up to 3 videos via video_urls
+          // (addressed as @Video1, @Video2 in the prompt).
+          if (vids.length) payload.video_urls = vids;
         }
         payload.duration = duration;
         payload.resolution = resolution || "720p";

@@ -814,10 +814,10 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       // primary input. Order is edge-creation order.
       {
         name: "references",
-        type: "image",
+        type: "any",
         optional: true,
         multi: true,
-        label: "References (multi, up to 4-7)",
+        label: "References — images / videos (multi)",
         activeWhen: { field: "mode", values: ["references", "video-to-video"] },
       },
       // Legacy single `reference` port. Kept in the schema so existing

@@ -1351,13 +1351,38 @@ export default function Canvas({
 
     function onWheel(e: WheelEvent) {
       if (!el) return;
+      const wantsZoom = e.ctrlKey || e.metaKey;
+      // UNIVERSAL list-scroll: if the pointer is over a scrollable element
+      // inside a node (avatar grid, brand assets, voices, any long list), let
+      // the browser scroll THAT list instead of panning the canvas. Walk up
+      // from the event target to the canvas; if we hit an element that scrolls
+      // in the wheel's direction and isn't already at its edge, bail out. This
+      // works for every node automatically — no per-component wiring needed.
+      if (!wantsZoom) {
+        let n = e.target as HTMLElement | null;
+        while (n && n !== el) {
+          const st = getComputedStyle(n);
+          const canY = (st.overflowY === "auto" || st.overflowY === "scroll") && n.scrollHeight > n.clientHeight;
+          const canX = (st.overflowX === "auto" || st.overflowX === "scroll") && n.scrollWidth > n.clientWidth;
+          if (canY) {
+            const atTop = n.scrollTop <= 0;
+            const atBottom = n.scrollTop + n.clientHeight >= n.scrollHeight - 1;
+            if (!((e.deltaY < 0 && atTop) || (e.deltaY > 0 && atBottom))) return;
+          }
+          if (canX && e.deltaX !== 0) {
+            const atLeft = n.scrollLeft <= 0;
+            const atRight = n.scrollLeft + n.clientWidth >= n.scrollWidth - 1;
+            if (!((e.deltaX < 0 && atLeft) || (e.deltaX > 0 && atRight))) return;
+          }
+          n = n.parentElement;
+        }
+      }
       // Figma/Miro behaviour, no toggles needed:
       //   • Cmd/Ctrl + scroll → zoom (also triggered by trackpad pinch — the
       //     browser sets ctrlKey=true synthetically on pinch gestures).
       //   • Plain two-finger scroll → pan (both axes via deltaX/deltaY).
       //   • Mouse wheel (no modifier) → pan vertically. If you want to zoom
       //     with a mouse wheel, hold Cmd/Ctrl. This matches Figma exactly.
-      const wantsZoom = e.ctrlKey || e.metaKey;
       if (wantsZoom) {
         e.preventDefault();
         const rect = el.getBoundingClientRect();
