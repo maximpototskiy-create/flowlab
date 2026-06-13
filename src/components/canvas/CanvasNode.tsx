@@ -830,8 +830,9 @@ function CanvasNodeImpl({
           )
         )}
 
-        {/* Quick controls + Run button */}
-        {(def.fields.length > 0 || def.outputs.length > 0) && !def.custom && (
+        {/* Quick controls + Run button. Custom-body nodes normally have no
+            footer, but HeyGen is a real generative node and needs its Run. */}
+        {(def.fields.length > 0 || def.outputs.length > 0) && (!def.custom || def.custom === "heygen") && (
           <div className="flex items-center gap-1.5 mt-2 flex-wrap">
             {(def.quickFields ?? []).map((fname) => {
               const f = def.fields.find((x) => x.name === fname);
