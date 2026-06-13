@@ -224,15 +224,20 @@ export async function createAvatarIVVideo(opts: {
   voiceId: string;
   width?: number;
   height?: number;
+  aspectRatio?: string; // "9:16" | "16:9" | "1:1" — av4 needs this or it defaults to square
   title?: string;
   motionPrompt?: string;
 }): Promise<string> {
+  const w = opts.width ?? 720;
+  const h = opts.height ?? 1280;
+  const aspect = opts.aspectRatio || (w === h ? "1:1" : w < h ? "9:16" : "16:9");
   const body: Record<string, unknown> = {
     image_key: opts.imageKey,
     video_title: opts.title || "FlowLab Avatar IV",
     script: opts.script,
     voice_id: opts.voiceId,
-    dimension: { width: opts.width ?? 720, height: opts.height ?? 1280 },
+    aspect_ratio: aspect,
+    dimension: { width: w, height: h },
   };
   if (opts.motionPrompt) { body.custom_motion_prompt = opts.motionPrompt; body.enhance_custom_motion_prompt = true; }
   const data = await heygen<{ data?: { video_id?: string }; error?: { message?: string } }>("POST", "/v2/video/av4/generate", body);

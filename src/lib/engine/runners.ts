@@ -852,9 +852,11 @@ export async function runNode(
         if (!voiceId) throw new Error("Custom avatar needs a voice — pick one in the node");
         try {
           const imageKey = await uploadAsset(avatarImage);
+          const ww = w || 720, hh = h || 1280;
+          const aspectRatio = ww === hh ? "1:1" : ww < hh ? "9:16" : "16:9";
           videoId = await createAvatarIVVideo({
             imageKey, script: prompt, voiceId,
-            width: w || 720, height: h || 1280,
+            width: ww, height: hh, aspectRatio,
           });
           url = await pollVideoStatus(videoId);
         } catch (e) {
