@@ -6,7 +6,7 @@ import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
 import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, createAvatarIVVideo } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
-import { buildGreenScreenMask } from "@/lib/video";
+import { buildGreenScreenMask, compositeGreenScreen } from "@/lib/video";
 
 export type RunnerContext = {
   brandId?: string | null;
@@ -876,53 +876,81 @@ export async function runNode(
     }
 
     case "screenReplace": {
-      // Replace a green-screen phone/device screen with a connected image via
-      // Wan VACE inpainting. Pipeline: source video → ffmpeg green→mask video →
-      // Wan inpainting (mask localizes the edit, ref image = the new screen).
+      // Replace a green-screen phone/device screen with connected content.
+      //   • method "composite": pixel-exact chroma-key composite (image OR
+      //     video) via ffmpeg. Best for steady/frontal shots.
+      //   • method "wan": Wan VACE inpainting (image ref) — approximate, but
+      //     tolerates motion/angle better.
       const sourceVideo = String(inputs.source_video || "").trim();
-      const screenImg = String(inputs.screen || "").trim();
+      const screen = String(inputs.screen || "").trim();
       if (!sourceVideo) throw new Error("Connect the green-screen source video to the Source video port");
-      if (!screenImg) throw new Error("Connect the replacement screen image to the Screen image port");
+      if (!screen) throw new Error("Connect the screen content (image or video) to the Screen content port");
+      const method = String(config.method || "composite");
       const keyColor = String(config.key_color || "#00FF00").trim();
       const similarity = Number(config.key_similarity) || 0.3;
+      const screenIsVideo = /\.(mp4|mov|webm|m4v|avi|mkv)(\?|#|$)/i.test(screen);
+
+      if (method === "composite") {
+        // ── Pixel-exact chroma-key composite (image OR video) ──────────
+        const [srcResp, contentResp] = await Promise.all([fetch(sourceVideo), fetch(screen)]);
+        if (!srcResp.ok) throw new Error(`Could not fetch the source video (${srcResp.status})`);
+        if (!contentResp.ok) throw new Error(`Could not fetch the screen content (${contentResp.status})`);
+        const srcBuf = Buffer.from(await srcResp.arrayBuffer());
+        const contentBuf = Buffer.from(await contentResp.arrayBuffer());
+        let outBuf: Buffer;
+        try {
+          outBuf = await compositeGreenScreen({
+            source: srcBuf, content: contentBuf, contentIsVideo: screenIsVideo,
+            keyColorHex: keyColor, similarity,
+          });
+        } catch (e) {
+          throw new Error(`Composite failed (ffmpeg): ${e instanceof Error ? e.message : String(e)}`);
+        }
+        const outPath = buildStoragePath({
+          brandId: ctx.brandId, projectId: ctx.projectId, workflowId: ctx.workflowId,
+          runStepId: ctx.runStepId, prefix: "screen", ext: "mp4",
+        });
+        const { cdnUrl } = await uploadBytes(outBuf, outPath, "video/mp4");
+        if (!cdnUrl) throw new Error("Failed to upload the composited video");
+        console.log("[screenReplace] composite done", outPath);
+        return { outputs: { video: cdnUrl }, costUsd: 0, durationMs: Date.now() - t0 };
+      }
+
+      // ── method === "wan": Wan VACE inpainting (image reference) ───────
+      if (screenIsVideo) {
+        throw new Error('AI inpaint (Wan) needs an IMAGE on Screen content. Switch Method to "Composite" to use a video, or connect an image.');
+      }
       const resolution = String(config.resolution || "auto");
       const userPrompt = String(config.instructions || "").trim();
       const prompt =
         userPrompt ||
         "The phone screen displays the reference user interface, shown crisp, bright and clearly legible, matching the screen's angle, perspective and motion. The person, hand, phone body and background stay exactly as in the source video.";
 
-      // 1. download the source video
       const srcResp = await fetch(sourceVideo);
       if (!srcResp.ok) throw new Error(`Could not fetch the source video (${srcResp.status})`);
       const srcBuf = Buffer.from(await srcResp.arrayBuffer());
-
-      // 2. ffmpeg: green → per-frame mask video (white = the screen)
       let maskBuf: Buffer;
       try {
         maskBuf = await buildGreenScreenMask(srcBuf, keyColor, similarity);
       } catch (e) {
         throw new Error(`Mask build failed (ffmpeg): ${e instanceof Error ? e.message : String(e)}`);
       }
-
-      // 3. upload the mask → public URL
       const maskPath = buildStoragePath({
         brandId: ctx.brandId, projectId: ctx.projectId, workflowId: ctx.workflowId,
         runStepId: ctx.runStepId, prefix: "mask", ext: "mp4",
       });
       const { cdnUrl: maskUrl } = await uploadBytes(maskBuf, maskPath, "video/mp4");
       if (!maskUrl) throw new Error("Failed to upload the generated mask");
-
-      // 4. Wan VACE inpainting — mask localizes the edit, ref image is the new screen
       const payload: Record<string, unknown> = {
         prompt,
         video_url: sourceVideo,
         mask_video_url: maskUrl,
-        ref_image_urls: [screenImg],
+        ref_image_urls: [screen],
         match_input_num_frames: true,
         match_input_frames_per_second: true,
         resolution,
       };
-      console.log("[screenReplace] wan-vace", JSON.stringify({ video_url: sourceVideo.slice(0, 60), mask: maskUrl.slice(0, 60), ref: screenImg.slice(0, 60), resolution }));
+      console.log("[screenReplace] wan-vace", JSON.stringify({ video_url: sourceVideo.slice(0, 60), mask: maskUrl.slice(0, 60), ref: screen.slice(0, 60), resolution }));
       const r = await falRun("fal-ai/wan-vace-14b/inpainting", payload, { timeoutMs: 600_000 });
       const url =
         (r.video as { url: string } | undefined)?.url ??
@@ -930,11 +958,7 @@ export async function runNode(
         ((r.videos as { url: string }[] | undefined)?.[0]?.url);
       if (!url) throw new Error("Wan VACE returned no video");
       const persisted = await persistAsset(url, ctx, "screen");
-      return {
-        outputs: { video: persisted },
-        costUsd: 0.2,
-        durationMs: Date.now() - t0,
-      };
+      return { outputs: { video: persisted }, costUsd: 0.2, durationMs: Date.now() - t0 };
     }
 
     case "heygenVideo": {

@@ -11,6 +11,7 @@ import { existsSync } from "fs";
 import os from "os";
 import path from "path";
 import ffmpegPath from "ffmpeg-static";
+import sharp from "sharp";
 import { uploadBytes } from "@/lib/storage";
 import { embedVideo } from "@/lib/twelvelabs/embed";
 
@@ -33,6 +34,101 @@ function runFfmpeg(args: string[]): Promise<void> {
     );
     proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${err.slice(-300)}`))));
   });
+}
+
+// Quick probe of a video's dimensions + fps by parsing ffmpeg's stderr banner
+// (ffmpeg-static ships no ffprobe). Good enough for compositing math.
+function ffprobeBasic(inPath: string): Promise<{ width: number; height: number; fps: number }> {
+  return new Promise((resolve) => {
+    const proc = spawn(resolveFfmpeg(), ["-i", inPath]);
+    let err = "";
+    proc.stderr.on("data", (d) => (err += d.toString()));
+    proc.on("error", () => resolve({ width: 0, height: 0, fps: 30 }));
+    proc.on("close", () => {
+      const dim = err.match(/,\s*(\d{2,5})x(\d{2,5})[\s,]/);
+      const fpsM = err.match(/([\d.]+)\s*fps/);
+      resolve({
+        width: dim ? parseInt(dim[1], 10) : 0,
+        height: dim ? parseInt(dim[2], 10) : 0,
+        fps: fpsM ? Math.max(1, Math.round(parseFloat(fpsM[1]))) : 30,
+      });
+    });
+  });
+}
+
+// Find the bounding box of the green region in a single frame (PNG). Generic
+// "green dominates" test — robust for typical green screens.
+async function detectGreenBBox(
+  framePath: string,
+): Promise<{ x: number; y: number; w: number; h: number } | null> {
+  const { data, info } = await sharp(framePath).raw().toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let yy = 0; yy < height; yy++) {
+    for (let xx = 0; xx < width; xx++) {
+      const i = (yy * width + xx) * channels;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      if (g > 80 && g > r * 1.4 && g > b * 1.4) {
+        if (xx < minX) minX = xx;
+        if (xx > maxX) maxX = xx;
+        if (yy < minY) minY = yy;
+        if (yy > maxY) maxY = yy;
+      }
+    }
+  }
+  if (maxX < 0) return null;
+  let w = maxX - minX + 1, h = maxY - minY + 1;
+  w -= w % 2; h -= h % 2; // keep even for yuv420p
+  return { x: minX, y: minY, w: Math.max(2, w), h: Math.max(2, h) };
+}
+
+// Chroma-key composite: place `content` (image OR video) into the GREEN region
+// of `source`, revealing it through the keyed green and keeping non-green pixels
+// (fingers, phone body) on top. Pixel-exact. The screen position is taken from
+// the green bounding box in a sampled frame, so this is best for steady/frontal
+// shots; heavy phone rotation needs true planar tracking (backlog).
+export async function compositeGreenScreen(opts: {
+  source: Buffer;
+  content: Buffer;
+  contentIsVideo: boolean;
+  keyColorHex?: string;
+  similarity?: number;
+}): Promise<Buffer> {
+  const dir = os.tmpdir();
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const srcPath = path.join(dir, `${id}_src.mp4`);
+  const framePath = path.join(dir, `${id}_frame.png`);
+  const contentPath = path.join(dir, `${id}_content${opts.contentIsVideo ? ".mp4" : ".png"}`);
+  const outPath = path.join(dir, `${id}_out.mp4`);
+  const hex = (opts.keyColorHex || "#00FF00").replace(/^#/, "").padStart(6, "0").slice(0, 6);
+  const sim = Math.min(0.9, Math.max(0.01, opts.similarity || 0.3));
+  await writeFile(srcPath, opts.source);
+  await writeFile(contentPath, opts.content);
+  try {
+    const { width: W, height: H, fps } = await ffprobeBasic(srcPath);
+    if (!W || !H) throw new Error("Could not read source video dimensions");
+    await runFfmpeg(["-y", "-ss", "0.2", "-i", srcPath, "-frames:v", "1", framePath]);
+    const bbox = await detectGreenBBox(framePath);
+    if (!bbox) throw new Error("No green screen detected in the source — check the Green key color and lighting");
+    const { x, y, w, h } = bbox;
+    const args = [
+      "-y",
+      ...(opts.contentIsVideo ? ["-stream_loop", "-1", "-i", contentPath] : ["-loop", "1", "-i", contentPath]),
+      "-i", srcPath,
+      "-filter_complex",
+      `[0:v]format=rgba,scale=${w}:${h},fps=${fps},pad=${W}:${H}:${x}:${y}:color=0x00000000[bg];` +
+        `[1:v]chromakey=0x${hex}:${sim}:0.05[keyed];` +
+        `[bg][keyed]overlay=0:0:format=auto,format=yuv420p[out]`,
+      "-map", "[out]", "-map", "1:a?",
+      "-r", String(fps),
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-movflags", "+faststart",
+      outPath,
+    ];
+    await runFfmpeg(args);
+    return await readFile(outPath);
+  } finally {
+    await Promise.all([srcPath, framePath, contentPath, outPath].map((f) => unlink(f).catch(() => {})));
+  }
 }
 
 // Build a per-frame mask video from a GREEN-SCREEN clip: the keyed green area

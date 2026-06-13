@@ -830,7 +830,9 @@ function CanvasNodeImpl({
         {/* Screen Replace (Wan): usage hint. */}
         {node.type === "screenReplace" && (
           <div className="mt-1 rounded-md border border-brand/40 bg-brand/5 px-2 py-1.5 text-[10px] text-fg leading-snug">
-            Connect a <b>green-screen</b> video to <b>Source video</b> and the app screenshot to <b>Screen image</b>. The green is auto-keyed as the area to replace (mask tracks the phone; fingers stay on top). Result is <b>AI-generated</b> (approximate UI), not a pixel-exact composite. Tune <b>Key strength</b> if green is uneven.
+            Connect a <b>green-screen</b> video to <b>Source video</b> and an image or video to <b>Screen content</b>. Two methods:
+            {" "}<b>Composite</b> — pixel-exact insert (image or video), best for steady/frontal shots; the screen position is locked from the green area, so heavy phone rotation will drift.
+            {" "}<b>AI inpaint (Wan)</b> — image only, approximate, but tolerates motion/angle. Fingers stay on top in both. Raise <b>Key strength</b> if green is uneven.
           </div>
         )}
 

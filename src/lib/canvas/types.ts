@@ -1078,11 +1078,21 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     description: "Replace a GREEN-SCREEN phone/device screen in a video with a connected image, via Wan VACE inpainting. The green area is auto-keyed as the region to replace; the mask tracks the screen and finger occlusions are kept for free.",
     inputs: [
       { name: "source_video", type: "video", label: "Source video (green screen)" },
-      { name: "screen", type: "image", label: "Screen image (replacement)" },
+      { name: "screen", type: "any", label: "Screen content (image or video)" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { key_color: "#00FF00", key_similarity: "0.30", resolution: "auto", instructions: "" },
+    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", resolution: "auto", instructions: "" },
     fields: [
+      {
+        name: "method",
+        label: "Method",
+        type: "select",
+        icon: "settings",
+        options: [
+          { value: "composite", label: "Composite (exact, image/video)" },
+          { value: "wan", label: "AI inpaint (Wan, approximate)" },
+        ],
+      },
       { name: "key_color", label: "Green key color", type: "text", placeholder: "#00FF00" },
       {
         name: "key_similarity",
@@ -1108,7 +1118,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         ],
       },
     ],
-    quickFields: ["key_similarity", "resolution"],
+    quickFields: ["method", "key_similarity"],
     primaryField: "instructions",
     primaryLabel: "Prompt (optional)",
     primaryPlaceholder: "Describe the new screen, e.g. 'the phone screen shows the reference app UI, crisp and bright'. Leave empty for a sensible default.",
