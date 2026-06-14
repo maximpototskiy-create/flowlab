@@ -87,28 +87,69 @@ function solveHomography(src: Pt[], dst: Pt[]): number[] {
   return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
 }
 
-// Find the 4 corners of the green quad from a frame: the extreme points of
-// (x+y) and (x-y) are the TL/BR and TR/BL of a convex quad (the tilted screen).
-// Sub-pixel accurate in practice and robust to slight rotation/perspective.
-function detectGreenQuad(data: Buffer, W: number, H: number, ch: number): GQuad {
-  let tl: Pt | undefined, tr: Pt | undefined, br: Pt | undefined, bl: Pt | undefined;
-  let smin = Infinity, smax = -Infinity, dmin = Infinity, dmax = -Infinity, any = false;
+const isGreen = (data: Buffer, i: number) => {
+  const r = data[i], g = data[i + 1], b = data[i + 2];
+  return g > 80 && g > r * 1.4 && g > b * 1.4;
+};
+
+type GComp = { quad: [Pt, Pt, Pt, Pt]; bbox: [number, number, number, number]; size: number };
+
+// Robust green-screen detection: label connected green regions and keep only
+// the LARGEST one (the screen). This discards spill specks, compression noise
+// and stray green objects in the background — the single biggest source of
+// corner errors on real footage. Returns the screen's 4 corners (extremes of
+// x±y on the cleaned blob), its axis-aligned bbox, and pixel count.
+function greenComponent(data: Buffer, W: number, H: number, ch: number): GComp | null {
+  const lab = new Int32Array(W * H);
+  const stack: number[] = [];
+  let cur = 0, bestId = 0, bestSize = 0;
+  const comps: Record<number, GComp> = {};
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * ch;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      if (g > 80 && g > r * 1.4 && g > b * 1.4) {
-        any = true;
-        const su = x + y, df = x - y;
-        if (su < smin) { smin = su; tl = [x, y]; }
-        if (su > smax) { smax = su; br = [x, y]; }
-        if (df > dmax) { dmax = df; tr = [x, y]; }
-        if (df < dmin) { dmin = df; bl = [x, y]; }
+      const p = y * W + x;
+      if (lab[p] === 0 && isGreen(data, p * ch)) {
+        cur++;
+        let size = 0, sm = Infinity, sx = -Infinity, dm = Infinity, dx = -Infinity;
+        let tl: Pt = [x, y], tr: Pt = [x, y], br: Pt = [x, y], bl: Pt = [x, y];
+        let mnx = x, mxx = x, mny = y, mxy = y;
+        lab[p] = cur; stack.push(p);
+        while (stack.length) {
+          const q = stack.pop()!;
+          const qx = q % W, qy = (q / W) | 0;
+          size++;
+          const s = qx + qy, d = qx - qy;
+          if (s < sm) { sm = s; tl = [qx, qy]; }
+          if (s > sx) { sx = s; br = [qx, qy]; }
+          if (d > dx) { dx = d; tr = [qx, qy]; }
+          if (d < dm) { dm = d; bl = [qx, qy]; }
+          if (qx < mnx) mnx = qx; if (qx > mxx) mxx = qx;
+          if (qy < mny) mny = qy; if (qy > mxy) mxy = qy;
+          if (qx + 1 < W) { const n2 = q + 1; if (lab[n2] === 0 && isGreen(data, n2 * ch)) { lab[n2] = cur; stack.push(n2); } }
+          if (qx - 1 >= 0) { const n2 = q - 1; if (lab[n2] === 0 && isGreen(data, n2 * ch)) { lab[n2] = cur; stack.push(n2); } }
+          if (qy + 1 < H) { const n2 = q + W; if (lab[n2] === 0 && isGreen(data, n2 * ch)) { lab[n2] = cur; stack.push(n2); } }
+          if (qy - 1 >= 0) { const n2 = q - W; if (lab[n2] === 0 && isGreen(data, n2 * ch)) { lab[n2] = cur; stack.push(n2); } }
+        }
+        comps[cur] = { quad: [tl, tr, br, bl], bbox: [mnx, mny, mxx, mxy], size };
+        if (size > bestSize) { bestSize = size; bestId = cur; }
       }
     }
   }
-  return any ? [tl!, tr!, br!, bl!] : null;
+  return bestId ? comps[bestId] : null;
 }
+
+function quadArea(q: Pt[]): number {
+  let a = 0;
+  for (let i = 0; i < 4; i++) {
+    const [x1, y1] = q[i], [x2, y2] = q[(i + 1) % 4];
+    a += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(a) / 2;
+}
+
+const median = (arr: number[]): number => {
+  const s = [...arr].sort((a, b) => a - b);
+  return s[(s.length / 2) | 0];
+};
 
 // Per-frame PLANAR-TRACKED chroma-key composite. The green screen's 4 corners
 // are detected each frame and the inserted content (image OR video) is
@@ -154,31 +195,46 @@ export async function compositeGreenScreen(opts: {
     const W = meta0.width ?? 0, H = meta0.height ?? 0;
     if (!W || !H) throw new Error("Could not read source frame dimensions");
 
-    // Pass 1 — detect the green quad's 4 corners in every frame.
-    const quads: GQuad[] = [];
+    // Pass 1 — robust per-frame corners from the largest green component.
+    // If the detected quad doesn't fit its blob well (concave / too small a
+    // fill ratio), fall back to the component's axis-aligned bbox for that
+    // frame, so we never produce a catastrophic warp (worst case = box fill).
+    const MIN_SIZE = 0.0008 * W * H;
+    const raw: GQuad[] = [];
     for (const f of frameFiles) {
       const { data, info } = await sharp(path.join(framesDir, f)).raw().toBuffer({ resolveWithObject: true });
-      quads.push(detectGreenQuad(data, W, H, info.channels));
+      const comp = greenComponent(data, W, H, info.channels);
+      if (!comp || comp.size < MIN_SIZE) { raw.push(null); continue; }
+      let chosen: [Pt, Pt, Pt, Pt] = comp.quad;
+      if (quadArea(comp.quad) < 0.55 * comp.size) {
+        const [a, b, c, d] = comp.bbox;
+        chosen = [[a, b], [c, b], [c, d], [a, d]];
+      }
+      raw.push(chosen);
     }
     // Hold last-known corners across frames where the screen is briefly hidden.
     let last: GQuad = null;
-    for (let i = 0; i < quads.length; i++) {
-      if (quads[i]) last = quads[i];
-      else quads[i] = last;
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i]) last = raw[i];
+      else raw[i] = last;
     }
-    const firstQ = quads.find((q) => q) ?? null;
-    for (let i = 0; i < quads.length && !quads[i]; i++) quads[i] = firstQ;
-    if (!quads.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
+    const firstQ = raw.find((q) => q) ?? null;
+    for (let i = 0; i < raw.length && !raw[i]; i++) raw[i] = firstQ;
+    if (!raw.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
 
-    // Light corner smoothing (±1 frame) — kills detection jitter with minimal lag.
-    const sm: Pt[][] = quads.map((_, i) => {
-      const acc: Pt[] = [[0, 0], [0, 0], [0, 0], [0, 0]];
-      let n = 0;
-      for (let j = Math.max(0, i - 1); j <= Math.min(quads.length - 1, i + 1); j++) {
-        const q = quads[j];
-        if (q) { for (let c = 0; c < 4; c++) { acc[c][0] += q[c][0]; acc[c][1] += q[c][1]; } n++; }
+    // Temporal MEDIAN per corner (±1 frame): rejects the occasional bad frame
+    // (a single jittery corner) without the lag of a moving average.
+    const sm: Pt[][] = raw.map((_, i) => {
+      const out: Pt[] = [];
+      for (let c = 0; c < 4; c++) {
+        const xs: number[] = [], ys: number[] = [];
+        for (let j = Math.max(0, i - 1); j <= Math.min(raw.length - 1, i + 1); j++) {
+          const q = raw[j]!;
+          xs.push(q[c][0]); ys.push(q[c][1]);
+        }
+        out.push([median(xs), median(ys)]);
       }
-      return acc.map((pp) => [pp[0] / n, pp[1] / n] as Pt);
+      return out;
     });
 
     // Cache the content image (when it's a still) so we read+decode it once.
