@@ -462,34 +462,43 @@ export async function compositeGreenScreen(opts: {
     for (let i = 0; i < raw.length && !raw[i]; i++) { raw[i] = firstQ; boxes[i] = firstBox; }
     if (!raw.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
 
-    // Temporal stabilization (offline → centered = zero lag). Priority is to
-    // FOLLOW the real hand motion, only removing jitter (not damping motion):
-    //  1) reject only HARD detection failures (corner jumps >40px, e.g. heavy
-    //     motion-blur frames) — real fast hand motion is kept;
-    //  2) a tiny 3-tap median (kills single-frame spikes) then a tiny 3-tap mean
-    //     (smooths sub-pixel jitter). Light enough that motion is tracked
-    //     closely (follow error ~1px) while jitter stays ~1px.
+    // Temporal stabilization — motion-adaptive, offline (centered = zero phase
+    // lag). A fixed N-tap average trades jitter against motion-damping: it both
+    // leaves residual jitter on still frames AND smears fast moves (reads as
+    // lag / imprecision). Instead:
+    //  1) a centered 5-tap MEDIAN removes 1–2-frame detection spikes while
+    //     preserving ramps of ANY speed (median of a monotonic run = its
+    //     middle), so genuinely fast hand motion is never clamped;
+    //  2) a temporal BILATERAL filter — neighbours close in VALUE are averaged
+    //     (kills the ~0.7px sub-pixel jitter when the phone is still), while
+    //     neighbours separated by real motion fall outside the range kernel and
+    //     are dropped, so quick moves pass through undamped (precise, no lag).
+    //     The range weight uses the 2-D corner displacement (shared by x and y)
+    //     so the quad stays coherent; sigR sits above the jitter floor (~1.7px
+    //     p95) yet well below real motion steps (~7px+).
     const N = raw.length;
-    const sm: Pt[][] = raw.map((q) => q!.map((p) => [p[0], p[1]] as Pt));
+    const med5 = (i: number, c: number, d: number): number => {
+      const w: number[] = [];
+      for (let j = Math.max(0, i - 2); j <= Math.min(N - 1, i + 2); j++) w.push(raw[j]![c][d]);
+      return median(w);
+    };
+    const pre: Pt[][] = raw.map((_, i) => {
+      const q: Pt[] = [];
+      for (let c = 0; c < 4; c++) q.push([med5(i, c, 0), med5(i, c, 1)]);
+      return q;
+    });
+    const RAD = 5, SIGT = 3.0, SIGR = 2.0;
+    const sm: Pt[][] = pre.map((q) => q.map((p) => [p[0], p[1]] as Pt));
     for (let c = 0; c < 4; c++) {
-      for (let d = 0; d < 2; d++) {
-        const v = raw.map((q) => q![c][d]);
-        const clamped = v.map((val, i) => {
-          const win: number[] = [];
-          for (let j = Math.max(0, i - 3); j <= Math.min(N - 1, i + 3); j++) win.push(v[j]);
-          const m = median(win);
-          return Math.abs(val - m) > 40 ? m : val;
-        });
-        const med1 = clamped.map((_, i) => {
-          const win: number[] = [];
-          for (let j = Math.max(0, i - 1); j <= Math.min(N - 1, i + 1); j++) win.push(clamped[j]);
-          return median(win);
-        });
-        for (let i = 0; i < N; i++) {
-          let s = 0, n = 0;
-          for (let j = Math.max(0, i - 1); j <= Math.min(N - 1, i + 1); j++) { s += med1[j]; n++; }
-          sm[i][c][d] = s / n;
+      for (let i = 0; i < N; i++) {
+        const cx = pre[i][c][0], cy = pre[i][c][1];
+        let ws = 0, sx = 0, sy = 0;
+        for (let j = Math.max(0, i - RAD); j <= Math.min(N - 1, i + RAD); j++) {
+          const dx = pre[j][c][0] - cx, dy = pre[j][c][1] - cy, dt = j - i;
+          const wgt = Math.exp(-(dt * dt) / (2 * SIGT * SIGT) - (dx * dx + dy * dy) / (2 * SIGR * SIGR));
+          ws += wgt; sx += wgt * pre[j][c][0]; sy += wgt * pre[j][c][1];
         }
+        sm[i][c][0] = sx / ws; sm[i][c][1] = sy / ws;
       }
     }
 
