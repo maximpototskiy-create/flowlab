@@ -107,6 +107,7 @@ const TMPL_CORNERS: Pt[] = [[0, 0], [1, 0], [1, 1], [0, 1]];
 function blobCentroidCompact(
   data: Buffer, W: number, ch: number,
   test: (r: number, g: number, b: number) => boolean,
+  weight: (r: number, g: number, b: number) => number,
   qx0: number, qy0: number, qx1: number, qy1: number, minPx: number, minFill: number,
 ): Pt | null {
   const cols = qx1 - qx0 + 1, rows = qy1 - qy0 + 1;
@@ -117,16 +118,24 @@ function blobCentroidCompact(
     const i = (y * W + x) * ch;
     return test(data[i], data[i + 1], data[i + 2]);
   };
+  // Track the largest compact blob, but localise its centre with an INTENSITY-
+  // WEIGHTED centroid (weight = how strongly "marker", i.e. dark below the
+  // screen level). Pixels at the detection threshold get weight ~0, so as they
+  // flicker in/out of the binary mask frame-to-frame they barely move the
+  // centre — this is what kills the ~0.5px sub-pixel detection jitter at source.
   let bestN = 0, bestCx = 0, bestCy = 0;
   for (let y = qy0; y <= qy1; y++) {
     for (let x = qx0; x <= qx1; x++) {
       const li = (y - qy0) * cols + (x - qx0);
       if (seen[li] || !ok(x, y)) continue;
-      let n = 0, sx = 0, sy = 0, minx = x, maxx = x, miny = y, maxy = y;
+      let n = 0, ws = 0, wsx = 0, wsy = 0, sx = 0, sy = 0, minx = x, maxx = x, miny = y, maxy = y;
       seen[li] = 1; stack.length = 0; stack.push(y * W + x);
       while (stack.length) {
         const gI = stack.pop()!; const cx = gI % W, cy = (gI / W) | 0;
         n++; sx += cx; sy += cy;
+        const pi = (cy * W + cx) * ch;
+        const w = weight(data[pi], data[pi + 1], data[pi + 2]);
+        if (w > 0) { ws += w; wsx += w * cx; wsy += w * cy; }
         if (cx < minx) minx = cx; if (cx > maxx) maxx = cx;
         if (cy < miny) miny = cy; if (cy > maxy) maxy = cy;
         if (cx + 1 <= qx1) { const nx = cx + 1, l2 = (cy - qy0) * cols + (nx - qx0); if (!seen[l2] && ok(nx, cy)) { seen[l2] = 1; stack.push(cy * W + nx); } }
@@ -137,7 +146,7 @@ function blobCentroidCompact(
       if (n < minPx) continue;
       const fill = n / ((maxx - minx + 1) * (maxy - miny + 1));
       if (fill < minFill) continue;
-      if (n > bestN) { bestN = n; bestCx = sx / n; bestCy = sy / n; }
+      if (n > bestN) { bestN = n; bestCx = ws > 0 ? wsx / ws : sx / n; bestCy = ws > 0 ? wsy / ws : sy / n; }
     }
   }
   return bestN > 0 ? [bestCx, bestCy] : null;
@@ -170,12 +179,17 @@ function detectMarkers(
   for (let v = 0; v < 256; v++) { acc += gh[v]; if (acc * 2 >= gcount) { screenG = v; break; } }
   const darkMax = 0.55 * screenG, darkMin = 0.10 * screenG;
   const tDG = (r: number, g: number, b: number) => g > r * 1.25 && g > b * 1.25 && g < darkMax && g > darkMin;
+  // Sub-pixel weight: within the dark-green gate, darker (more central to the
+  // solid marker) = higher weight; pixels near darkMax (the bezel-side boundary
+  // that flickers across the threshold) tend to ~0 weight and so don't jitter
+  // the centroid.
+  const wDG = (_r: number, g: number, _b: number) => darkMax - g;
   const minPx = Math.max(20, 0.0006 * bw * bh);
   const qw = Math.round(0.5 * bw), qh = Math.round(0.5 * bh);
-  const tl = blobCentroidCompact(data, W, ch, tDG, bx0, by0, bx0 + qw, by0 + qh, minPx, 0.45);
-  const tr = blobCentroidCompact(data, W, ch, tDG, bx1 - qw, by0, bx1, by0 + qh, minPx, 0.45);
-  const br = blobCentroidCompact(data, W, ch, tDG, bx1 - qw, by1 - qh, bx1, by1, minPx, 0.45);
-  const bl = blobCentroidCompact(data, W, ch, tDG, bx0, by1 - qh, bx0 + qw, by1, minPx, 0.45);
+  const tl = blobCentroidCompact(data, W, ch, tDG, wDG, bx0, by0, bx0 + qw, by0 + qh, minPx, 0.45);
+  const tr = blobCentroidCompact(data, W, ch, tDG, wDG, bx1 - qw, by0, bx1, by0 + qh, minPx, 0.45);
+  const br = blobCentroidCompact(data, W, ch, tDG, wDG, bx1 - qw, by1 - qh, bx1, by1, minPx, 0.45);
+  const bl = blobCentroidCompact(data, W, ch, tDG, wDG, bx0, by1 - qh, bx0 + qw, by1, minPx, 0.45);
   if (!tl || !tr || !br || !bl) return null;
   return [tl, tr, br, bl];
 }
@@ -462,44 +476,47 @@ export async function compositeGreenScreen(opts: {
     for (let i = 0; i < raw.length && !raw[i]; i++) { raw[i] = firstQ; boxes[i] = firstBox; }
     if (!raw.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
 
-    // Temporal stabilization — motion-adaptive, offline (centered = zero phase
-    // lag). A fixed N-tap average trades jitter against motion-damping: it both
-    // leaves residual jitter on still frames AND smears fast moves (reads as
-    // lag / imprecision). Instead:
-    //  1) a centered 5-tap MEDIAN removes 1–2-frame detection spikes while
-    //     preserving ramps of ANY speed (median of a monotonic run = its
-    //     middle), so genuinely fast hand motion is never clamped;
-    //  2) a temporal BILATERAL filter — neighbours close in VALUE are averaged
-    //     (kills the ~0.7px sub-pixel jitter when the phone is still), while
-    //     neighbours separated by real motion fall outside the range kernel and
-    //     are dropped, so quick moves pass through undamped (precise, no lag).
-    //     The range weight uses the 2-D corner displacement (shared by x and y)
-    //     so the quad stays coherent; sigR sits above the jitter floor (~1.7px
-    //     p95) yet well below real motion steps (~7px+).
+    // Temporal stabilization (offline, centered = zero phase lag). Detection is
+    // sub-pixel now (weighted centroids), so a light LINEAR smoother suffices —
+    // and linear matters: a value-gated (bilateral) filter is non-linear and at
+    // ordinary hand-motion speeds it keeps switching neighbours in/out of its
+    // kernel, so the output jerks ("wandering"); smoothing the homography
+    // coefficients instead is numerically fragile (tiny perspective terms blow
+    // up after the divide). So we smooth the 4 corners directly with: 1) a 5-tap
+    // median (anti-spike, preserves ramps of any speed); 2) a Savitzky–Golay
+    // quadratic fit over ±SGR frames — a local position+velocity+acceleration
+    // fit, so it removes jitter while tracking real motion with little lag, and
+    // it is the smoothest option through mid-speed motion (lowest corner
+    // acceleration) which is exactly what cures the wandering, while staying
+    // perfectly predictable (linear: no erratic jumps, no low-freq drift).
     const N = raw.length;
     const med5 = (i: number, c: number, d: number): number => {
       const w: number[] = [];
       for (let j = Math.max(0, i - 2); j <= Math.min(N - 1, i + 2); j++) w.push(raw[j]![c][d]);
       return median(w);
     };
-    const pre: Pt[][] = raw.map((_, i) => {
-      const q: Pt[] = [];
+    const pre: number[][][] = raw.map((_, i) => {
+      const q: number[][] = [];
       for (let c = 0; c < 4; c++) q.push([med5(i, c, 0), med5(i, c, 1)]);
       return q;
     });
-    const RAD = 5, SIGT = 3.0, SIGR = 2.0;
-    const sm: Pt[][] = pre.map((q) => q.map((p) => [p[0], p[1]] as Pt));
-    for (let c = 0; c < 4; c++) {
-      for (let i = 0; i < N; i++) {
-        const cx = pre[i][c][0], cy = pre[i][c][1];
-        let ws = 0, sx = 0, sy = 0;
-        for (let j = Math.max(0, i - RAD); j <= Math.min(N - 1, i + RAD); j++) {
-          const dx = pre[j][c][0] - cx, dy = pre[j][c][1] - cy, dt = j - i;
-          const wgt = Math.exp(-(dt * dt) / (2 * SIGT * SIGT) - (dx * dx + dy * dy) / (2 * SIGR * SIGR));
-          ws += wgt; sx += wgt * pre[j][c][0]; sy += wgt * pre[j][c][1];
-        }
-        sm[i][c][0] = sx / ws; sm[i][c][1] = sy / ws;
+    const SGR = 4;
+    const sgQuad = (c: number, d: number, i: number): number => {
+      let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, b0 = 0, b1 = 0, b2 = 0;
+      for (let j = Math.max(0, i - SGR); j <= Math.min(N - 1, i + SGR); j++) {
+        const t = j - i, v = pre[j][c][d], t2 = t * t;
+        s0 += 1; s1 += t; s2 += t2; s3 += t2 * t; s4 += t2 * t2;
+        b0 += v; b1 += t * v; b2 += t2 * v;
       }
+      const det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
+      if (Math.abs(det) < 1e-9) return b0 / Math.max(1, s0);
+      return (b0 * (s2 * s4 - s3 * s3) - s1 * (b1 * s4 - s3 * b2) + s2 * (b1 * s3 - s2 * b2)) / det;
+    };
+    const sm: Pt[][] = [];
+    for (let i = 0; i < N; i++) {
+      const q: Pt[] = [];
+      for (let c = 0; c < 4; c++) q.push([sgQuad(c, 0, i), sgQuad(c, 1, i)]);
+      sm.push(q);
     }
 
     // Cache the content image (when it's a still) so we read+decode it once.
