@@ -199,36 +199,43 @@ export async function compositeGreenScreen(opts: {
     // If the detected quad doesn't fit its blob well (concave / too small a
     // fill ratio), fall back to the component's axis-aligned bbox for that
     // frame, so we never produce a catastrophic warp (worst case = box fill).
+    // We also keep the component's bbox: pass 2 keys green over the WHOLE green
+    // extent (not just the corner quad), so rounded corners / notch don't leave
+    // an un-keyed green rim.
     const MIN_SIZE = 0.0008 * W * H;
     const raw: GQuad[] = [];
+    const boxes: ([number, number, number, number] | null)[] = [];
     for (const f of frameFiles) {
       const { data, info } = await sharp(path.join(framesDir, f)).raw().toBuffer({ resolveWithObject: true });
       const comp = greenComponent(data, W, H, info.channels);
-      if (!comp || comp.size < MIN_SIZE) { raw.push(null); continue; }
+      if (!comp || comp.size < MIN_SIZE) { raw.push(null); boxes.push(null); continue; }
       let chosen: [Pt, Pt, Pt, Pt] = comp.quad;
       if (quadArea(comp.quad) < 0.55 * comp.size) {
         const [a, b, c, d] = comp.bbox;
         chosen = [[a, b], [c, b], [c, d], [a, d]];
       }
       raw.push(chosen);
+      boxes.push(comp.bbox);
     }
-    // Hold last-known corners across frames where the screen is briefly hidden.
+    // Hold last-known corners + bbox across frames where the screen is hidden.
     let last: GQuad = null;
+    let lastBox: [number, number, number, number] | null = null;
     for (let i = 0; i < raw.length; i++) {
-      if (raw[i]) last = raw[i];
-      else raw[i] = last;
+      if (raw[i]) { last = raw[i]; lastBox = boxes[i]; }
+      else { raw[i] = last; boxes[i] = lastBox; }
     }
     const firstQ = raw.find((q) => q) ?? null;
-    for (let i = 0; i < raw.length && !raw[i]; i++) raw[i] = firstQ;
+    const firstBox = boxes.find((b) => b) ?? null;
+    for (let i = 0; i < raw.length && !raw[i]; i++) { raw[i] = firstQ; boxes[i] = firstBox; }
     if (!raw.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
 
-    // Temporal MEDIAN per corner (±1 frame): rejects the occasional bad frame
-    // (a single jittery corner) without the lag of a moving average.
+    // Temporal MEDIAN per corner (±2 frames): rejects jittery frames and damps
+    // sub-pixel wobble with only a couple frames of lag.
     const sm: Pt[][] = raw.map((_, i) => {
       const out: Pt[] = [];
       for (let c = 0; c < 4; c++) {
         const xs: number[] = [], ys: number[] = [];
-        for (let j = Math.max(0, i - 1); j <= Math.min(raw.length - 1, i + 1); j++) {
+        for (let j = Math.max(0, i - 2); j <= Math.min(raw.length - 1, i + 2); j++) {
           const q = raw[j]!;
           xs.push(q[c][0]); ys.push(q[c][1]);
         }
@@ -258,27 +265,37 @@ export async function compositeGreenScreen(opts: {
       }
       const q = sm[k];
       const Hm = solveHomography(q, [[0, 0], [cW - 1, 0], [cW - 1, cH - 1], [0, cH - 1]]);
-      const xs = q.map((pp) => pp[0]), ys = q.map((pp) => pp[1]);
-      const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(W - 1, Math.ceil(Math.max(...xs)));
-      const y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)));
+      // Iterate the WHOLE green extent (component bbox + margin), not just the
+      // corner quad — otherwise rounded corners / the notch leave a green rim.
+      const box = boxes[k]!;
+      const MG = 5;
+      const x0 = Math.max(0, box[0] - MG), y0 = Math.max(0, box[1] - MG);
+      const x1 = Math.min(W - 1, box[2] + MG), y1 = Math.min(H - 1, box[3] + MG);
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const i = (y * W + x) * ch;
           const r = data[i], g = data[i + 1], b = data[i + 2];
-          if (!(g > 80 && g > r * 1.4 && g > b * 1.4)) continue; // only inside the green (fingers stay)
-          const w = Hm[6] * x + Hm[7] * y + Hm[8];
-          let u = (Hm[0] * x + Hm[1] * y + Hm[2]) / w;
-          let v = (Hm[3] * x + Hm[4] * y + Hm[5]) / w;
-          u = Math.max(0, Math.min(cW - 1.001, u));
-          v = Math.max(0, Math.min(cH - 1.001, v));
-          const u0 = u | 0, v0 = v | 0, fu = u - u0, fv = v - v0;
-          const o00 = (v0 * cW + u0) * cCh, o10 = (v0 * cW + u0 + 1) * cCh;
-          const o01 = ((v0 + 1) * cW + u0) * cCh, o11 = ((v0 + 1) * cW + u0 + 1) * cCh;
-          for (let c = 0; c < 3; c++) {
-            out[i + c] = Math.round(
-              cD[o00 + c] * (1 - fu) * (1 - fv) + cD[o10 + c] * fu * (1 - fv) +
-              cD[o01 + c] * (1 - fu) * fv + cD[o11 + c] * fu * fv,
-            );
+          if (g > 80 && g > r * 1.4 && g > b * 1.4) {
+            // Inside the green → draw the perspective-warped content.
+            const w = Hm[6] * x + Hm[7] * y + Hm[8];
+            let u = (Hm[0] * x + Hm[1] * y + Hm[2]) / w;
+            let v = (Hm[3] * x + Hm[4] * y + Hm[5]) / w;
+            u = Math.max(0, Math.min(cW - 1.001, u));
+            v = Math.max(0, Math.min(cH - 1.001, v));
+            const u0 = u | 0, v0 = v | 0, fu = u - u0, fv = v - v0;
+            const o00 = (v0 * cW + u0) * cCh, o10 = (v0 * cW + u0 + 1) * cCh;
+            const o01 = ((v0 + 1) * cW + u0) * cCh, o11 = ((v0 + 1) * cW + u0 + 1) * cCh;
+            for (let c = 0; c < 3; c++) {
+              out[i + c] = Math.round(
+                cD[o00 + c] * (1 - fu) * (1 - fv) + cD[o10 + c] * fu * (1 - fv) +
+                cD[o01 + c] * (1 - fu) * fv + cD[o11 + c] * fu * fv,
+              );
+            }
+          } else if (g > r * 1.15 && g > b * 1.15 && g > 28) {
+            // Anti-aliased green fringe at the screen edge (too dim to key but
+            // still tinted) → despill: clamp green to the red/blue average so it
+            // becomes neutral instead of a green rim. Fingers/skin aren't green.
+            out[i + 1] = Math.min(g, Math.round((r + b) / 2));
           }
         }
       }
