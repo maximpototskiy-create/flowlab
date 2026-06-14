@@ -87,6 +87,48 @@ function solveHomography(src: Pt[], dst: Pt[]): number[] {
   return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
 }
 
+// Over-determined homography from N>=4 correspondences by least squares (normal
+// equations of the 2N x 8 DLT system). With many marker points the per-marker
+// centroid noise averages out, so the recovered screen corners are far steadier
+// than a 4-point exact fit. Falls back to the exact solver for N==4.
+function solveHomographyLSQ(src: Pt[], dst: Pt[]): number[] {
+  const N = src.length;
+  if (N < 4) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  if (N === 4) return solveHomography(src as Pt[], dst as Pt[]);
+  // Build normal equations M (8x8) and rhs (8) from rows of A.
+  const M: number[][] = Array.from({ length: 8 }, () => new Array(8).fill(0));
+  const rhs: number[] = new Array(8).fill(0);
+  const addRow = (row: number[], val: number) => {
+    for (let i = 0; i < 8; i++) {
+      rhs[i] += row[i] * val;
+      for (let j = 0; j < 8; j++) M[i][j] += row[i] * row[j];
+    }
+  };
+  for (let k = 0; k < N; k++) {
+    const [x, y] = src[k], [X, Y] = dst[k];
+    addRow([x, y, 1, 0, 0, 0, -x * X, -y * X], X);
+    addRow([0, 0, 0, x, y, 1, -x * Y, -y * Y], Y);
+  }
+  // Solve M h = rhs (8x8) via Gaussian elimination with partial pivoting.
+  const n = 8;
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]]; [rhs[c], rhs[p]] = [rhs[p], rhs[c]];
+    const pv = M[c][c];
+    if (Math.abs(pv) < 1e-12) continue;
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r][c] / pv;
+      for (let j = c; j < n; j++) M[r][j] -= f * M[c][j];
+      rhs[r] -= f * rhs[c];
+    }
+  }
+  const h: number[] = [];
+  for (let i = 0; i < n; i++) h.push(M[i][i] !== 0 ? rhs[i] / M[i][i] : 0);
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+
 const isGreen = (data: Buffer, i: number) => {
   const r = data[i], g = data[i + 1], b = data[i + 2];
   return g > 80 && g > r * 1.4 && g > b * 1.4;
@@ -99,6 +141,20 @@ const isGreen = (data: Buffer, i: number) => {
 // dark-green markers land from the screen edge depends on how HeyGen fit the
 // template into the phone screen and so varies between source videos.
 const TMPL_CORNERS: Pt[] = [[0, 0], [1, 0], [1, 1], [0, 1]];
+
+// Interior tracking-dot grid, in the SAME normalized screen coords (the screen
+// rectangle is [0,1] x [0,1]). The denser template (4 corner markers + this
+// grid of small dark-green dots) lets the tracker fit an OVER-DETERMINED
+// homography from ~24 points instead of 4, so centroid noise averages out and
+// the corners stop floating. These positions MUST match the generated template
+// PNG. Backward compatible: on the old 4-marker template no interior dots are
+// found and we fall back to the 4-corner fit.
+const INTERIOR_TMPL: Pt[] = (() => {
+  const xs = [0.28, 0.44, 0.56, 0.72], ys = [0.20, 0.34, 0.48, 0.62, 0.76];
+  const out: Pt[] = [];
+  for (const y of ys) for (const x of xs) out.push([x, y]);
+  return out;
+})();
 
 // Largest 4-connected blob of a color test inside a sub-rectangle that is also
 // COMPACT (area / bbox-area >= minFill). The compactness gate rejects the thin
@@ -232,6 +288,108 @@ function screenFromMarkers(
   const proj = (p: Pt): Pt => {
     const w = Hm[6] * p[0] + Hm[7] * p[1] + Hm[8];
     return [(Hm[0] * p[0] + Hm[1] * p[1] + Hm[2]) / w, (Hm[3] * p[0] + Hm[4] * p[1] + Hm[5]) / w];
+  };
+  const out = TMPL_CORNERS.map(proj) as [Pt, Pt, Pt, Pt];
+  const [bx0, by0, bx1, by1] = bbox; const bw = bx1 - bx0, bh = by1 - by0;
+  for (const [x, y] of out) {
+    if (!isFinite(x) || !isFinite(y) || x < bx0 - bw || x > bx1 + bw || y < by0 - bh || y > by1 + bh) return null;
+  }
+  return out;
+}
+
+// Find ALL compact dark-green blobs (corner markers + the interior tracking
+// dots) inside the screen bbox, each as a sub-pixel weighted centroid. Same
+// adaptive dark-green gate as detectMarkers; a single connected-components pass
+// over the bbox. Used to build an over-determined homography from many points.
+function detectDarkGreenBlobs(
+  data: Buffer, W: number, ch: number, bbox: [number, number, number, number],
+): Pt[] {
+  const [bx0, by0, bx1, by1] = bbox;
+  const bw = bx1 - bx0, bh = by1 - by0;
+  if (bw < 20 || bh < 20) return [];
+  const gh = new Uint32Array(256);
+  let gcount = 0;
+  for (let y = by0; y <= by1; y++) {
+    for (let x = bx0; x <= bx1; x++) {
+      const i = (y * W + x) * ch; const r = data[i], g = data[i + 1], b = data[i + 2];
+      if (g > 20 && g > r * 1.3 && g > b * 1.3) { gh[g]++; gcount++; }
+    }
+  }
+  if (gcount < 100) return [];
+  let acc = 0, screenG = 200;
+  for (let v = 0; v < 256; v++) { acc += gh[v]; if (acc * 2 >= gcount) { screenG = v; break; } }
+  const darkMax = 0.55 * screenG, darkMin = 0.10 * screenG;
+  const test = (r: number, g: number, b: number) => g > r * 1.25 && g > b * 1.25 && g < darkMax && g > darkMin;
+  const minPx = Math.max(20, 0.00006 * bw * bh); // small enough for interior dots
+  const cols = bw + 1, rows = bh + 1;
+  const seen = new Uint8Array(cols * rows);
+  const stack: number[] = [];
+  const ok = (x: number, y: number) => { const i = (y * W + x) * ch; return test(data[i], data[i + 1], data[i + 2]); };
+  const blobs: Pt[] = [];
+  for (let y = by0; y <= by1; y++) {
+    for (let x = bx0; x <= bx1; x++) {
+      const li = (y - by0) * cols + (x - bx0);
+      if (seen[li] || !ok(x, y)) continue;
+      let n = 0, ws = 0, wsx = 0, wsy = 0, sx = 0, sy = 0, minx = x, maxx = x, miny = y, maxy = y;
+      seen[li] = 1; stack.length = 0; stack.push(y * W + x);
+      while (stack.length) {
+        const gI = stack.pop()!; const cx = gI % W, cy = (gI / W) | 0;
+        n++; sx += cx; sy += cy;
+        const pi = (cy * W + cx) * ch; const wgt = darkMax - data[pi + 1];
+        if (wgt > 0) { ws += wgt; wsx += wgt * cx; wsy += wgt * cy; }
+        if (cx < minx) minx = cx; if (cx > maxx) maxx = cx;
+        if (cy < miny) miny = cy; if (cy > maxy) maxy = cy;
+        if (cx + 1 <= bx1) { const nx = cx + 1, l2 = (cy - by0) * cols + (nx - bx0); if (!seen[l2] && ok(nx, cy)) { seen[l2] = 1; stack.push(cy * W + nx); } }
+        if (cx - 1 >= bx0) { const nx = cx - 1, l2 = (cy - by0) * cols + (nx - bx0); if (!seen[l2] && ok(nx, cy)) { seen[l2] = 1; stack.push(cy * W + nx); } }
+        if (cy + 1 <= by1) { const ny = cy + 1, l2 = (ny - by0) * cols + (cx - bx0); if (!seen[l2] && ok(cx, ny)) { seen[l2] = 1; stack.push(ny * W + cx); } }
+        if (cy - 1 >= by0) { const ny = cy - 1, l2 = (ny - by0) * cols + (cx - bx0); if (!seen[l2] && ok(cx, ny)) { seen[l2] = 1; stack.push(ny * W + cx); } }
+      }
+      if (n < minPx) continue;
+      const fill = n / ((maxx - minx + 1) * (maxy - miny + 1));
+      if (fill < 0.4) continue; // compact only (rejects the thin bezel-edge ring)
+      blobs.push(ws > 0 ? [wsx / ws, wsy / ws] : [sx / n, sy / n]);
+    }
+  }
+  return blobs;
+}
+
+// Over-determined screen corners: bootstrap a homography from the 4 corner
+// markers, project the known interior dot grid, match each to the nearest
+// detected blob, then refit the homography from ALL matched points (corners +
+// dots) by least squares and project the screen corners. Returns null if too
+// few interior dots are matched (e.g. the old 4-marker template) so the caller
+// can fall back to the plain 4-corner fit.
+function screenFromGrid(
+  cents: [Pt, Pt, Pt, Pt], blobs: Pt[], calibTMPL: Pt[], bbox: [number, number, number, number],
+): [Pt, Pt, Pt, Pt] | null {
+  if (blobs.length < 8) return null;
+  const H0 = solveHomography(calibTMPL, cents);
+  const proj0 = (p: Pt): Pt => {
+    const w = H0[6] * p[0] + H0[7] * p[1] + H0[8];
+    return [(H0[0] * p[0] + H0[1] * p[1] + H0[2]) / w, (H0[3] * p[0] + H0[4] * p[1] + H0[5]) / w];
+  };
+  const sp = Math.hypot(cents[1][0] - cents[0][0], cents[1][1] - cents[0][1]); // ~screen width px
+  const tol = 0.07 * sp;
+  const used = new Array(blobs.length).fill(false);
+  const src: Pt[] = [calibTMPL[0], calibTMPL[1], calibTMPL[2], calibTMPL[3]];
+  const dst: Pt[] = [cents[0], cents[1], cents[2], cents[3]];
+  // consume the 4 corner blobs so they can't double-match an interior point
+  for (const c of cents) {
+    let bi = -1, bd = Infinity;
+    for (let k = 0; k < blobs.length; k++) { if (used[k]) continue; const d = Math.hypot(blobs[k][0] - c[0], blobs[k][1] - c[1]); if (d < bd) { bd = d; bi = k; } }
+    if (bi >= 0 && bd < 2 * tol) used[bi] = true;
+  }
+  for (const tp of INTERIOR_TMPL) {
+    const pp = proj0(tp);
+    let bi = -1, bd = Infinity;
+    for (let k = 0; k < blobs.length; k++) { if (used[k]) continue; const d = Math.hypot(blobs[k][0] - pp[0], blobs[k][1] - pp[1]); if (d < bd) { bd = d; bi = k; } }
+    if (bi >= 0 && bd < tol) { used[bi] = true; src.push(tp); dst.push(blobs[bi]); }
+  }
+  if (src.length < 8) return null; // not a grid template — use the 4-corner fit
+  const H = solveHomographyLSQ(src, dst);
+  const proj = (p: Pt): Pt => {
+    const w = H[6] * p[0] + H[7] * p[1] + H[8];
+    return [(H[0] * p[0] + H[1] * p[1] + H[2]) / w, (H[3] * p[0] + H[4] * p[1] + H[5]) / w];
   };
   const out = TMPL_CORNERS.map(proj) as [Pt, Pt, Pt, Pt];
   const [bx0, by0, bx1, by1] = bbox; const bw = bx1 - bx0, bh = by1 - by0;
@@ -427,15 +585,19 @@ export async function compositeGreenScreen(opts: {
     const MIN_SIZE = 0.0008 * W * H;
     const boxes: ([number, number, number, number] | null)[] = [];
     const cents: ([Pt, Pt, Pt, Pt] | null)[] = [];
+    const allBlobs: Pt[][] = [];
     const greenQuads: GQuad[] = [];
     const insetH: number[] = [], insetV: number[] = [];
     for (const f of frameFiles) {
       const { data, info } = await sharp(path.join(framesDir, f)).raw().toBuffer({ resolveWithObject: true });
       const comp = greenComponent(data, W, H, info.channels);
-      if (!comp || comp.size < MIN_SIZE) { cents.push(null); boxes.push(null); greenQuads.push(null); continue; }
+      if (!comp || comp.size < MIN_SIZE) { cents.push(null); boxes.push(null); greenQuads.push(null); allBlobs.push([]); continue; }
       const c = detectMarkers(data, W, H, info.channels, comp.bbox);
       cents.push(c);
       if (c) sampleMarkerInset(data, W, info.channels, comp.bbox, c, insetH, insetV);
+      // All dark-green marker blobs (corners + interior dot grid) for the
+      // over-determined homography fit; empty/4 on the old 4-marker template.
+      allBlobs.push(detectDarkGreenBlobs(data, W, info.channels, comp.bbox));
       boxes.push(comp.bbox);
       // Green-edge quad as the per-frame fallback when markers aren't clean.
       let gq: [Pt, Pt, Pt, Pt] = comp.quad;
@@ -458,7 +620,10 @@ export async function compositeGreenScreen(opts: {
     const raw: GQuad[] = [];
     for (let i = 0; i < cents.length; i++) {
       if (cents[i]) {
-        const s = screenFromMarkers(cents[i]!, calibTMPL, boxes[i]!);
+        // Prefer the over-determined fit from the full dot grid; fall back to
+        // the 4-corner fit, then to the green-edge quad.
+        const g = screenFromGrid(cents[i]!, allBlobs[i], calibTMPL, boxes[i]!);
+        const s = g ?? screenFromMarkers(cents[i]!, calibTMPL, boxes[i]!);
         raw.push(s ?? greenQuads[i]);
       } else {
         raw.push(greenQuads[i]);
@@ -500,7 +665,7 @@ export async function compositeGreenScreen(opts: {
       for (let c = 0; c < 4; c++) q.push([med5(i, c, 0), med5(i, c, 1)]);
       return q;
     });
-    const SGR = 4;
+    const SGR = 3;
     const sgQuad = (c: number, d: number, i: number): number => {
       let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, b0 = 0, b1 = 0, b2 = 0;
       for (let j = Math.max(0, i - SGR); j <= Math.min(N - 1, i + SGR); j++) {
