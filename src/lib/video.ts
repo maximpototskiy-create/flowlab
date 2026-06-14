@@ -102,37 +102,89 @@ const mMagenta = (r: number, g: number, b: number) => r > 110 && b > 110 && g < 
 const isMarkerColor = (r: number, g: number, b: number) =>
   mRed(r, g, b) || mBlue(r, g, b) || mYellow(r, g, b) || mMagenta(r, g, b);
 
-// Marker inset fraction in the template (marker centroid sits this far in from
-// each screen edge). Used to extrapolate centroids back to the true corners.
-const MARKER_INSET = 0.08;
 
-// If the screen shows the 4-corner marker template, return its 4 corners from
-// the colored-marker centroids (extrapolated to the true screen corners). This
-// is far more accurate and motion-blur-proof than green-edge detection. Returns
-// null if the 4 markers aren't all clearly present (→ fall back to green).
+// Standard tracking-template marker centroids in NORMALIZED screen space
+// [0..1] (TL, TR, BR, BL), measured from the 1080x2280 template (4 solid
+// corner squares, 0.16*W, flush in the corners). Anisotropic (square markers
+// on a tall canvas) — handled exactly by the homography below, NOT a single
+// scalar inset.
+const TMPL_MARKERS: Pt[] = [[0.0792, 0.0375], [0.9199, 0.0375], [0.9199, 0.9621], [0.0792, 0.9621]];
+const TMPL_CORNERS: Pt[] = [[0, 0], [1, 0], [1, 1], [0, 1]];
+
+// Largest 4-connected blob of a color test inside a sub-rectangle; returns its
+// centroid or null. Confining each marker search to its own CORNER QUADRANT of
+// the green bbox (and never expanding outside the bbox) is what keeps fingers,
+// skin and the blue/purple studio light out of the marker centroids — that
+// contamination was the root cause of the crooked composite.
+function blobCentroid(
+  data: Buffer, W: number, ch: number,
+  test: (r: number, g: number, b: number) => boolean,
+  qx0: number, qy0: number, qx1: number, qy1: number, minPx: number,
+): Pt | null {
+  const cols = qx1 - qx0 + 1, rows = qy1 - qy0 + 1;
+  if (cols <= 0 || rows <= 0) return null;
+  const seen = new Uint8Array(cols * rows);
+  const stack: number[] = [];
+  const ok = (x: number, y: number) => {
+    const i = (y * W + x) * ch;
+    return test(data[i], data[i + 1], data[i + 2]);
+  };
+  let bestN = 0, bestSx = 0, bestSy = 0;
+  for (let y = qy0; y <= qy1; y++) {
+    for (let x = qx0; x <= qx1; x++) {
+      const li = (y - qy0) * cols + (x - qx0);
+      if (seen[li] || !ok(x, y)) continue;
+      let n = 0, sx = 0, sy = 0;
+      seen[li] = 1; stack.length = 0; stack.push(y * W + x);
+      while (stack.length) {
+        const g = stack.pop()!; const cx = g % W, cy = (g / W) | 0;
+        n++; sx += cx; sy += cy;
+        if (cx + 1 <= qx1) { const nx = cx + 1, li2 = (cy - qy0) * cols + (nx - qx0); if (!seen[li2] && ok(nx, cy)) { seen[li2] = 1; stack.push(cy * W + nx); } }
+        if (cx - 1 >= qx0) { const nx = cx - 1, li2 = (cy - qy0) * cols + (nx - qx0); if (!seen[li2] && ok(nx, cy)) { seen[li2] = 1; stack.push(cy * W + nx); } }
+        if (cy + 1 <= qy1) { const ny = cy + 1, li2 = (ny - qy0) * cols + (cx - qx0); if (!seen[li2] && ok(cx, ny)) { seen[li2] = 1; stack.push(ny * W + cx); } }
+        if (cy - 1 >= qy0) { const ny = cy - 1, li2 = (ny - qy0) * cols + (cx - qx0); if (!seen[li2] && ok(cx, ny)) { seen[li2] = 1; stack.push(ny * W + cx); } }
+      }
+      if (n > bestN) { bestN = n; bestSx = sx; bestSy = sy; }
+    }
+  }
+  return bestN >= minPx ? [bestSx / bestN, bestSy / bestN] : null;
+}
+
+// Detect the 4 colored corner markers (robustly) and return the TRUE screen
+// quad via a homography from the template's known marker centroids to the
+// detected ones (then projecting the template corners). Returns null if any
+// marker isn't cleanly present (-> green-edge fallback).
 function detectMarkerQuad(
   data: Buffer, W: number, H: number, ch: number, bbox: [number, number, number, number],
 ): [Pt, Pt, Pt, Pt] | null {
   const [bx0, by0, bx1, by1] = bbox;
-  const x0 = Math.max(0, bx0 - 30), y0 = Math.max(0, by0 - 30);
-  const x1 = Math.min(W - 1, bx1 + 30), y1 = Math.min(H - 1, by1 + 30);
-  const acc = (test: (r: number, g: number, b: number) => boolean): Pt | null => {
-    let sx = 0, sy = 0, n = 0;
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const i = (y * W + x) * ch;
-        if (test(data[i], data[i + 1], data[i + 2])) { sx += x; sy += y; n++; }
-      }
-    }
-    return n > 20 ? [sx / n, sy / n] : null;
-  };
-  const tl = acc(mRed), tr = acc(mBlue), br = acc(mYellow), bl = acc(mMagenta);
+  const bw = bx1 - bx0, bh = by1 - by0;
+  if (bw < 20 || bh < 20) return null;
+  const minPx = Math.max(40, 0.0003 * bw * bh);
+  // strict, saturation-gated tests (pure markers pass; muddy skin/bg rejected)
+  const tR = (r: number, g: number, b: number) => r > 120 && r > g * 1.7 && r > b * 1.7;
+  const tB = (r: number, g: number, b: number) => b > 120 && b > r * 1.7 && b > g * 1.7;
+  const tY = (r: number, g: number, b: number) => r > 120 && g > 120 && b < r * 0.55 && b < g * 0.55;
+  const tM = (r: number, g: number, b: number) => r > 120 && b > 120 && g < r * 0.55 && g < b * 0.55;
+  const qw = Math.round(0.5 * bw), qh = Math.round(0.5 * bh);
+  const tl = blobCentroid(data, W, ch, tR, bx0, by0, bx0 + qw, by0 + qh, minPx);
+  const tr = blobCentroid(data, W, ch, tB, bx1 - qw, by0, bx1, by0 + qh, minPx);
+  const br = blobCentroid(data, W, ch, tY, bx1 - qw, by1 - qh, bx1, by1, minPx);
+  const bl = blobCentroid(data, W, ch, tM, bx0, by1 - qh, bx0 + qw, by1, minPx);
   if (!tl || !tr || !br || !bl) return null;
-  const cx = (tl[0] + tr[0] + br[0] + bl[0]) / 4;
-  const cy = (tl[1] + tr[1] + br[1] + bl[1]) / 4;
-  const F = 1 / (1 - 2 * MARKER_INSET);
-  const ext = (p: Pt): Pt => [cx + (p[0] - cx) * F, cy + (p[1] - cy) * F];
-  return [ext(tl), ext(tr), ext(br), ext(bl)];
+  // Map the template's known marker centroids -> the detected ones, then push
+  // the template's screen corners through that homography. Recovers the true
+  // screen quad exactly (tilt/perspective AND the anisotropic marker inset).
+  const Hm = solveHomography(TMPL_MARKERS, [tl, tr, br, bl]);
+  const proj = (p: Pt): Pt => {
+    const w = Hm[6] * p[0] + Hm[7] * p[1] + Hm[8];
+    return [(Hm[0] * p[0] + Hm[1] * p[1] + Hm[2]) / w, (Hm[3] * p[0] + Hm[4] * p[1] + Hm[5]) / w];
+  };
+  const out = TMPL_CORNERS.map(proj) as [Pt, Pt, Pt, Pt];
+  for (const [x, y] of out) {
+    if (!isFinite(x) || !isFinite(y) || x < bx0 - bw || x > bx1 + bw || y < by0 - bh || y > by1 + bh) return null;
+  }
+  return out;
 }
 
 type GComp = { quad: [Pt, Pt, Pt, Pt]; bbox: [number, number, number, number]; size: number };
