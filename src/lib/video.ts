@@ -56,14 +56,66 @@ function ffprobeBasic(inPath: string): Promise<{ width: number; height: number; 
   });
 }
 
-type GBBox = { x: number; y: number; w: number; h: number } | null;
+type Pt = [number, number];
+type GQuad = [Pt, Pt, Pt, Pt] | null;
 
-// Per-frame chroma-key composite WITH tracking. The green screen is detected in
-// every frame, so the inserted content (image OR video) follows the screen's
-// position and size as the phone moves; the actual per-frame green pixels are
-// used as the alpha, so fingers / phone body (non-green) stay on top. This
-// tracks translation + scale (good for steady, frontal and slight-angle shots);
-// strong perspective rotation is not corrected (that needs planar tracking).
+// Solve a 3x3 homography mapping src[i] -> dst[i] (4 correspondences, h33=1)
+// via direct linear solve (Gaussian elimination on the 8x8 system).
+function solveHomography(src: Pt[], dst: Pt[]): number[] {
+  const A: number[][] = [], b: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [X, Y] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -x * X, -y * X]); b.push(X);
+    A.push([0, 0, 0, x, y, 1, -x * Y, -y * Y]); b.push(Y);
+  }
+  const n = 8;
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+    const pv = A[c][c];
+    if (Math.abs(pv) < 1e-9) continue;
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = A[r][c] / pv;
+      for (let k = c; k < n; k++) A[r][k] -= f * A[c][k];
+      b[r] -= f * b[c];
+    }
+  }
+  const h: number[] = [];
+  for (let i = 0; i < n; i++) h.push(b[i] / A[i][i]);
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+
+// Find the 4 corners of the green quad from a frame: the extreme points of
+// (x+y) and (x-y) are the TL/BR and TR/BL of a convex quad (the tilted screen).
+// Sub-pixel accurate in practice and robust to slight rotation/perspective.
+function detectGreenQuad(data: Buffer, W: number, H: number, ch: number): GQuad {
+  let tl: Pt | undefined, tr: Pt | undefined, br: Pt | undefined, bl: Pt | undefined;
+  let smin = Infinity, smax = -Infinity, dmin = Infinity, dmax = -Infinity, any = false;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * ch;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      if (g > 80 && g > r * 1.4 && g > b * 1.4) {
+        any = true;
+        const su = x + y, df = x - y;
+        if (su < smin) { smin = su; tl = [x, y]; }
+        if (su > smax) { smax = su; br = [x, y]; }
+        if (df > dmax) { dmax = df; tr = [x, y]; }
+        if (df < dmin) { dmin = df; bl = [x, y]; }
+      }
+    }
+  }
+  return any ? [tl!, tr!, br!, bl!] : null;
+}
+
+// Per-frame PLANAR-TRACKED chroma-key composite. The green screen's 4 corners
+// are detected each frame and the inserted content (image OR video) is
+// perspective-warped (homography + bilinear) onto that quad, so it follows the
+// phone's position, scale AND tilt/perspective. The actual per-frame green
+// pixels are the alpha, so fingers / phone body (non-green) stay on top. Strong
+// motion blur or a screen that leaves frame will degrade gracefully.
 export async function compositeGreenScreen(opts: {
   source: Buffer;
   content: Buffer;
@@ -76,17 +128,14 @@ export async function compositeGreenScreen(opts: {
   const contentPath = path.join(dir, opts.contentIsVideo ? "content.mp4" : "content.png");
   const framesDir = path.join(dir, "frames");
   const cframesDir = path.join(dir, "cframes");
-  const masksDir = path.join(dir, "masks");
   const outDir = path.join(dir, "out");
   const outPath = path.join(dir, "out.mp4");
   await mkdir(framesDir);
-  await mkdir(masksDir);
   await mkdir(outDir);
   await writeFile(srcPath, opts.source);
   await writeFile(contentPath, opts.content);
   try {
     const { fps } = await ffprobeBasic(srcPath);
-    // Extract source frames as JPEG (small) so /tmp stays well under serverless limits.
     await runFfmpeg(["-y", "-i", srcPath, "-fps_mode", "passthrough", "-q:v", "3", path.join(framesDir, "f_%05d.jpg")]);
     const frameFiles = (await readdir(framesDir)).filter((f) => f.endsWith(".jpg")).sort();
     if (frameFiles.length === 0) throw new Error("No frames extracted from the source video");
@@ -105,77 +154,81 @@ export async function compositeGreenScreen(opts: {
     const W = meta0.width ?? 0, H = meta0.height ?? 0;
     if (!W || !H) throw new Error("Could not read source frame dimensions");
 
-    // Pass 1 — per-frame green bbox; the binary mask is written to disk
-    // (not kept in RAM) so memory stays flat regardless of clip length.
-    const bboxes: GBBox[] = [];
+    // Pass 1 — detect the green quad's 4 corners in every frame.
+    const quads: GQuad[] = [];
     for (const f of frameFiles) {
       const { data, info } = await sharp(path.join(framesDir, f)).raw().toBuffer({ resolveWithObject: true });
+      quads.push(detectGreenQuad(data, W, H, info.channels));
+    }
+    // Hold last-known corners across frames where the screen is briefly hidden.
+    let last: GQuad = null;
+    for (let i = 0; i < quads.length; i++) {
+      if (quads[i]) last = quads[i];
+      else quads[i] = last;
+    }
+    const firstQ = quads.find((q) => q) ?? null;
+    for (let i = 0; i < quads.length && !quads[i]; i++) quads[i] = firstQ;
+    if (!quads.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
+
+    // Light corner smoothing (±1 frame) — kills detection jitter with minimal lag.
+    const sm: Pt[][] = quads.map((_, i) => {
+      const acc: Pt[] = [[0, 0], [0, 0], [0, 0], [0, 0]];
+      let n = 0;
+      for (let j = Math.max(0, i - 1); j <= Math.min(quads.length - 1, i + 1); j++) {
+        const q = quads[j];
+        if (q) { for (let c = 0; c < 4; c++) { acc[c][0] += q[c][0]; acc[c][1] += q[c][1]; } n++; }
+      }
+      return acc.map((pp) => [pp[0] / n, pp[1] / n] as Pt);
+    });
+
+    // Cache the content image (when it's a still) so we read+decode it once.
+    let stillContent: { data: Buffer; w: number; h: number; ch: number } | null = null;
+    if (!contentIsVideo) {
+      const c = await sharp(contentPath).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      stillContent = { data: c.data, w: c.info.width, h: c.info.height, ch: c.info.channels };
+    }
+
+    // Pass 2 — perspective-warp content onto the quad, alpha = actual green.
+    for (let k = 0; k < frameFiles.length; k++) {
+      const { data, info } = await sharp(path.join(framesDir, frameFiles[k])).raw().toBuffer({ resolveWithObject: true });
       const ch = info.channels;
-      const mask = Buffer.alloc(W * H, 0);
-      let minX = W, minY = H, maxX = -1, maxY = -1;
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
+      const out = Buffer.from(data);
+      let cD: Buffer, cW: number, cH: number, cCh: number;
+      if (contentIsVideo) {
+        const c = await sharp(path.join(cframesDir, contentFiles[k % contentFiles.length])).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+        cD = c.data; cW = c.info.width; cH = c.info.height; cCh = c.info.channels;
+      } else {
+        cD = stillContent!.data; cW = stillContent!.w; cH = stillContent!.h; cCh = stillContent!.ch;
+      }
+      const q = sm[k];
+      const Hm = solveHomography(q, [[0, 0], [cW - 1, 0], [cW - 1, cH - 1], [0, cH - 1]]);
+      const xs = q.map((pp) => pp[0]), ys = q.map((pp) => pp[1]);
+      const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(W - 1, Math.ceil(Math.max(...xs)));
+      const y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)));
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
           const i = (y * W + x) * ch;
           const r = data[i], g = data[i + 1], b = data[i + 2];
-          if (g > 80 && g > r * 1.4 && g > b * 1.4) {
-            mask[y * W + x] = 255;
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
+          if (!(g > 80 && g > r * 1.4 && g > b * 1.4)) continue; // only inside the green (fingers stay)
+          const w = Hm[6] * x + Hm[7] * y + Hm[8];
+          let u = (Hm[0] * x + Hm[1] * y + Hm[2]) / w;
+          let v = (Hm[3] * x + Hm[4] * y + Hm[5]) / w;
+          u = Math.max(0, Math.min(cW - 1.001, u));
+          v = Math.max(0, Math.min(cH - 1.001, v));
+          const u0 = u | 0, v0 = v | 0, fu = u - u0, fv = v - v0;
+          const o00 = (v0 * cW + u0) * cCh, o10 = (v0 * cW + u0 + 1) * cCh;
+          const o01 = ((v0 + 1) * cW + u0) * cCh, o11 = ((v0 + 1) * cW + u0 + 1) * cCh;
+          for (let c = 0; c < 3; c++) {
+            out[i + c] = Math.round(
+              cD[o00 + c] * (1 - fu) * (1 - fv) + cD[o10 + c] * fu * (1 - fv) +
+              cD[o01 + c] * (1 - fu) * fv + cD[o11 + c] * fu * fv,
+            );
           }
         }
       }
-      bboxes.push(maxX < 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 });
-      await sharp(mask, { raw: { width: W, height: H, channels: 1 } }).png().toFile(path.join(masksDir, f.replace(/\.jpg$/, ".png")));
-    }
-    // Hold last-known bbox across frames where the screen is briefly not detected.
-    let last: GBBox = null;
-    for (let i = 0; i < bboxes.length; i++) {
-      if (bboxes[i]) last = bboxes[i];
-      else bboxes[i] = last;
-    }
-    const firstBB = bboxes.find((b) => b) ?? null;
-    for (let i = 0; i < bboxes.length && !bboxes[i]; i++) bboxes[i] = firstBB;
-    if (!bboxes.some((b) => b)) throw new Error("No green screen detected in any frame — check the green color and lighting");
-
-    // Smooth the track (moving average ±2) to avoid jitter from detection noise.
-    const sm: { x: number; y: number; w: number; h: number }[] = [];
-    const win = 2;
-    for (let i = 0; i < bboxes.length; i++) {
-      let sx = 0, sy = 0, sw = 0, sh = 0, n = 0;
-      for (let j = Math.max(0, i - win); j <= Math.min(bboxes.length - 1, i + win); j++) {
-        const o = bboxes[j];
-        if (o) { sx += o.x; sy += o.y; sw += o.w; sh += o.h; n++; }
-      }
-      const o = bboxes[i]!;
-      sm.push(n ? { x: Math.round(sx / n), y: Math.round(sy / n), w: Math.round(sw / n), h: Math.round(sh / n) } : o);
+      await sharp(out, { raw: { width: W, height: H, channels: ch } }).jpeg({ quality: 95 }).toFile(path.join(outDir, frameFiles[k]));
     }
 
-    // Pass 2 — place content at the (smoothed) bbox, alpha = actual green mask.
-    const M = 6; // expand slightly so content fully covers the green (no fringe)
-    for (let k = 0; k < frameFiles.length; k++) {
-      const t = sm[k];
-      const mask = await sharp(path.join(masksDir, frameFiles[k].replace(/\.jpg$/, ".png"))).greyscale().raw().toBuffer();
-      const rx = Math.max(0, t.x - M), ry = Math.max(0, t.y - M);
-      const rw = Math.min(W - rx, t.w + 2 * M), rh = Math.min(H - ry, t.h + 2 * M);
-      const cPath = contentIsVideo ? path.join(cframesDir, contentFiles[k % contentFiles.length]) : contentPath;
-      const cont = await sharp(cPath).resize(rw, rh, { fit: "fill" }).removeAlpha().raw().toBuffer();
-      const canvas = Buffer.alloc(W * H * 4, 0);
-      for (let y = 0; y < rh; y++) {
-        for (let x = 0; x < rw; x++) {
-          const dx = rx + x, dy = ry + y;
-          if (mask[dy * W + dx] > 0) {
-            const si = (y * rw + x) * 3, di = (dy * W + dx) * 4;
-            canvas[di] = cont[si]; canvas[di + 1] = cont[si + 1]; canvas[di + 2] = cont[si + 2]; canvas[di + 3] = 255;
-          }
-        }
-      }
-      const overlay = await sharp(canvas, { raw: { width: W, height: H, channels: 4 } }).png().toBuffer();
-      await sharp(path.join(framesDir, frameFiles[k])).composite([{ input: overlay }]).jpeg({ quality: 95 }).toFile(path.join(outDir, frameFiles[k]));
-    }
-
-    // Re-encode composited frames with the original audio.
     await runFfmpeg([
       "-y", "-framerate", String(fps), "-i", path.join(outDir, "f_%05d.jpg"),
       "-i", srcPath, "-map", "0:v", "-map", "1:a?",

@@ -951,7 +951,19 @@ export async function runNode(
         resolution,
       };
       console.log("[screenReplace] wan-vace", JSON.stringify({ video_url: sourceVideo.slice(0, 60), mask: maskUrl.slice(0, 60), ref: screen.slice(0, 60), resolution }));
-      const r = await falRun("fal-ai/wan-vace-14b/inpainting", payload, { timeoutMs: 600_000 });
+      // Wan VACE video inpainting is slow. Cap the wait BELOW the serverless
+      // function budget so a long job fails cleanly (instead of the function
+      // being killed mid-poll and the run hanging in "loading" forever).
+      let r: Record<string, unknown>;
+      try {
+        r = await falRun("fal-ai/wan-vace-14b/inpainting", payload, { timeoutMs: 480_000 });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/timeout|timed out|deadline/i.test(msg)) {
+          throw new Error("Wan VACE took too long (video inpainting is slow). Use the Composite method for screen replacement, or try a shorter clip / lower resolution.");
+        }
+        throw e;
+      }
       const url =
         (r.video as { url: string } | undefined)?.url ??
         (r.video_url as string | undefined) ??
