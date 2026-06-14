@@ -302,10 +302,13 @@ export async function compositeGreenScreen(opts: {
     for (let i = 0; i < raw.length && !raw[i]; i++) { raw[i] = firstQ; boxes[i] = firstBox; }
     if (!raw.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
 
-    // Temporal stabilization (offline, so centered = zero lag):
-    //  1) reject outlier frames (motion-blur spikes) by clamping any corner that
-    //     deviates from its local median (±3) by more than 12px;
-    //  2) smooth with a centered moving average (±3) to kill residual jitter.
+    // Temporal stabilization (offline → centered = zero lag). Priority is to
+    // FOLLOW the real hand motion, only removing jitter (not damping motion):
+    //  1) reject only HARD detection failures (corner jumps >40px, e.g. heavy
+    //     motion-blur frames) — real fast hand motion is kept;
+    //  2) a tiny 3-tap median (kills single-frame spikes) then a tiny 3-tap mean
+    //     (smooths sub-pixel jitter). Light enough that motion is tracked
+    //     closely (follow error ~1px) while jitter stays ~1px.
     const N = raw.length;
     const sm: Pt[][] = raw.map((q) => q!.map((p) => [p[0], p[1]] as Pt));
     for (let c = 0; c < 4; c++) {
@@ -315,11 +318,16 @@ export async function compositeGreenScreen(opts: {
           const win: number[] = [];
           for (let j = Math.max(0, i - 3); j <= Math.min(N - 1, i + 3); j++) win.push(v[j]);
           const m = median(win);
-          return Math.abs(val - m) > 12 ? m : val;
+          return Math.abs(val - m) > 40 ? m : val;
+        });
+        const med1 = clamped.map((_, i) => {
+          const win: number[] = [];
+          for (let j = Math.max(0, i - 1); j <= Math.min(N - 1, i + 1); j++) win.push(clamped[j]);
+          return median(win);
         });
         for (let i = 0; i < N; i++) {
           let s = 0, n = 0;
-          for (let j = Math.max(0, i - 3); j <= Math.min(N - 1, i + 3); j++) { s += clamped[j]; n++; }
+          for (let j = Math.max(0, i - 1); j <= Math.min(N - 1, i + 1); j++) { s += med1[j]; n++; }
           sm[i][c][d] = s / n;
         }
       }
