@@ -94,6 +94,75 @@ const isGreen = (data: Buffer, i: number) => {
 
 type GComp = { quad: [Pt, Pt, Pt, Pt]; bbox: [number, number, number, number]; size: number };
 
+// Least-squares line fit. vertical=true fits x = m*y + c (for the left/right
+// screen edges); false fits y = m*x + c (top/bottom edges).
+function fitLine(pts: Pt[], vertical: boolean): { m: number; c: number; vertical: boolean } {
+  const n = pts.length;
+  if (n < 2) return { m: 0, c: vertical ? pts[0]?.[0] ?? 0 : pts[0]?.[1] ?? 0, vertical };
+  let sa = 0, sb = 0, saa = 0, sab = 0;
+  for (const [x, y] of pts) {
+    const a = vertical ? y : x, b = vertical ? x : y;
+    sa += a; sb += b; saa += a * a; sab += a * b;
+  }
+  const m = (n * sab - sa * sb) / (n * saa - sa * sa + 1e-9);
+  const c = (sb - m * sa) / n;
+  return { m, c, vertical };
+}
+
+function lineIntersect(L1: { m: number; c: number; vertical: boolean }, L2: { m: number; c: number; vertical: boolean }): Pt {
+  const V = L1.vertical ? L1 : L2;  // x = m*y + c
+  const Hh = L1.vertical ? L2 : L1; // y = m*x + c
+  const x = (V.m * Hh.c + V.c) / (1 - V.m * Hh.m + 1e-9);
+  const y = Hh.m * x + Hh.c;
+  return [x, y];
+}
+
+// Sub-pixel-stable corners by fitting straight lines to the screen's 4 edges
+// (averaged over many edge pixels) and intersecting them. This is far steadier
+// frame-to-frame than single extremal pixels, and the rounded corners + the top
+// notch are excluded as outliers. Falls back to extremal corners if a fit fails.
+function edgeFitCorners(
+  lab: Int32Array, id: number, bbox: [number, number, number, number], W: number, H: number,
+  fallback: [Pt, Pt, Pt, Pt],
+): [Pt, Pt, Pt, Pt] {
+  const [bx0, by0, bx1, by1] = bbox;
+  const bw = bx1 - bx0, bh = by1 - by0;
+  if (bw < 8 || bh < 8) return fallback;
+  const isIn = (x: number, y: number) => x >= 0 && x < W && y >= 0 && y < H && lab[y * W + x] === id;
+  const L: Pt[] = [], R: Pt[] = [];
+  for (let y = Math.round(by0 + 0.15 * bh); y <= Math.round(by1 - 0.15 * bh); y++) {
+    let lx = -1, rx = -1;
+    for (let x = bx0; x <= bx1; x++) { if (isIn(x, y)) { if (lx < 0) lx = x; rx = x; } }
+    if (lx >= 0) { L.push([lx, y]); R.push([rx, y]); }
+  }
+  const B: Pt[] = [];
+  for (let x = Math.round(bx0 + 0.15 * bw); x <= Math.round(bx1 - 0.15 * bw); x++) {
+    let by = -1;
+    for (let y = by1; y >= by0; y--) { if (isIn(x, y)) { by = y; break; } }
+    if (by >= 0) B.push([x, by]);
+  }
+  const topRaw: Pt[] = [];
+  for (let x = Math.round(bx0 + 0.1 * bw); x <= Math.round(bx1 - 0.1 * bw); x++) {
+    let ty = -1;
+    for (let y = by0; y <= by1; y++) { if (isIn(x, y)) { ty = y; break; } }
+    if (ty >= 0) topRaw.push([x, ty]);
+  }
+  if (L.length < 4 || R.length < 4 || B.length < 4 || topRaw.length < 4) return fallback;
+  // Exclude the notch (columns whose top dips well below the median top).
+  const tys = topRaw.map((p) => p[1]).sort((a, b) => a - b);
+  const medTop = tys[(tys.length / 2) | 0];
+  const T = topRaw.filter((p) => p[1] <= medTop + 15);
+  if (T.length < 4) return fallback;
+  const lL = fitLine(L, true), lR = fitLine(R, true), lT = fitLine(T, false), lB = fitLine(B, false);
+  const tl = lineIntersect(lL, lT), tr = lineIntersect(lR, lT);
+  const br = lineIntersect(lR, lB), bl = lineIntersect(lL, lB);
+  // Sanity: corners must stay near the bbox; else the fit went wrong.
+  for (const [x, y] of [tl, tr, br, bl]) {
+    if (x < bx0 - bw || x > bx1 + bw || y < by0 - bh || y > by1 + bh || !isFinite(x) || !isFinite(y)) return fallback;
+  }
+  return [tl, tr, br, bl];
+}
+
 // Robust green-screen detection: label connected green regions and keep only
 // the LARGEST one (the screen). This discards spill specks, compression noise
 // and stray green objects in the background — the single biggest source of
@@ -134,7 +203,11 @@ function greenComponent(data: Buffer, W: number, H: number, ch: number): GComp |
       }
     }
   }
-  return bestId ? comps[bestId] : null;
+  if (!bestId) return null;
+  const best = comps[bestId];
+  // Upgrade the extremal corners to edge-line-fit corners (sub-pixel stable).
+  best.quad = edgeFitCorners(lab, bestId, best.bbox, W, H, best.quad);
+  return best;
 }
 
 function quadArea(q: Pt[]): number {
@@ -229,20 +302,28 @@ export async function compositeGreenScreen(opts: {
     for (let i = 0; i < raw.length && !raw[i]; i++) { raw[i] = firstQ; boxes[i] = firstBox; }
     if (!raw.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
 
-    // Temporal MEDIAN per corner (±2 frames): rejects jittery frames and damps
-    // sub-pixel wobble with only a couple frames of lag.
-    const sm: Pt[][] = raw.map((_, i) => {
-      const out: Pt[] = [];
-      for (let c = 0; c < 4; c++) {
-        const xs: number[] = [], ys: number[] = [];
-        for (let j = Math.max(0, i - 2); j <= Math.min(raw.length - 1, i + 2); j++) {
-          const q = raw[j]!;
-          xs.push(q[c][0]); ys.push(q[c][1]);
+    // Temporal stabilization (offline, so centered = zero lag):
+    //  1) reject outlier frames (motion-blur spikes) by clamping any corner that
+    //     deviates from its local median (±3) by more than 12px;
+    //  2) smooth with a centered moving average (±3) to kill residual jitter.
+    const N = raw.length;
+    const sm: Pt[][] = raw.map((q) => q!.map((p) => [p[0], p[1]] as Pt));
+    for (let c = 0; c < 4; c++) {
+      for (let d = 0; d < 2; d++) {
+        const v = raw.map((q) => q![c][d]);
+        const clamped = v.map((val, i) => {
+          const win: number[] = [];
+          for (let j = Math.max(0, i - 3); j <= Math.min(N - 1, i + 3); j++) win.push(v[j]);
+          const m = median(win);
+          return Math.abs(val - m) > 12 ? m : val;
+        });
+        for (let i = 0; i < N; i++) {
+          let s = 0, n = 0;
+          for (let j = Math.max(0, i - 3); j <= Math.min(N - 1, i + 3); j++) { s += clamped[j]; n++; }
+          sm[i][c][d] = s / n;
         }
-        out.push([median(xs), median(ys)]);
       }
-      return out;
-    });
+    }
 
     // Cache the content image (when it's a still) so we read+decode it once.
     let stillContent: { data: Buffer; w: number; h: number; ch: number } | null = null;
@@ -275,27 +356,25 @@ export async function compositeGreenScreen(opts: {
         for (let x = x0; x <= x1; x++) {
           const i = (y * W + x) * ch;
           const r = data[i], g = data[i + 1], b = data[i + 2];
-          if (g > 80 && g > r * 1.4 && g > b * 1.4) {
-            // Inside the green → draw the perspective-warped content.
-            const w = Hm[6] * x + Hm[7] * y + Hm[8];
-            let u = (Hm[0] * x + Hm[1] * y + Hm[2]) / w;
-            let v = (Hm[3] * x + Hm[4] * y + Hm[5]) / w;
-            u = Math.max(0, Math.min(cW - 1.001, u));
-            v = Math.max(0, Math.min(cH - 1.001, v));
-            const u0 = u | 0, v0 = v | 0, fu = u - u0, fv = v - v0;
-            const o00 = (v0 * cW + u0) * cCh, o10 = (v0 * cW + u0 + 1) * cCh;
-            const o01 = ((v0 + 1) * cW + u0) * cCh, o11 = ((v0 + 1) * cW + u0 + 1) * cCh;
-            for (let c = 0; c < 3; c++) {
-              out[i + c] = Math.round(
-                cD[o00 + c] * (1 - fu) * (1 - fv) + cD[o10 + c] * fu * (1 - fv) +
-                cD[o01 + c] * (1 - fu) * fv + cD[o11 + c] * fu * fv,
-              );
-            }
-          } else if (g > r * 1.15 && g > b * 1.15 && g > 28) {
-            // Anti-aliased green fringe at the screen edge (too dim to key but
-            // still tinted) → despill: clamp green to the red/blue average so it
-            // becomes neutral instead of a green rim. Fingers/skin aren't green.
-            out[i + 1] = Math.min(g, Math.round((r + b) / 2));
+          // Fill content over bright green AND the dim/anti-aliased/motion-blur
+          // green edge (greenish). This leaves no green rim and no grey patches
+          // on blurred frames. Skin/fingers/teal background aren't greenish.
+          const bright = g > 80 && g > r * 1.4 && g > b * 1.4;
+          const greenish = g > 45 && g > r * 1.25 && g > b * 1.25;
+          if (!bright && !greenish) continue;
+          const w = Hm[6] * x + Hm[7] * y + Hm[8];
+          let u = (Hm[0] * x + Hm[1] * y + Hm[2]) / w;
+          let v = (Hm[3] * x + Hm[4] * y + Hm[5]) / w;
+          u = Math.max(0, Math.min(cW - 1.001, u));
+          v = Math.max(0, Math.min(cH - 1.001, v));
+          const u0 = u | 0, v0 = v | 0, fu = u - u0, fv = v - v0;
+          const o00 = (v0 * cW + u0) * cCh, o10 = (v0 * cW + u0 + 1) * cCh;
+          const o01 = ((v0 + 1) * cW + u0) * cCh, o11 = ((v0 + 1) * cW + u0 + 1) * cCh;
+          for (let c = 0; c < 3; c++) {
+            out[i + c] = Math.round(
+              cD[o00 + c] * (1 - fu) * (1 - fv) + cD[o10 + c] * fu * (1 - fv) +
+              cD[o01 + c] * (1 - fu) * fv + cD[o11 + c] * fu * fv,
+            );
           }
         }
       }
