@@ -92,34 +92,22 @@ const isGreen = (data: Buffer, i: number) => {
   return g > 80 && g > r * 1.4 && g > b * 1.4;
 };
 
-// Optional corner-marker colors (for the marker tracking template: a green
-// screen with 4 distinct solid corner markers). Tolerant tests so HeyGen
-// rendering / screen glow shifts don't break them.
-const mRed = (r: number, g: number, b: number) => r > 110 && r > g * 1.5 && r > b * 1.5;
-const mBlue = (r: number, g: number, b: number) => b > 110 && b > r * 1.5 && b > g * 1.5;
-const mYellow = (r: number, g: number, b: number) => r > 110 && g > 110 && b < r * 0.6 && b < g * 0.6;
-const mMagenta = (r: number, g: number, b: number) => r > 110 && b > 110 && g < r * 0.6 && g < b * 0.6;
-const isMarkerColor = (r: number, g: number, b: number) =>
-  mRed(r, g, b) || mBlue(r, g, b) || mYellow(r, g, b) || mMagenta(r, g, b);
 
-
-// Standard tracking-template marker centroids in NORMALIZED screen space
-// [0..1] (TL, TR, BR, BL), measured from the 1080x2280 template (4 solid
-// corner squares, 0.16*W, flush in the corners). Anisotropic (square markers
-// on a tall canvas) — handled exactly by the homography below, NOT a single
-// scalar inset.
-const TMPL_MARKERS: Pt[] = [[0.0792, 0.0375], [0.9199, 0.0375], [0.9199, 0.9621], [0.0792, 0.9621]];
+// Normalized unit-square corners (TL, TR, BR, BL) — the screen rectangle in
+// template space. Marker centroids sit at a fractional inset from these; that
+// inset is AUTO-CALIBRATED per clip (see below), because how far the rendered
+// dark-green markers land from the screen edge depends on how HeyGen fit the
+// template into the phone screen and so varies between source videos.
 const TMPL_CORNERS: Pt[] = [[0, 0], [1, 0], [1, 1], [0, 1]];
 
-// Largest 4-connected blob of a color test inside a sub-rectangle; returns its
-// centroid or null. Confining each marker search to its own CORNER QUADRANT of
-// the green bbox (and never expanding outside the bbox) is what keeps fingers,
-// skin and the blue/purple studio light out of the marker centroids — that
-// contamination was the root cause of the crooked composite.
-function blobCentroid(
+// Largest 4-connected blob of a color test inside a sub-rectangle that is also
+// COMPACT (area / bbox-area >= minFill). The compactness gate rejects the thin
+// dark-green ring along the screen-bezel edge transition (a long, thin blob)
+// while keeping the solid square markers. Returns centroid or null.
+function blobCentroidCompact(
   data: Buffer, W: number, ch: number,
   test: (r: number, g: number, b: number) => boolean,
-  qx0: number, qy0: number, qx1: number, qy1: number, minPx: number,
+  qx0: number, qy0: number, qx1: number, qy1: number, minPx: number, minFill: number,
 ): Pt | null {
   const cols = qx1 - qx0 + 1, rows = qy1 - qy0 + 1;
   if (cols <= 0 || rows <= 0) return null;
@@ -129,58 +117,110 @@ function blobCentroid(
     const i = (y * W + x) * ch;
     return test(data[i], data[i + 1], data[i + 2]);
   };
-  let bestN = 0, bestSx = 0, bestSy = 0;
+  let bestN = 0, bestCx = 0, bestCy = 0;
   for (let y = qy0; y <= qy1; y++) {
     for (let x = qx0; x <= qx1; x++) {
       const li = (y - qy0) * cols + (x - qx0);
       if (seen[li] || !ok(x, y)) continue;
-      let n = 0, sx = 0, sy = 0;
+      let n = 0, sx = 0, sy = 0, minx = x, maxx = x, miny = y, maxy = y;
       seen[li] = 1; stack.length = 0; stack.push(y * W + x);
       while (stack.length) {
-        const g = stack.pop()!; const cx = g % W, cy = (g / W) | 0;
+        const gI = stack.pop()!; const cx = gI % W, cy = (gI / W) | 0;
         n++; sx += cx; sy += cy;
-        if (cx + 1 <= qx1) { const nx = cx + 1, li2 = (cy - qy0) * cols + (nx - qx0); if (!seen[li2] && ok(nx, cy)) { seen[li2] = 1; stack.push(cy * W + nx); } }
-        if (cx - 1 >= qx0) { const nx = cx - 1, li2 = (cy - qy0) * cols + (nx - qx0); if (!seen[li2] && ok(nx, cy)) { seen[li2] = 1; stack.push(cy * W + nx); } }
-        if (cy + 1 <= qy1) { const ny = cy + 1, li2 = (ny - qy0) * cols + (cx - qx0); if (!seen[li2] && ok(cx, ny)) { seen[li2] = 1; stack.push(ny * W + cx); } }
-        if (cy - 1 >= qy0) { const ny = cy - 1, li2 = (ny - qy0) * cols + (cx - qx0); if (!seen[li2] && ok(cx, ny)) { seen[li2] = 1; stack.push(ny * W + cx); } }
+        if (cx < minx) minx = cx; if (cx > maxx) maxx = cx;
+        if (cy < miny) miny = cy; if (cy > maxy) maxy = cy;
+        if (cx + 1 <= qx1) { const nx = cx + 1, l2 = (cy - qy0) * cols + (nx - qx0); if (!seen[l2] && ok(nx, cy)) { seen[l2] = 1; stack.push(cy * W + nx); } }
+        if (cx - 1 >= qx0) { const nx = cx - 1, l2 = (cy - qy0) * cols + (nx - qx0); if (!seen[l2] && ok(nx, cy)) { seen[l2] = 1; stack.push(cy * W + nx); } }
+        if (cy + 1 <= qy1) { const ny = cy + 1, l2 = (ny - qy0) * cols + (cx - qx0); if (!seen[l2] && ok(cx, ny)) { seen[l2] = 1; stack.push(ny * W + cx); } }
+        if (cy - 1 >= qy0) { const ny = cy - 1, l2 = (ny - qy0) * cols + (cx - qx0); if (!seen[l2] && ok(cx, ny)) { seen[l2] = 1; stack.push(ny * W + cx); } }
       }
-      if (n > bestN) { bestN = n; bestSx = sx; bestSy = sy; }
+      if (n < minPx) continue;
+      const fill = n / ((maxx - minx + 1) * (maxy - miny + 1));
+      if (fill < minFill) continue;
+      if (n > bestN) { bestN = n; bestCx = sx / n; bestCy = sy / n; }
     }
   }
-  return bestN >= minPx ? [bestSx / bestN, bestSy / bestN] : null;
+  return bestN > 0 ? [bestCx, bestCy] : null;
 }
 
-// Detect the 4 colored corner markers (robustly) and return the TRUE screen
-// quad via a homography from the template's known marker centroids to the
-// detected ones (then projecting the template corners). Returns null if any
-// marker isn't cleanly present (-> green-edge fallback).
-function detectMarkerQuad(
+// Detect the 4 DARK-GREEN corner markers; returns their centroids [TL,TR,BR,BL]
+// in image coords, or null if any isn't cleanly present (-> green-edge
+// fallback). Found by CONTRAST: within the bright-green bbox a per-frame
+// ADAPTIVE threshold (relative to the screen's own green level -> exposure
+// robust) selects green-dominant-but-dark pixels; a compact-blob search per
+// corner quadrant isolates each square marker from the thin dark-green edge
+// ring. Dark-green keys out with the chroma key automatically and never
+// collides with arbitrary scene colors, which is what makes it production-safe.
+function detectMarkers(
   data: Buffer, W: number, H: number, ch: number, bbox: [number, number, number, number],
 ): [Pt, Pt, Pt, Pt] | null {
   const [bx0, by0, bx1, by1] = bbox;
   const bw = bx1 - bx0, bh = by1 - by0;
   if (bw < 20 || bh < 20) return null;
-  const minPx = Math.max(40, 0.0003 * bw * bh);
-  // strict, saturation-gated tests (pure markers pass; muddy skin/bg rejected)
-  const tR = (r: number, g: number, b: number) => r > 120 && r > g * 1.7 && r > b * 1.7;
-  const tB = (r: number, g: number, b: number) => b > 120 && b > r * 1.7 && b > g * 1.7;
-  const tY = (r: number, g: number, b: number) => r > 120 && g > 120 && b < r * 0.55 && b < g * 0.55;
-  const tM = (r: number, g: number, b: number) => r > 120 && b > 120 && g < r * 0.55 && g < b * 0.55;
+  const gh = new Uint32Array(256);
+  let gcount = 0;
+  for (let y = by0; y <= by1; y++) {
+    for (let x = bx0; x <= bx1; x++) {
+      const i = (y * W + x) * ch; const r = data[i], g = data[i + 1], b = data[i + 2];
+      if (g > 20 && g > r * 1.3 && g > b * 1.3) { gh[g]++; gcount++; }
+    }
+  }
+  if (gcount < 100) return null;
+  let acc = 0, screenG = 200;
+  for (let v = 0; v < 256; v++) { acc += gh[v]; if (acc * 2 >= gcount) { screenG = v; break; } }
+  const darkMax = 0.55 * screenG, darkMin = 0.10 * screenG;
+  const tDG = (r: number, g: number, b: number) => g > r * 1.25 && g > b * 1.25 && g < darkMax && g > darkMin;
+  const minPx = Math.max(20, 0.0006 * bw * bh);
   const qw = Math.round(0.5 * bw), qh = Math.round(0.5 * bh);
-  const tl = blobCentroid(data, W, ch, tR, bx0, by0, bx0 + qw, by0 + qh, minPx);
-  const tr = blobCentroid(data, W, ch, tB, bx1 - qw, by0, bx1, by0 + qh, minPx);
-  const br = blobCentroid(data, W, ch, tY, bx1 - qw, by1 - qh, bx1, by1, minPx);
-  const bl = blobCentroid(data, W, ch, tM, bx0, by1 - qh, bx0 + qw, by1, minPx);
+  const tl = blobCentroidCompact(data, W, ch, tDG, bx0, by0, bx0 + qw, by0 + qh, minPx, 0.45);
+  const tr = blobCentroidCompact(data, W, ch, tDG, bx1 - qw, by0, bx1, by0 + qh, minPx, 0.45);
+  const br = blobCentroidCompact(data, W, ch, tDG, bx1 - qw, by1 - qh, bx1, by1, minPx, 0.45);
+  const bl = blobCentroidCompact(data, W, ch, tDG, bx0, by1 - qh, bx0 + qw, by1, minPx, 0.45);
   if (!tl || !tr || !br || !bl) return null;
-  // Map the template's known marker centroids -> the detected ones, then push
-  // the template's screen corners through that homography. Recovers the true
-  // screen quad exactly (tilt/perspective AND the anisotropic marker inset).
-  const Hm = solveHomography(TMPL_MARKERS, [tl, tr, br, bl]);
+  return [tl, tr, br, bl];
+}
+
+// Local marker inset (fraction from the NEAREST screen edge) measured against
+// the BRIGHT-green extent on the marker's own row/column. Tilt-invariant, so
+// averaged over the clip it recovers exactly how far the rendered markers sit
+// from the screen edge for THIS source -> per-clip auto-calibration. Pushes up
+// to 4 horizontal and 4 vertical samples per frame.
+function sampleMarkerInset(
+  data: Buffer, W: number, ch: number,
+  bbox: [number, number, number, number], cents: [Pt, Pt, Pt, Pt],
+  outH: number[], outV: number[],
+): void {
+  const [bx0, by0, bx1, by1] = bbox;
+  const isBright = (x: number, y: number) => {
+    const i = (y * W + x) * ch; const r = data[i], g = data[i + 1], b = data[i + 2];
+    return g > 110 && g > r * 1.4 && g > b * 1.4;
+  };
+  for (let k = 0; k < 4; k++) {
+    const cx = cents[k][0], cy = cents[k][1];
+    const ix = Math.round(cx), iy = Math.round(cy);
+    let xl = -1, xr = -1;
+    for (let x = bx0; x <= bx1; x++) { if (isBright(x, iy)) { if (xl < 0) xl = x; xr = x; } }
+    if (xl >= 0 && xr > xl) { const f = (cx - xl) / (xr - xl); outH.push(k === 0 || k === 3 ? f : 1 - f); }
+    let yt = -1, yb = -1;
+    for (let y = by0; y <= by1; y++) { if (isBright(ix, y)) { if (yt < 0) yt = y; yb = y; } }
+    if (yt >= 0 && yb > yt) { const f = (cy - yt) / (yb - yt); outV.push(k === 0 || k === 1 ? f : 1 - f); }
+  }
+}
+
+// Extrapolate the 4 screen corners from detected marker centroids using the
+// per-clip calibrated marker inset: homography from the calibrated normalized
+// marker positions to the detected centroids, then project the unit-square
+// corners. Returns null on a degenerate/implausible solution.
+function screenFromMarkers(
+  cents: [Pt, Pt, Pt, Pt], calibTMPL: Pt[], bbox: [number, number, number, number],
+): [Pt, Pt, Pt, Pt] | null {
+  const Hm = solveHomography(calibTMPL, cents);
   const proj = (p: Pt): Pt => {
     const w = Hm[6] * p[0] + Hm[7] * p[1] + Hm[8];
     return [(Hm[0] * p[0] + Hm[1] * p[1] + Hm[2]) / w, (Hm[3] * p[0] + Hm[4] * p[1] + Hm[5]) / w];
   };
   const out = TMPL_CORNERS.map(proj) as [Pt, Pt, Pt, Pt];
+  const [bx0, by0, bx1, by1] = bbox; const bw = bx1 - bx0, bh = by1 - by0;
   for (const [x, y] of out) {
     if (!isFinite(x) || !isFinite(y) || x < bx0 - bw || x > bx1 + bw || y < by0 - bh || y > by1 + bh) return null;
   }
@@ -371,27 +411,44 @@ export async function compositeGreenScreen(opts: {
     // extent (not just the corner quad), so rounded corners / notch don't leave
     // an un-keyed green rim.
     const MIN_SIZE = 0.0008 * W * H;
-    const raw: GQuad[] = [];
     const boxes: ([number, number, number, number] | null)[] = [];
+    const cents: ([Pt, Pt, Pt, Pt] | null)[] = [];
+    const greenQuads: GQuad[] = [];
+    const insetH: number[] = [], insetV: number[] = [];
     for (const f of frameFiles) {
       const { data, info } = await sharp(path.join(framesDir, f)).raw().toBuffer({ resolveWithObject: true });
       const comp = greenComponent(data, W, H, info.channels);
-      if (!comp || comp.size < MIN_SIZE) { raw.push(null); boxes.push(null); continue; }
-      // Prefer marker-based corners (blur-proof, sub-pixel) when the marker
-      // template is on the screen; otherwise use the green-edge quad.
-      const markerQuad = detectMarkerQuad(data, W, H, info.channels, comp.bbox);
-      let chosen: [Pt, Pt, Pt, Pt];
-      if (markerQuad) {
-        chosen = markerQuad;
-      } else {
-        chosen = comp.quad;
-        if (quadArea(comp.quad) < 0.55 * comp.size) {
-          const [a, b, c, d] = comp.bbox;
-          chosen = [[a, b], [c, b], [c, d], [a, d]];
-        }
-      }
-      raw.push(chosen);
+      if (!comp || comp.size < MIN_SIZE) { cents.push(null); boxes.push(null); greenQuads.push(null); continue; }
+      const c = detectMarkers(data, W, H, info.channels, comp.bbox);
+      cents.push(c);
+      if (c) sampleMarkerInset(data, W, info.channels, comp.bbox, c, insetH, insetV);
       boxes.push(comp.bbox);
+      // Green-edge quad as the per-frame fallback when markers aren't clean.
+      let gq: [Pt, Pt, Pt, Pt] = comp.quad;
+      if (quadArea(comp.quad) < 0.55 * comp.size) {
+        const [a, b, c2, d] = comp.bbox;
+        gq = [[a, b], [c2, b], [c2, d], [a, d]];
+      }
+      greenQuads.push(gq);
+    }
+    // AUTO-CALIBRATE the marker inset from this clip's own frames (tilt-robust
+    // median). This adapts to however HeyGen fit the template into the phone
+    // screen, so the SAME code tracks correctly across different source videos
+    // without a hand-tuned per-clip constant. Falls back to the template's
+    // design inset if too few marker frames were seen.
+    const fH = insetH.length >= 8 ? median(insetH) : 0.09;
+    const fV = insetV.length >= 8 ? median(insetV) : 0.09;
+    const calibTMPL: Pt[] = [[fH, fV], [1 - fH, fV], [1 - fH, 1 - fV], [fH, 1 - fV]];
+    // Build per-frame quads: calibrated marker extrapolation (stable, blur-proof,
+    // matches the screen extent), else the green-edge quad.
+    const raw: GQuad[] = [];
+    for (let i = 0; i < cents.length; i++) {
+      if (cents[i]) {
+        const s = screenFromMarkers(cents[i]!, calibTMPL, boxes[i]!);
+        raw.push(s ?? greenQuads[i]);
+      } else {
+        raw.push(greenQuads[i]);
+      }
     }
     // Hold last-known corners + bbox across frames where the screen is hidden.
     let last: GQuad = null;
@@ -472,7 +529,7 @@ export async function compositeGreenScreen(opts: {
           // on blurred frames. Skin/fingers/teal background aren't greenish.
           const bright = g > 80 && g > r * 1.4 && g > b * 1.4;
           const greenish = g > 45 && g > r * 1.25 && g > b * 1.25;
-          if (!bright && !greenish && !isMarkerColor(r, g, b)) continue;
+          if (!bright && !greenish) continue;
           const w = Hm[6] * x + Hm[7] * y + Hm[8];
           let u = (Hm[0] * x + Hm[1] * y + Hm[2]) / w;
           let v = (Hm[3] * x + Hm[4] * y + Hm[5]) / w;
