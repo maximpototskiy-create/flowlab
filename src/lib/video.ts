@@ -92,6 +92,49 @@ const isGreen = (data: Buffer, i: number) => {
   return g > 80 && g > r * 1.4 && g > b * 1.4;
 };
 
+// Optional corner-marker colors (for the marker tracking template: a green
+// screen with 4 distinct solid corner markers). Tolerant tests so HeyGen
+// rendering / screen glow shifts don't break them.
+const mRed = (r: number, g: number, b: number) => r > 110 && r > g * 1.5 && r > b * 1.5;
+const mBlue = (r: number, g: number, b: number) => b > 110 && b > r * 1.5 && b > g * 1.5;
+const mYellow = (r: number, g: number, b: number) => r > 110 && g > 110 && b < r * 0.6 && b < g * 0.6;
+const mMagenta = (r: number, g: number, b: number) => r > 110 && b > 110 && g < r * 0.6 && g < b * 0.6;
+const isMarkerColor = (r: number, g: number, b: number) =>
+  mRed(r, g, b) || mBlue(r, g, b) || mYellow(r, g, b) || mMagenta(r, g, b);
+
+// Marker inset fraction in the template (marker centroid sits this far in from
+// each screen edge). Used to extrapolate centroids back to the true corners.
+const MARKER_INSET = 0.08;
+
+// If the screen shows the 4-corner marker template, return its 4 corners from
+// the colored-marker centroids (extrapolated to the true screen corners). This
+// is far more accurate and motion-blur-proof than green-edge detection. Returns
+// null if the 4 markers aren't all clearly present (→ fall back to green).
+function detectMarkerQuad(
+  data: Buffer, W: number, H: number, ch: number, bbox: [number, number, number, number],
+): [Pt, Pt, Pt, Pt] | null {
+  const [bx0, by0, bx1, by1] = bbox;
+  const x0 = Math.max(0, bx0 - 30), y0 = Math.max(0, by0 - 30);
+  const x1 = Math.min(W - 1, bx1 + 30), y1 = Math.min(H - 1, by1 + 30);
+  const acc = (test: (r: number, g: number, b: number) => boolean): Pt | null => {
+    let sx = 0, sy = 0, n = 0;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = (y * W + x) * ch;
+        if (test(data[i], data[i + 1], data[i + 2])) { sx += x; sy += y; n++; }
+      }
+    }
+    return n > 20 ? [sx / n, sy / n] : null;
+  };
+  const tl = acc(mRed), tr = acc(mBlue), br = acc(mYellow), bl = acc(mMagenta);
+  if (!tl || !tr || !br || !bl) return null;
+  const cx = (tl[0] + tr[0] + br[0] + bl[0]) / 4;
+  const cy = (tl[1] + tr[1] + br[1] + bl[1]) / 4;
+  const F = 1 / (1 - 2 * MARKER_INSET);
+  const ext = (p: Pt): Pt => [cx + (p[0] - cx) * F, cy + (p[1] - cy) * F];
+  return [ext(tl), ext(tr), ext(br), ext(bl)];
+}
+
 type GComp = { quad: [Pt, Pt, Pt, Pt]; bbox: [number, number, number, number]; size: number };
 
 // Least-squares line fit. vertical=true fits x = m*y + c (for the left/right
@@ -282,10 +325,18 @@ export async function compositeGreenScreen(opts: {
       const { data, info } = await sharp(path.join(framesDir, f)).raw().toBuffer({ resolveWithObject: true });
       const comp = greenComponent(data, W, H, info.channels);
       if (!comp || comp.size < MIN_SIZE) { raw.push(null); boxes.push(null); continue; }
-      let chosen: [Pt, Pt, Pt, Pt] = comp.quad;
-      if (quadArea(comp.quad) < 0.55 * comp.size) {
-        const [a, b, c, d] = comp.bbox;
-        chosen = [[a, b], [c, b], [c, d], [a, d]];
+      // Prefer marker-based corners (blur-proof, sub-pixel) when the marker
+      // template is on the screen; otherwise use the green-edge quad.
+      const markerQuad = detectMarkerQuad(data, W, H, info.channels, comp.bbox);
+      let chosen: [Pt, Pt, Pt, Pt];
+      if (markerQuad) {
+        chosen = markerQuad;
+      } else {
+        chosen = comp.quad;
+        if (quadArea(comp.quad) < 0.55 * comp.size) {
+          const [a, b, c, d] = comp.bbox;
+          chosen = [[a, b], [c, b], [c, d], [a, d]];
+        }
       }
       raw.push(chosen);
       boxes.push(comp.bbox);
@@ -357,7 +408,7 @@ export async function compositeGreenScreen(opts: {
       // Iterate the WHOLE green extent (component bbox + margin), not just the
       // corner quad — otherwise rounded corners / the notch leave a green rim.
       const box = boxes[k]!;
-      const MG = 5;
+      const MG = 12;
       const x0 = Math.max(0, box[0] - MG), y0 = Math.max(0, box[1] - MG);
       const x1 = Math.min(W - 1, box[2] + MG), y1 = Math.min(H - 1, box[3] + MG);
       for (let y = y0; y <= y1; y++) {
@@ -369,7 +420,7 @@ export async function compositeGreenScreen(opts: {
           // on blurred frames. Skin/fingers/teal background aren't greenish.
           const bright = g > 80 && g > r * 1.4 && g > b * 1.4;
           const greenish = g > 45 && g > r * 1.25 && g > b * 1.25;
-          if (!bright && !greenish) continue;
+          if (!bright && !greenish && !isMarkerColor(r, g, b)) continue;
           const w = Hm[6] * x + Hm[7] * y + Hm[8];
           let u = (Hm[0] * x + Hm[1] * y + Hm[2]) / w;
           let v = (Hm[3] * x + Hm[4] * y + Hm[5]) / w;
