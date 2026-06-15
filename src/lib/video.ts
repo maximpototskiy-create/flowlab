@@ -6,7 +6,7 @@
 // only the embedding is computed from the padded version.
 // ─────────────────────────────────────────────────────────────────────────
 import { spawn } from "child_process";
-import { writeFile, readFile, unlink, mkdtemp, mkdir, readdir, rm } from "fs/promises";
+import { writeFile, readFile, unlink, mkdtemp, mkdir, readdir, rm, stat } from "fs/promises";
 import { existsSync } from "fs";
 import os from "os";
 import path from "path";
@@ -53,6 +53,36 @@ function spawnFfmpeg(args: string[]): { proc: ReturnType<typeof spawn>; done: Pr
     proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${err.slice(-300)}`))));
   });
   return { proc, done };
+}
+
+// Reclaim disk from temp dirs leaked by earlier runs that were hard-killed
+// (OOM / function timeout) before their `finally` cleanup could run. On warm
+// (Fluid) compute these "sr_*" dirs pile up in /tmp until even a small frame
+// extraction fails with "No space left on device". A normal compositing pass
+// finishes in well under a minute, so any sibling dir older than 2 minutes is
+// stale and safe to remove. Never touches the current run's own dir.
+async function sweepStaleScreenReplaceTemp(selfDir: string): Promise<void> {
+  try {
+    const base = os.tmpdir();
+    const now = Date.now();
+    const names = await readdir(base);
+    await Promise.all(
+      names
+        .filter((n) => n.startsWith("sr_"))
+        .map((n) => path.join(base, n))
+        .filter((p) => p !== selfDir)
+        .map(async (p) => {
+          try {
+            const st = await stat(p);
+            if (now - st.mtimeMs > 120_000) await rm(p, { recursive: true, force: true });
+          } catch {
+            /* ignore — another worker may be removing it concurrently */
+          }
+        }),
+    );
+  } catch {
+    /* best-effort: never fail the run because cleanup hiccuped */
+  }
 }
 
 // Quick probe of a video's dimensions + fps by parsing ffmpeg's stderr banner
@@ -564,6 +594,8 @@ export async function compositeGreenScreen(opts: {
   similarity?: number;
 }): Promise<Buffer> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
+  // Reclaim any disk leaked by earlier hard-killed runs before we start.
+  await sweepStaleScreenReplaceTemp(dir);
   const srcPath = path.join(dir, "src.mp4");
   const contentPath = path.join(dir, opts.contentIsVideo ? "content.mp4" : "content.png");
   const framesDir = path.join(dir, "frames");
@@ -577,7 +609,7 @@ export async function compositeGreenScreen(opts: {
     await runFfmpeg(["-y", "-i", srcPath, "-fps_mode", "passthrough", "-q:v", "3", path.join(framesDir, "f_%05d.jpg")]);
     const frameFiles = (await readdir(framesDir)).filter((f) => f.endsWith(".jpg")).sort();
     if (frameFiles.length === 0) throw new Error("No frames extracted from the source video");
-    if (frameFiles.length > 1500) throw new Error("Clip is too long for composite tracking — trim it shorter or use the Wan method");
+    if (frameFiles.length > 1500) throw new Error("Clip is too long for screen-replace tracking — trim it shorter.");
 
     let contentIsVideo = opts.contentIsVideo;
     let contentFiles: string[] = [];

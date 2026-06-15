@@ -1238,27 +1238,17 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
   },
 
   screenReplace: {
-    name: "Screen Replace (Wan)",
+    name: "Screen Replace",
     category: "video",
     icon: "smartphone",
-    description: "Replace a GREEN-SCREEN phone/device screen in a video with a connected image, via Wan VACE inpainting. The green area is auto-keyed as the region to replace; the mask tracks the screen and finger occlusions are kept for free.",
+    description: "Replace a GREEN-SCREEN phone/device screen in a video with a connected image or video. The green area is auto-keyed and tracked per frame (position, scale, tilt/perspective), so the insert follows the screen as the phone moves; finger occlusions are kept for free.",
     inputs: [
       { name: "source_video", type: "video", label: "Source video (green screen)" },
       { name: "screen", type: "any", label: "Screen content (image or video)" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", resolution: "auto", instructions: "" },
+    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", instructions: "" },
     fields: [
-      {
-        name: "method",
-        label: "Method",
-        type: "select",
-        icon: "settings",
-        options: [
-          { value: "composite", label: "Composite (exact, image/video)" },
-          { value: "wan", label: "AI inpaint (Wan, approximate)" },
-        ],
-      },
       { name: "key_color", label: "Green key color", type: "text", placeholder: "#00FF00" },
       {
         name: "key_similarity",
@@ -1271,20 +1261,8 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "0.45", label: "Loose (uneven / spill)" },
         ],
       },
-      {
-        name: "resolution",
-        label: "Resolution",
-        type: "select",
-        icon: "settings",
-        options: [
-          { value: "auto", label: "Auto (match source)" },
-          { value: "480p", label: "480p" },
-          { value: "580p", label: "580p" },
-          { value: "720p", label: "720p" },
-        ],
-      },
     ],
-    quickFields: ["method", "key_similarity"],
+    quickFields: ["key_similarity"],
     primaryField: "instructions",
     primaryLabel: "Prompt (optional)",
     primaryPlaceholder: "Describe the new screen, e.g. 'the phone screen shows the reference app UI, crisp and bright'. Leave empty for a sensible default.",
