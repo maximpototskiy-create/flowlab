@@ -36,9 +36,9 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
-// Like runFfmpeg but returns the process so we can stream frames into its stdin
-// (image2pipe). Used by the compositor to avoid writing thousands of full-res
-// PNG frames to disk — at 4K that overflows /tmp ("No space left on device").
+// Like runFfmpeg but returns the process so we can stream raw frames into its
+// stdin. Used by the compositor to avoid writing any frames to disk — at high
+// res / 50fps that overflows /tmp ("No space left on device").
 function spawnFfmpeg(args: string[]): { proc: ReturnType<typeof spawn>; done: Promise<void> } {
   const bin = resolveFfmpeg();
   const proc = spawn(bin, args);
@@ -67,7 +67,7 @@ function openFrameStream(srcPath: string, frameSize: number): { next: () => Prom
     stderr += d.toString();
   });
   const stdout = proc.stdout;
-  let leftover: Buffer = Buffer.alloc(0);
+  let stash: Buffer | null = null; // bytes already read that belong to the next frame
   let ended = false;
   let errored: Error | null = null;
   stdout.on("end", () => {
@@ -82,11 +82,27 @@ function openFrameStream(srcPath: string, frameSize: number): { next: () => Prom
     ended = true;
   });
   async function next(): Promise<Buffer | null> {
-    while (leftover.length < frameSize) {
+    // Assemble exactly one frame into a pre-allocated buffer (O(frameSize)).
+    // The old `Buffer.concat` per chunk was O(n^2): a 6MB frame arrives as ~100
+    // small pipe chunks, and re-concatenating the growing buffer each time
+    // copied hundreds of MB per frame and thrashed the GC — that was the real
+    // reason long clips crawled.
+    const frame = Buffer.allocUnsafe(frameSize);
+    let filled = 0;
+    if (stash) {
+      const take = Math.min(stash.length, frameSize);
+      stash.copy(frame, 0, 0, take);
+      filled = take;
+      stash = take < stash.length ? stash.subarray(take) : null;
+    }
+    while (filled < frameSize) {
       if (errored) throw errored;
       const chunk = stdout.read() as Buffer | null;
       if (chunk) {
-        leftover = leftover.length ? Buffer.concat([leftover, chunk]) : chunk;
+        const take = Math.min(chunk.length, frameSize - filled);
+        chunk.copy(frame, filled, 0, take);
+        filled += take;
+        if (take < chunk.length) stash = chunk.subarray(take);
         continue;
       }
       if (ended) break;
@@ -105,12 +121,10 @@ function openFrameStream(srcPath: string, frameSize: number): { next: () => Prom
         proc.once("close", on);
       });
     }
-    if (leftover.length < frameSize) {
+    if (filled < frameSize) {
       if (errored) throw errored;
       return null;
     }
-    const frame = Buffer.from(leftover.subarray(0, frameSize));
-    leftover = leftover.subarray(frameSize);
     return frame;
   }
   function destroy() {
@@ -837,11 +851,11 @@ export async function compositeGreenScreen(opts: {
 
     // Pass 2 — perspective-warp content onto the quad, alpha = actual green.
     // Source frames are pulled off a decode pipe (no frame files on disk) and
-    // each composited frame is pushed straight into the encoder over another
-    // pipe (image2pipe). Nothing but the source video and the output ever lives
-    // on disk, so resolution/length can't overflow the small /tmp.
+    // each composited frame is pushed straight into the encoder as raw RGB over
+    // another pipe. Nothing but the source video and the output ever lives on
+    // disk, so resolution/length can't overflow the small /tmp.
     const enc = spawnFfmpeg([
-      "-y", "-f", "image2pipe", "-framerate", String(fps), "-i", "pipe:0",
+      "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", `${W}x${H}`, "-framerate", String(fps), "-i", "pipe:0",
       "-i", srcPath, "-map", "0:v", "-map", "1:a?",
       "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-shortest", "-movflags", "+faststart",
@@ -909,10 +923,10 @@ export async function compositeGreenScreen(opts: {
           out[i + 2] = Math.round(a2 * norm);
         }
       }
-      const png = await sharp(out, { raw: { width: W, height: H, channels: ch } })
-        .png({ compressionLevel: 1 }).toBuffer();
+      // Push the composited frame straight to the encoder as raw RGB — no PNG
+      // round-trip (we were encoding PNG only for the encoder to decode it back).
       if (encStdin.writable) {
-        if (!encStdin.write(png)) {
+        if (!encStdin.write(out)) {
           await new Promise<void>((res) => encStdin.once("drain", () => res()));
         }
       }
