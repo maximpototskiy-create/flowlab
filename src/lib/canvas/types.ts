@@ -163,12 +163,13 @@ export function requiresReasoning(modelId: string): boolean {
 // Field schemas — what shows in node settings panel
 // ─────────────────────────────────────────────
 export type FieldDef =
-  | { name: string; label: string; type: "text"; placeholder?: string }
-  | { name: string; label: string; type: "textarea"; placeholder?: string; rows?: number }
-  | { name: string; label: string; type: "textarea-mono"; placeholder?: string }
-  | { name: string; label: string; type: "number"; min?: number; max?: number; step?: number }
-  | { name: string; label: string; type: "select"; options: { value: string; label: string }[]; icon?: string }
-  | { name: string; label: string; type: "toggle" };
+  | { name: string; label: string; type: "text"; placeholder?: string; help?: string }
+  | { name: string; label: string; type: "textarea"; placeholder?: string; rows?: number; help?: string }
+  | { name: string; label: string; type: "textarea-mono"; placeholder?: string; help?: string }
+  | { name: string; label: string; type: "number"; min?: number; max?: number; step?: number; help?: string }
+  | { name: string; label: string; type: "slider"; min: number; max: number; step: number; minLabel?: string; unit?: string; help?: string }
+  | { name: string; label: string; type: "select"; options: { value: string; label: string }[]; icon?: string; help?: string }
+  | { name: string; label: string; type: "toggle"; help?: string };
 
 // ─────────────────────────────────────────────
 // Node type definitions — what's in the palette
@@ -676,6 +677,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         label: "Model",
         type: "select",
         icon: "settings",
+        help: "Proteus = best all-round. Gaia = AI/CG/animation. Artemis = denoise+sharpen. Starlight = generative (slower, top quality).",
         options: [
           { value: "Proteus", label: "Proteus (best general)" },
           { value: "Artemis HQ", label: "Artemis HQ (denoise+sharpen)" },
@@ -697,14 +699,34 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "Starlight Fast 2", label: "Starlight Fast 2" },
         ],
       },
-      { name: "upscale_factor", label: "Upscale factor (x)", type: "number", min: 1, max: 8, step: 1 },
-      { name: "target_fps", label: "Target FPS (0 = keep source; sets frame interpolation)", type: "number", min: 0, max: 120, step: 1 },
-      { name: "compression", label: "Fix compression (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "noise", label: "Denoise (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "halo", label: "Halo reduction (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "grain", label: "Film grain (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "recover_detail", label: "Recover detail (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "h264", label: "H.264 output (off = H.265)", type: "toggle" },
+      {
+        name: "upscale_factor", label: "Upscale", type: "select",
+        help: "How much to enlarge. 2× turns 1080p into 4K — the sweet spot before tracking.",
+        options: [
+          { value: "1", label: "1× — no upscale (enhance/FPS only)" },
+          { value: "2", label: "2× — 1080p → 4K" },
+          { value: "3", label: "3×" },
+          { value: "4", label: "4×" },
+        ],
+      },
+      {
+        name: "target_fps", label: "Frame rate", type: "select",
+        help: "AI frame interpolation. 50 fps is what makes the screen tracking lock in cleanly on HeyGen footage.",
+        options: [
+          { value: "0", label: "Keep source" },
+          { value: "30", label: "30 fps" },
+          { value: "48", label: "48 fps" },
+          { value: "50", label: "50 fps (recommended)" },
+          { value: "60", label: "60 fps" },
+          { value: "120", label: "120 fps" },
+        ],
+      },
+      { name: "compression", label: "Fix compression", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Removes blocky compression artifacts. Leave on Auto unless you see banding." },
+      { name: "noise", label: "Denoise", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Reduces grain and sensor noise." },
+      { name: "halo", label: "Halo reduction", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Reduces bright ringing around high-contrast edges." },
+      { name: "grain", label: "Film grain", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Adds film grain back for a less digital look." },
+      { name: "recover_detail", label: "Recover detail", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Pulls back fine detail from the source. Higher = sharper but can look crunchy." },
+      { name: "h264", label: "H.264 output", type: "toggle", help: "Off = H.265 (smaller, higher quality). Turn on only if you need maximum playback compatibility." },
     ],
     quickFields: ["model", "upscale_factor", "target_fps"],
     forceExpanded: true,
@@ -742,6 +764,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         label: "Model",
         type: "select",
         icon: "settings",
+        help: "Standard V2 = general. Text Refine = UI/screens/text. CGI = rendered/anim. Redefine = generative (invents detail). High Fidelity = preserve original.",
         options: [
           { value: "Standard V2", label: "Standard V2 (general)" },
           { value: "Low Resolution V2", label: "Low Resolution V2" },
@@ -755,31 +778,43 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "Wonder", label: "Wonder" },
         ],
       },
-      { name: "upscale_factor", label: "Upscale factor (x)", type: "number", min: 1, max: 8, step: 1 },
-      { name: "output_format", label: "Output format", type: "select", options: [
-        { value: "png", label: "PNG (lossless)" },
-        { value: "jpeg", label: "JPEG" },
-      ] },
-      { name: "subject_detection", label: "Subject detection", type: "select", options: [
-        { value: "All", label: "All" },
-        { value: "Foreground", label: "Foreground" },
-        { value: "Background", label: "Background" },
-      ] },
-      { name: "crop_to_fill", label: "Crop to fill", type: "toggle" },
-      { name: "face_enhancement", label: "Face enhancement", type: "toggle" },
-      { name: "face_enhancement_creativity", label: "Face creativity (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "face_enhancement_strength", label: "Face strength (0–1)", type: "number", min: 0, max: 1, step: 0.05 },
-      { name: "sharpen", label: "Sharpen (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "denoise", label: "Denoise (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "fix_compression", label: "Fix compression (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "detail", label: "Detail — Recovery V2 (-1 = auto, 0–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "creativity", label: "Creativity — Redefine (0 = off, 1–6)", type: "number", min: 0, max: 6, step: 1 },
-      { name: "texture", label: "Texture — Redefine (0 = off, 1–5)", type: "number", min: 0, max: 5, step: 1 },
-      { name: "strength", label: "Strength — Text Refine (-1 = auto, 0.01–1)", type: "number", min: -1, max: 1, step: 0.05 },
-      { name: "prompt", label: "Prompt — Redefine (optional)", type: "text", placeholder: "Guide generative upscaling…" },
-      { name: "autoprompt", label: "Auto-prompt — Redefine", type: "toggle" },
+      {
+        name: "upscale_factor", label: "Upscale", type: "select",
+        help: "How much to enlarge the image.",
+        options: [
+          { value: "1", label: "1× — enhance only" },
+          { value: "2", label: "2×" },
+          { value: "4", label: "4×" },
+        ],
+      },
+      { name: "output_format", label: "Output format", type: "select",
+        help: "PNG is lossless — best for UI screenshots and text.",
+        options: [
+          { value: "png", label: "PNG (lossless)" },
+          { value: "jpeg", label: "JPEG" },
+        ] },
+      { name: "subject_detection", label: "Subject detection", type: "select",
+        help: "Which part of the image to prioritise when enhancing.",
+        options: [
+          { value: "All", label: "All" },
+          { value: "Foreground", label: "Foreground" },
+          { value: "Background", label: "Background" },
+        ] },
+      { name: "crop_to_fill", label: "Crop to fill", type: "toggle", help: "Crop the result to fill the target instead of letterboxing." },
+      { name: "face_enhancement", label: "Face enhancement", type: "toggle", help: "Restore and sharpen faces. Great for avatars; turn off for non-portrait art." },
+      { name: "face_enhancement_creativity", label: "Face creativity", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "How freely faces may be reimagined. Higher = more invented detail." },
+      { name: "face_enhancement_strength", label: "Face strength", type: "slider", min: 0, max: 1, step: 0.05, help: "How strongly the face enhancement is applied." },
+      { name: "sharpen", label: "Sharpen", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Edge sharpening." },
+      { name: "denoise", label: "Denoise", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Noise reduction." },
+      { name: "fix_compression", label: "Fix compression", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Removes JPEG/blocky artifacts." },
+      { name: "detail", label: "Detail (Recovery V2)", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Detail recovery — applies to the Recovery V2 model." },
+      { name: "creativity", label: "Creativity (Redefine)", type: "slider", min: 0, max: 6, step: 1, minLabel: "Off", help: "Generative creativity — Redefine model only. Higher = more invented detail." },
+      { name: "texture", label: "Texture (Redefine)", type: "slider", min: 0, max: 5, step: 1, minLabel: "Off", help: "Generative texture detail — Redefine model only." },
+      { name: "strength", label: "Strength (Text Refine)", type: "slider", min: -1, max: 1, step: 0.05, minLabel: "Auto", help: "Enhancement strength — Text Refine model only." },
+      { name: "prompt", label: "Prompt (Redefine)", type: "text", placeholder: "Guide generative upscaling…", help: "Optional text guidance — Redefine model only." },
+      { name: "autoprompt", label: "Auto-prompt (Redefine)", type: "toggle", help: "Let the model write its own guidance prompt — Redefine only." },
     ],
-    quickFields: ["model", "upscale_factor"],
+    quickFields: ["model", "upscale_factor", "output_format"],
     forceExpanded: true,
   },
 

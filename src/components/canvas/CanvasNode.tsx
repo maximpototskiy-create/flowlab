@@ -925,6 +925,21 @@ function CanvasNodeImpl({
                 />
               );
             })}
+            {(() => {
+              const shown = (def.quickFields ?? []).filter((n) => def.fields.some((f) => f.name === n)).length;
+              const more = def.fields.length - shown;
+              if (more <= 0) return null;
+              return (
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); onExpand(); }}
+                  className="inline-flex items-center px-2 py-1 rounded-md border border-dashed border-border text-[10px] text-fg-subtle hover:text-fg hover:border-border-strong"
+                  title="Open Settings for all parameters"
+                >
+                  +{more} in Settings
+                </button>
+              );
+            })()}
             <div className="flex-1" />
             {def.outputs.length > 0 && status === "running" && (
               <button

@@ -225,9 +225,12 @@ function SettingsField({
 }) {
   return (
     <div>
-      <label className="block text-[10px] uppercase tracking-wider text-fg-muted font-medium mb-1.5">
+      <label className="block text-[10px] uppercase tracking-wider text-fg-muted font-medium mb-1">
         {field.label}
       </label>
+      {field.help && (
+        <p className="text-[10.5px] leading-snug text-fg-subtle mb-1.5">{field.help}</p>
+      )}
       {field.type === "select" && (
         <div className="relative">
           <select
@@ -304,6 +307,25 @@ function SettingsField({
           />
         </button>
       )}
+      {field.type === "slider" && (() => {
+        const num = Number(value ?? field.min);
+        const atMin = num <= field.min + 1e-9;
+        const display = field.minLabel && atMin ? field.minLabel : `${num}${field.unit ?? ""}`;
+        return (
+          <div className="flex items-center gap-2.5">
+            <input
+              type="range"
+              min={field.min}
+              max={field.max}
+              step={field.step}
+              value={num}
+              onChange={(e) => onChange(Number(e.target.value))}
+              className="flex-1 h-1.5 accent-brand cursor-pointer"
+            />
+            <span className="text-[11px] tabular-nums text-fg-muted min-w-[44px] text-right">{display}</span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
