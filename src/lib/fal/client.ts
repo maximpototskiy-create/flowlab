@@ -313,6 +313,10 @@ export function estimateCost(modelId: string, params: { duration?: number; numIm
   if (id.includes("any-llm")) return 0.001;
   if (id.includes("birefnet") || id.includes("rembg")) return 0.005;
   if (id.includes("upscaler") || id.includes("aura-sr") || id.includes("ccsr")) return 0.04;
+  // Topaz on fal: video billed per output second (~$0.08/s at >1080p/4K, the
+  // common case here); image upscale ~ other image ops.
+  if (id.includes("topaz/upscale/video")) return 0.08 * dur;
+  if (id.includes("topaz/upscale/image")) return 0.05;
   if (id.includes("face-swap") || id.includes("photomaker")) return 0.05;
 
   return 0.01; // default

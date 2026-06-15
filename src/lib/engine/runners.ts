@@ -395,6 +395,73 @@ export async function runNode(
       return { outputs: { image: persisted }, costUsd: estimateCost(model), durationMs: Date.now() - t0 };
     }
 
+    case "topazVideo": {
+      const video = inputs.video as string;
+      if (!video) throw new Error("Connect a video");
+      const model = String(config.model ?? "Proteus");
+      const input: Record<string, unknown> = {
+        video_url: video,
+        model,
+        upscale_factor: Number(config.upscale_factor ?? 2),
+      };
+      // target_fps enables frame interpolation (Apollo) on fal; 0 = keep source.
+      const fps = Number(config.target_fps ?? 0);
+      if (fps > 0) input.target_fps = Math.round(fps);
+      // Enhancement knobs: -1 means "let the model use its own default".
+      for (const k of ["compression", "noise", "halo", "grain", "recover_detail"]) {
+        const v = Number(config[k] ?? -1);
+        if (v >= 0) input[k] = v;
+      }
+      if (config.h264) input.H264_output = true;
+      // Topaz video is slow (minutes), especially at 4K — allow a long poll.
+      const r = await falRun("fal-ai/topaz/upscale/video", input, { timeoutMs: 1_500_000 });
+      const url = (r.video as { url?: string } | undefined)?.url;
+      if (!url) throw new Error("No video returned");
+      const persisted = await persistAsset(url, ctx, "topaz-vid");
+      return { outputs: { video: persisted }, costUsd: estimateCost("fal-ai/topaz/upscale/video"), durationMs: Date.now() - t0 };
+    }
+
+    case "topazImage": {
+      const image = inputs.image as string;
+      if (!image) throw new Error("Connect an image");
+      const model = String(config.model ?? "Standard V2");
+      const input: Record<string, unknown> = {
+        image_url: image,
+        model,
+        upscale_factor: Number(config.upscale_factor ?? 2),
+        output_format: String(config.output_format ?? "png"),
+      };
+      if (config.subject_detection) input.subject_detection = String(config.subject_detection);
+      if (config.crop_to_fill) input.crop_to_fill = true;
+      const faceOn = config.face_enhancement !== false;
+      input.face_enhancement = faceOn;
+      if (faceOn) {
+        const fc = Number(config.face_enhancement_creativity ?? -1);
+        if (fc >= 0) input.face_enhancement_creativity = fc;
+        const fs = Number(config.face_enhancement_strength ?? -1);
+        if (fs >= 0) input.face_enhancement_strength = fs;
+      }
+      // Float knobs: -1 = model default; only forward when set.
+      for (const k of ["sharpen", "denoise", "fix_compression", "detail", "strength"]) {
+        const v = Number(config[k] ?? -1);
+        if (v >= 0) input[k] = v;
+      }
+      // Integer knobs (Redefine): 0 = off.
+      for (const k of ["creativity", "texture"]) {
+        const v = Number(config[k] ?? 0);
+        if (v >= 1) input[k] = Math.round(v);
+      }
+      if (config.prompt) input.prompt = String(config.prompt);
+      if (config.autoprompt) input.autoprompt = true;
+      const r = await falRun("fal-ai/topaz/upscale/image", input);
+      const url =
+        ((r.image as { url: string } | undefined)?.url) ??
+        ((r.images as { url: string }[] | undefined) ?? [])[0]?.url;
+      if (!url) throw new Error("No image returned");
+      const persisted = await persistAsset(url, ctx, "topaz-img");
+      return { outputs: { image: persisted }, costUsd: estimateCost("fal-ai/topaz/upscale/image"), durationMs: Date.now() - t0 };
+    }
+
     case "uploadImage": {
       const cdnUrl = (config.cdnUrl as string) || (config.dataUrl as string);
       if (!cdnUrl) throw new Error("Upload an image first");
