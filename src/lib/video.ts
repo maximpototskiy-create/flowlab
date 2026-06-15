@@ -566,8 +566,8 @@ export async function compositeGreenScreen(opts: {
     let contentFiles: string[] = [];
     if (contentIsVideo) {
       await mkdir(cframesDir);
-      await runFfmpeg(["-y", "-i", contentPath, "-fps_mode", "passthrough", "-q:v", "3", path.join(cframesDir, "c_%05d.jpg")]);
-      contentFiles = (await readdir(cframesDir)).filter((f) => f.endsWith(".jpg")).sort();
+      await runFfmpeg(["-y", "-i", contentPath, "-fps_mode", "passthrough", path.join(cframesDir, "c_%05d.png")]);
+      contentFiles = (await readdir(cframesDir)).filter((f) => f.endsWith(".png")).sort();
       if (contentFiles.length === 0) contentIsVideo = false;
     }
 
@@ -705,8 +705,15 @@ export async function compositeGreenScreen(opts: {
       }
       const q = sm[k];
       const Hm = solveHomography(q, [[0, 0], [cW - 1, 0], [cW - 1, cH - 1], [0, cH - 1]]);
-      // Iterate the WHOLE green extent (component bbox + margin), not just the
-      // corner quad — otherwise rounded corners / the notch leave a green rim.
+      // Anti-aliased downscale: the content (full UI res) is squeezed into a
+      // small on-screen quad, so one bilinear sample per output pixel under-
+      // samples and fine text aliases/softens. Supersample by the downscale
+      // ratio (area-average ss*ss sub-samples) so text stays crisp.
+      const screenW = Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]);
+      const screenH = Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1]);
+      const ratio = Math.max(cW / Math.max(1, screenW), cH / Math.max(1, screenH));
+      const ss = Math.max(1, Math.min(4, Math.ceil(ratio - 0.05)));
+      const inv = 1 / ss, norm = 1 / (ss * ss);
       const box = boxes[k]!;
       const MG = 12;
       const x0 = Math.max(0, box[0] - MG), y0 = Math.max(0, box[1] - MG);
@@ -715,35 +722,41 @@ export async function compositeGreenScreen(opts: {
         for (let x = x0; x <= x1; x++) {
           const i = (y * W + x) * ch;
           const r = data[i], g = data[i + 1], b = data[i + 2];
-          // Fill content over bright green AND the dim/anti-aliased/motion-blur
-          // green edge (greenish). This leaves no green rim and no grey patches
-          // on blurred frames. Skin/fingers/teal background aren't greenish.
           const bright = g > 80 && g > r * 1.4 && g > b * 1.4;
           const greenish = g > 45 && g > r * 1.25 && g > b * 1.25;
           if (!bright && !greenish) continue;
-          const w = Hm[6] * x + Hm[7] * y + Hm[8];
-          let u = (Hm[0] * x + Hm[1] * y + Hm[2]) / w;
-          let v = (Hm[3] * x + Hm[4] * y + Hm[5]) / w;
-          u = Math.max(0, Math.min(cW - 1.001, u));
-          v = Math.max(0, Math.min(cH - 1.001, v));
-          const u0 = u | 0, v0 = v | 0, fu = u - u0, fv = v - v0;
-          const o00 = (v0 * cW + u0) * cCh, o10 = (v0 * cW + u0 + 1) * cCh;
-          const o01 = ((v0 + 1) * cW + u0) * cCh, o11 = ((v0 + 1) * cW + u0 + 1) * cCh;
-          for (let c = 0; c < 3; c++) {
-            out[i + c] = Math.round(
-              cD[o00 + c] * (1 - fu) * (1 - fv) + cD[o10 + c] * fu * (1 - fv) +
-              cD[o01 + c] * (1 - fu) * fv + cD[o11 + c] * fu * fv,
-            );
+          let a0 = 0, a1 = 0, a2 = 0;
+          for (let sy = 0; sy < ss; sy++) {
+            for (let sx = 0; sx < ss; sx++) {
+              const ox = x + (sx + 0.5) * inv - 0.5, oy = y + (sy + 0.5) * inv - 0.5;
+              const w = Hm[6] * ox + Hm[7] * oy + Hm[8];
+              let u = (Hm[0] * ox + Hm[1] * oy + Hm[2]) / w;
+              let v = (Hm[3] * ox + Hm[4] * oy + Hm[5]) / w;
+              u = Math.max(0, Math.min(cW - 1.001, u));
+              v = Math.max(0, Math.min(cH - 1.001, v));
+              const u0 = u | 0, v0 = v | 0, fu = u - u0, fv = v - v0;
+              const o00 = (v0 * cW + u0) * cCh, o10 = (v0 * cW + u0 + 1) * cCh;
+              const o01 = ((v0 + 1) * cW + u0) * cCh, o11 = ((v0 + 1) * cW + u0 + 1) * cCh;
+              const w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv), w01 = (1 - fu) * fv, w11 = fu * fv;
+              a0 += cD[o00] * w00 + cD[o10] * w10 + cD[o01] * w01 + cD[o11] * w11;
+              a1 += cD[o00 + 1] * w00 + cD[o10 + 1] * w10 + cD[o01 + 1] * w01 + cD[o11 + 1] * w11;
+              a2 += cD[o00 + 2] * w00 + cD[o10 + 2] * w10 + cD[o01 + 2] * w01 + cD[o11 + 2] * w11;
+            }
           }
+          out[i] = Math.round(a0 * norm);
+          out[i + 1] = Math.round(a1 * norm);
+          out[i + 2] = Math.round(a2 * norm);
         }
       }
-      await sharp(out, { raw: { width: W, height: H, channels: ch } }).jpeg({ quality: 95 }).toFile(path.join(outDir, frameFiles[k]));
+      await sharp(out, { raw: { width: W, height: H, channels: ch } })
+        .png({ compressionLevel: 6 }).toFile(path.join(outDir, frameFiles[k].replace(/\.jpg$/, ".png")));
     }
 
     await runFfmpeg([
-      "-y", "-framerate", String(fps), "-i", path.join(outDir, "f_%05d.jpg"),
+      "-y", "-framerate", String(fps), "-i", path.join(outDir, "f_%05d.png"),
       "-i", srcPath, "-map", "0:v", "-map", "1:a?",
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-movflags", "+faststart",
+      "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-shortest", "-movflags", "+faststart",
       outPath,
     ]);
     return await readFile(outPath);
