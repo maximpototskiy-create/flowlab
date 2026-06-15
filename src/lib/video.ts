@@ -807,10 +807,31 @@ export async function compositeGreenScreen(opts: {
       sm.push(q);
     }
 
-    // Cache the content image (when it's a still) so we read+decode it once.
+    // Pre-scale the content to ~the largest on-screen size across the clip. The
+    // per-frame warp then samples content at roughly display resolution, so a
+    // single bilinear tap is enough — instead of supersampling 4x4 from a
+    // full-res (e.g. 1170x2532) image every frame, which was the dominant cost
+    // (50fps clips ran ~25 min and blew the 10-min function limit). sharp's
+    // high-quality downscale does the heavy lifting once, up front, and is
+    // actually sharper than the JS box-average it replaces.
+    let maxScreen = 1;
+    for (const q of sm) {
+      const sw = Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]);
+      const sh = Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1]);
+      if (sw > maxScreen) maxScreen = sw;
+      if (sh > maxScreen) maxScreen = sh;
+    }
+    const contentCap = Math.max(64, Math.ceil(maxScreen));
+
+    // Cache the content image (when it's a still) so we read+decode it once,
+    // pre-scaled to the on-screen size.
     let stillContent: { data: Buffer; w: number; h: number; ch: number } | null = null;
     if (!contentIsVideo) {
-      const c = await sharp(contentPath).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const c = await sharp(contentPath)
+        .removeAlpha()
+        .resize(contentCap, contentCap, { fit: "inside", withoutEnlargement: true })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
       stillContent = { data: c.data, w: c.info.width, h: c.info.height, ch: c.info.channels };
     }
 
@@ -822,7 +843,7 @@ export async function compositeGreenScreen(opts: {
     const enc = spawnFfmpeg([
       "-y", "-f", "image2pipe", "-framerate", String(fps), "-i", "pipe:0",
       "-i", srcPath, "-map", "0:v", "-map", "1:a?",
-      "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
+      "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-shortest", "-movflags", "+faststart",
       outPath,
     ]);
@@ -836,7 +857,7 @@ export async function compositeGreenScreen(opts: {
       const out = Buffer.from(data);
       let cD: Buffer, cW: number, cH: number, cCh: number;
       if (contentIsVideo) {
-        const c = await sharp(path.join(cframesDir, contentFiles[k % contentFiles.length])).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+        const c = await sharp(path.join(cframesDir, contentFiles[k % contentFiles.length])).removeAlpha().resize(contentCap, contentCap, { fit: "inside", withoutEnlargement: true }).raw().toBuffer({ resolveWithObject: true });
         cD = c.data; cW = c.info.width; cH = c.info.height; cCh = c.info.channels;
       } else {
         cD = stillContent!.data; cW = stillContent!.w; cH = stillContent!.h; cCh = stillContent!.ch;
@@ -850,7 +871,9 @@ export async function compositeGreenScreen(opts: {
       const screenW = Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]);
       const screenH = Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1]);
       const ratio = Math.max(cW / Math.max(1, screenW), cH / Math.max(1, screenH));
-      const ss = Math.max(1, Math.min(4, Math.ceil(ratio - 0.05)));
+      // Content is pre-scaled to ~display size, so 1 tap (and at most 2x2 for
+      // smaller-than-max frames) is plenty — no more 4x4 supersampling.
+      const ss = Math.max(1, Math.min(2, Math.ceil(ratio - 0.05)));
       const inv = 1 / ss, norm = 1 / (ss * ss);
       const box = boxes[k]!;
       const MG = 12;
