@@ -36,6 +36,25 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
+// Like runFfmpeg but returns the process so we can stream frames into its stdin
+// (image2pipe). Used by the compositor to avoid writing thousands of full-res
+// PNG frames to disk — at 4K that overflows /tmp ("No space left on device").
+function spawnFfmpeg(args: string[]): { proc: ReturnType<typeof spawn>; done: Promise<void> } {
+  const bin = resolveFfmpeg();
+  const proc = spawn(bin, args);
+  let err = "";
+  proc.stderr.on("data", (d) => {
+    err += d.toString();
+  });
+  const done = new Promise<void>((resolve, reject) => {
+    proc.on("error", (e: NodeJS.ErrnoException) =>
+      reject(new Error(e.code === "ENOENT" ? "ffmpeg binary missing in deployment" : e.message)),
+    );
+    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${err.slice(-300)}`))));
+  });
+  return { proc, done };
+}
+
 // Quick probe of a video's dimensions + fps by parsing ffmpeg's stderr banner
 // (ffmpeg-static ships no ffprobe). Good enough for compositing math.
 function ffprobeBasic(inPath: string): Promise<{ width: number; height: number; fps: number }> {
@@ -549,10 +568,8 @@ export async function compositeGreenScreen(opts: {
   const contentPath = path.join(dir, opts.contentIsVideo ? "content.mp4" : "content.png");
   const framesDir = path.join(dir, "frames");
   const cframesDir = path.join(dir, "cframes");
-  const outDir = path.join(dir, "out");
   const outPath = path.join(dir, "out.mp4");
   await mkdir(framesDir);
-  await mkdir(outDir);
   await writeFile(srcPath, opts.source);
   await writeFile(contentPath, opts.content);
   try {
@@ -692,8 +709,22 @@ export async function compositeGreenScreen(opts: {
     }
 
     // Pass 2 — perspective-warp content onto the quad, alpha = actual green.
+    // Stream each composited frame straight into the encoder over a pipe
+    // (image2pipe) instead of writing thousands of full-res PNGs to disk — at
+    // 4K that overflows /tmp ("No space left on device"). We also delete each
+    // source frame the moment it's consumed, so disk use stays flat.
+    const enc = spawnFfmpeg([
+      "-y", "-f", "image2pipe", "-framerate", String(fps), "-i", "pipe:0",
+      "-i", srcPath, "-map", "0:v", "-map", "1:a?",
+      "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-shortest", "-movflags", "+faststart",
+      outPath,
+    ]);
+    const encStdin = enc.proc.stdin!;
+    encStdin.on("error", () => {}); // swallow EPIPE if the encoder exits early
     for (let k = 0; k < frameFiles.length; k++) {
-      const { data, info } = await sharp(path.join(framesDir, frameFiles[k])).raw().toBuffer({ resolveWithObject: true });
+      const framePath = path.join(framesDir, frameFiles[k]);
+      const { data, info } = await sharp(framePath).raw().toBuffer({ resolveWithObject: true });
       const ch = info.channels;
       const out = Buffer.from(data);
       let cD: Buffer, cW: number, cH: number, cCh: number;
@@ -748,17 +779,18 @@ export async function compositeGreenScreen(opts: {
           out[i + 2] = Math.round(a2 * norm);
         }
       }
-      await sharp(out, { raw: { width: W, height: H, channels: ch } })
-        .png({ compressionLevel: 6 }).toFile(path.join(outDir, frameFiles[k].replace(/\.jpg$/, ".png")));
+      const png = await sharp(out, { raw: { width: W, height: H, channels: ch } })
+        .png({ compressionLevel: 1 }).toBuffer();
+      if (encStdin.writable) {
+        if (!encStdin.write(png)) {
+          await new Promise<void>((res) => encStdin.once("drain", () => res()));
+        }
+      }
+      // Free the source frame now that it has been composited and streamed.
+      await unlink(framePath).catch(() => {});
     }
-
-    await runFfmpeg([
-      "-y", "-framerate", String(fps), "-i", path.join(outDir, "f_%05d.png"),
-      "-i", srcPath, "-map", "0:v", "-map", "1:a?",
-      "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-shortest", "-movflags", "+faststart",
-      outPath,
-    ]);
+    encStdin.end();
+    await enc.done;
     return await readFile(outPath);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
