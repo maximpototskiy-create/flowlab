@@ -1629,11 +1629,40 @@ export default function Canvas({
         if (data.transient || !data.status) return;
 
         // Update node statuses & outputs
+        const runTerminal =
+          data.status === "done" || data.status === "error" || data.status === "cancelled";
         setGraph((g) => ({
           ...g,
           nodes: g.nodes.map((n) => {
-            const step = data.steps.find((s) => s.nodeId === n.id);
-            if (!step) return n;
+            // A retry can leave more than one step record for the same node
+            // (one killed/stuck, one that actually completed). Prefer the
+            // successful one so the canvas shows the real result, not a stale
+            // "running" duplicate.
+            const stepsForNode = data.steps.filter((s) => s.nodeId === n.id);
+            const step =
+              stepsForNode.find((s) => s.status === "done") ??
+              stepsForNode.find(
+                (s) => (s.assets?.length || (s.outputData && Object.keys(s.outputData).length)),
+              ) ??
+              stepsForNode[stepsForNode.length - 1];
+            if (!step) {
+              // The whole run has ended but this node is still spinning locally
+              // (its worker was killed before writing any step) — stop the
+              // spinner so the canvas doesn't hang forever on "Generating…".
+              if (runTerminal && n.status === "running") return { ...n, status: "done" as const };
+              return n;
+            }
+            let st: "pending" | "running" | "done" | "error" = step.status;
+            // If the run has finished but a step is still running/pending (its
+            // worker was killed mid-flight and never wrote a terminal status),
+            // never leave the canvas spinning: mark it done if it produced
+            // output, otherwise error.
+            if (runTerminal && (st === "running" || st === "pending")) {
+              st =
+                (step.assets?.length || (step.outputData && Object.keys(step.outputData).length))
+                  ? "done"
+                  : "error";
+            }
             const assets = step.assets ?? [];
             // If the API returned multiple assets — that's the canonical
             // multi-result list, use it. If only 0/1 — DON'T clobber any
@@ -1647,9 +1676,9 @@ export default function Canvas({
                 : n.results;
             return {
               ...n,
-              status: step.status,
+              status: st,
               outputs: step.outputData ?? n.outputs,
-              error: step.errorMessage ?? undefined,
+              error: st === "error" ? (step.errorMessage ?? "Step did not finish") : (step.errorMessage ?? undefined),
               results: newResults,
             };
           }),
