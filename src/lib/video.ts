@@ -55,6 +55,74 @@ function spawnFfmpeg(args: string[]): { proc: ReturnType<typeof spawn>; done: Pr
   return { proc, done };
 }
 
+// Decode source frames as raw RGB on a pipe and hand them out one at a time.
+// We never materialise the frames as files: a 50fps clip is hundreds of frames
+// and writing them all to the small serverless /tmp overflows it ("No space
+// left on device"). Backpressure is automatic — ffmpeg blocks when we stop
+// pulling. next() returns a W*H*3 Buffer per frame, or null at end of stream.
+function openFrameStream(srcPath: string, frameSize: number): { next: () => Promise<Buffer | null>; destroy: () => void } {
+  const proc = spawn(resolveFfmpeg(), ["-i", srcPath, "-f", "rawvideo", "-pix_fmt", "rgb24", "-loglevel", "error", "pipe:1"]);
+  let stderr = "";
+  proc.stderr.on("data", (d) => {
+    stderr += d.toString();
+  });
+  const stdout = proc.stdout;
+  let leftover: Buffer = Buffer.alloc(0);
+  let ended = false;
+  let errored: Error | null = null;
+  stdout.on("end", () => {
+    ended = true;
+  });
+  proc.on("error", (e: NodeJS.ErrnoException) => {
+    errored = new Error(e.code === "ENOENT" ? "ffmpeg binary missing in deployment" : e.message);
+    ended = true;
+  });
+  proc.on("close", (code) => {
+    if (code) errored = errored ?? new Error(`ffmpeg decode exited ${code}: ${stderr.slice(-300)}`);
+    ended = true;
+  });
+  async function next(): Promise<Buffer | null> {
+    while (leftover.length < frameSize) {
+      if (errored) throw errored;
+      const chunk = stdout.read() as Buffer | null;
+      if (chunk) {
+        leftover = leftover.length ? Buffer.concat([leftover, chunk]) : chunk;
+        continue;
+      }
+      if (ended) break;
+      await new Promise<void>((resolve) => {
+        const on = () => {
+          cleanup();
+          resolve();
+        };
+        const cleanup = () => {
+          stdout.off("readable", on);
+          stdout.off("end", on);
+          proc.off("close", on);
+        };
+        stdout.once("readable", on);
+        stdout.once("end", on);
+        proc.once("close", on);
+      });
+    }
+    if (leftover.length < frameSize) {
+      if (errored) throw errored;
+      return null;
+    }
+    const frame = Buffer.from(leftover.subarray(0, frameSize));
+    leftover = leftover.subarray(frameSize);
+    return frame;
+  }
+  function destroy() {
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+  return { next, destroy };
+}
+
 // Reclaim disk from temp dirs leaked by earlier runs that were hard-killed
 // (OOM / function timeout) before their `finally` cleanup could run. On warm
 // (Fluid) compute these "sr_*" dirs pile up in /tmp until even a small frame
@@ -598,18 +666,22 @@ export async function compositeGreenScreen(opts: {
   await sweepStaleScreenReplaceTemp(dir);
   const srcPath = path.join(dir, "src.mp4");
   const contentPath = path.join(dir, opts.contentIsVideo ? "content.mp4" : "content.png");
-  const framesDir = path.join(dir, "frames");
   const cframesDir = path.join(dir, "cframes");
   const outPath = path.join(dir, "out.mp4");
-  await mkdir(framesDir);
   await writeFile(srcPath, opts.source);
   await writeFile(contentPath, opts.content);
   try {
     const { fps } = await ffprobeBasic(srcPath);
-    await runFfmpeg(["-y", "-i", srcPath, "-fps_mode", "passthrough", "-q:v", "3", path.join(framesDir, "f_%05d.jpg")]);
-    const frameFiles = (await readdir(framesDir)).filter((f) => f.endsWith(".jpg")).sort();
-    if (frameFiles.length === 0) throw new Error("No frames extracted from the source video");
-    if (frameFiles.length > 1500) throw new Error("Clip is too long for screen-replace tracking — trim it shorter.");
+    // Probe exact frame dimensions from ONE decoded frame, then delete it. We do
+    // NOT extract the whole clip to disk — every frame is streamed off a pipe
+    // (openFrameStream) so a 50fps clip can't overflow the small serverless /tmp.
+    const probePath = path.join(dir, "probe.png");
+    await runFfmpeg(["-y", "-i", srcPath, "-frames:v", "1", probePath]);
+    const meta0 = await sharp(probePath).metadata();
+    const W = meta0.width ?? 0, H = meta0.height ?? 0;
+    await unlink(probePath).catch(() => {});
+    if (!W || !H) throw new Error("Could not read source frame dimensions");
+    const frameSize = W * H * 3;
 
     let contentIsVideo = opts.contentIsVideo;
     let contentFiles: string[] = [];
@@ -619,10 +691,6 @@ export async function compositeGreenScreen(opts: {
       contentFiles = (await readdir(cframesDir)).filter((f) => f.endsWith(".png")).sort();
       if (contentFiles.length === 0) contentIsVideo = false;
     }
-
-    const meta0 = await sharp(path.join(framesDir, frameFiles[0])).metadata();
-    const W = meta0.width ?? 0, H = meta0.height ?? 0;
-    if (!W || !H) throw new Error("Could not read source frame dimensions");
 
     // Pass 1 — robust per-frame corners from the largest green component.
     // If the detected quad doesn't fit its blob well (concave / too small a
@@ -637,16 +705,20 @@ export async function compositeGreenScreen(opts: {
     const allBlobs: Pt[][] = [];
     const greenQuads: GQuad[] = [];
     const insetH: number[] = [], insetV: number[] = [];
-    for (const f of frameFiles) {
-      const { data, info } = await sharp(path.join(framesDir, f)).raw().toBuffer({ resolveWithObject: true });
-      const comp = greenComponent(data, W, H, info.channels);
+    const reader1 = openFrameStream(srcPath, frameSize);
+    let nFrames = 0;
+    for (;;) {
+      const data = await reader1.next();
+      if (data === null) break;
+      if (++nFrames > 1500) { reader1.destroy(); throw new Error("Clip is too long for screen-replace tracking — trim it shorter."); }
+      const comp = greenComponent(data, W, H, 3);
       if (!comp || comp.size < MIN_SIZE) { cents.push(null); boxes.push(null); greenQuads.push(null); allBlobs.push([]); continue; }
-      const c = detectMarkers(data, W, H, info.channels, comp.bbox);
+      const c = detectMarkers(data, W, H, 3, comp.bbox);
       cents.push(c);
-      if (c) sampleMarkerInset(data, W, info.channels, comp.bbox, c, insetH, insetV);
+      if (c) sampleMarkerInset(data, W, 3, comp.bbox, c, insetH, insetV);
       // All dark-green marker blobs (corners + interior dot grid) for the
       // over-determined homography fit; empty/4 on the old 4-marker template.
-      allBlobs.push(detectDarkGreenBlobs(data, W, info.channels, comp.bbox));
+      allBlobs.push(detectDarkGreenBlobs(data, W, 3, comp.bbox));
       boxes.push(comp.bbox);
       // Green-edge quad as the per-frame fallback when markers aren't clean.
       let gq: [Pt, Pt, Pt, Pt] = comp.quad;
@@ -656,6 +728,8 @@ export async function compositeGreenScreen(opts: {
       }
       greenQuads.push(gq);
     }
+    reader1.destroy();
+    if (nFrames === 0) throw new Error("No frames extracted from the source video");
     // AUTO-CALIBRATE the marker inset from this clip's own frames (tilt-robust
     // median). This adapts to however HeyGen fit the template into the phone
     // screen, so the SAME code tracks correctly across different source videos
@@ -741,10 +815,10 @@ export async function compositeGreenScreen(opts: {
     }
 
     // Pass 2 — perspective-warp content onto the quad, alpha = actual green.
-    // Stream each composited frame straight into the encoder over a pipe
-    // (image2pipe) instead of writing thousands of full-res PNGs to disk — at
-    // 4K that overflows /tmp ("No space left on device"). We also delete each
-    // source frame the moment it's consumed, so disk use stays flat.
+    // Source frames are pulled off a decode pipe (no frame files on disk) and
+    // each composited frame is pushed straight into the encoder over another
+    // pipe (image2pipe). Nothing but the source video and the output ever lives
+    // on disk, so resolution/length can't overflow the small /tmp.
     const enc = spawnFfmpeg([
       "-y", "-f", "image2pipe", "-framerate", String(fps), "-i", "pipe:0",
       "-i", srcPath, "-map", "0:v", "-map", "1:a?",
@@ -754,10 +828,11 @@ export async function compositeGreenScreen(opts: {
     ]);
     const encStdin = enc.proc.stdin!;
     encStdin.on("error", () => {}); // swallow EPIPE if the encoder exits early
-    for (let k = 0; k < frameFiles.length; k++) {
-      const framePath = path.join(framesDir, frameFiles[k]);
-      const { data, info } = await sharp(framePath).raw().toBuffer({ resolveWithObject: true });
-      const ch = info.channels;
+    const reader2 = openFrameStream(srcPath, frameSize);
+    for (let k = 0; k < nFrames; k++) {
+      const data = await reader2.next();
+      if (data === null) break;
+      const ch = 3;
       const out = Buffer.from(data);
       let cD: Buffer, cW: number, cH: number, cCh: number;
       if (contentIsVideo) {
@@ -818,9 +893,8 @@ export async function compositeGreenScreen(opts: {
           await new Promise<void>((res) => encStdin.once("drain", () => res()));
         }
       }
-      // Free the source frame now that it has been composited and streamed.
-      await unlink(framePath).catch(() => {});
     }
+    reader2.destroy();
     encStdin.end();
     await enc.done;
     return await readFile(outPath);
