@@ -755,8 +755,18 @@ export async function compositeGreenScreen(opts: {
     // screen, so the SAME code tracks correctly across different source videos
     // without a hand-tuned per-clip constant. Falls back to the template's
     // design inset if too few marker frames were seen.
-    const fH = insetH.length >= 8 ? median(insetH) : 0.09;
-    const fV = insetV.length >= 8 ? median(insetV) : 0.09;
+    let fH = insetH.length >= 8 ? median(insetH) : 0.10;
+    let fV = insetV.length >= 8 ? median(insetV) : 0.14;
+    // The marker inset is measured by scanning axis-aligned rows/columns of the
+    // green screen. The VERTICAL scan foreshortens badly when the phone is
+    // tilted — a column near the screen's left/right edge spans only a short
+    // chord of the tilted screen — so it can grossly OVER-estimate fV (e.g. 0.29
+    // when the real template inset is ~0.14). That stretches the tracked quad
+    // ~2x vertically and zooms the inserted UI (only the centre of the content
+    // lands inside the screen). Reject an implausible inset and fall back to the
+    // template's nominal value so the quad matches the actual screen extent.
+    if (!(fH >= 0.04 && fH <= 0.20)) fH = 0.10;
+    if (!(fV >= 0.04 && fV <= 0.20)) fV = 0.14;
     const calibTMPL: Pt[] = [[fH, fV], [1 - fH, fV], [1 - fH, 1 - fV], [fH, 1 - fV]];
     // Build per-frame quads: calibrated marker extrapolation (stable, blur-proof,
     // matches the screen extent), else the green-edge quad.
@@ -833,26 +843,53 @@ export async function compositeGreenScreen(opts: {
       }
       // Don't reject every frame (e.g. truly erratic clip) — only patch if most
       // frames are clean.
+      // Per-frame translation from the marker dots (robust to partial
+      // occlusion): match each visible dot to the nearest dot in the previous
+      // frame and take the MEDIAN displacement. This recovers the phone's
+      // MOVEMENT even while a hand covers part of the screen — unlike the
+      // bright-green centroid, which is dragged toward whatever stays visible.
+      const dotDX = new Array(Nr).fill(0), dotDY = new Array(Nr).fill(0);
+      for (let i = 1; i < Nr; i++) {
+        const cur = allBlobs[i], prev = allBlobs[i - 1];
+        if (!cur || !prev || cur.length < 3 || prev.length < 3) continue;
+        const dxs: number[] = [], dys: number[] = [];
+        for (const c of cur) {
+          let bd = Infinity, bx = 0, by = 0;
+          for (const p of prev) { const dd = Math.hypot(c[0] - p[0], c[1] - p[1]); if (dd < bd) { bd = dd; bx = p[0]; by = p[1]; } }
+          if (bd < 40) { dxs.push(c[0] - bx); dys.push(c[1] - by); }
+        }
+        if (dxs.length >= 3) { dotDX[i] = median(dxs); dotDY[i] = median(dys); }
+      }
       const goodCount = ok.filter(Boolean).length;
       if (goodCount >= Nr * 0.5 && goodCount < Nr) {
-        for (let c = 0; c < 4; c++) {
-          for (let d = 0; d < 2; d++) {
-            let i = 0;
-            while (i < Nr) {
-              if (ok[i]) { i++; continue; }
-              const a = i - 1;
-              let b = i;
-              while (b < Nr && !ok[b]) b++;
-              const va = a >= 0 ? raw[a]![c][d] : (b < Nr ? raw[b]![c][d] : raw[i]![c][d]);
-              const vb = b < Nr ? raw[b]![c][d] : va;
-              const span = b - a;
-              for (let k = i; k < b; k++) {
-                const t = span > 0 ? (k - a) / span : 0;
-                raw[k]![c][d] = va + (vb - va) * t;
+        let i = 0;
+        while (i < Nr) {
+          if (ok[i]) { i++; continue; }
+          const a = i - 1;            // last clean frame
+          let b = i; while (b < Nr && !ok[b]) b++;  // next clean frame (or Nr)
+          const haveA = a >= 0, haveB = b < Nr;
+          let accX = 0, accY = 0;     // accumulated dot translation since `a`
+          for (let k = i; k < b; k++) {
+            accX += dotDX[k]; accY += dotDY[k];
+            const span = b - a;
+            const t = span > 0 ? (k - a) / span : 0;
+            for (let c = 0; c < 4; c++) {
+              // Base: translate the last clean quad by the dot motion so the
+              // insert FOLLOWS the phone through the occlusion instead of
+              // freezing in place.
+              let x = haveA ? raw[a]![c][0] + accX : raw[b]![c][0];
+              let y = haveA ? raw[a]![c][1] + accY : raw[b]![c][1];
+              // Converge to the next clean frame so accumulated drift can't
+              // build up across a long occlusion (and so a missing-dot stretch
+              // still lands on the known endpoint).
+              if (haveA && haveB) {
+                x = x * (1 - t) + raw[b]![c][0] * t;
+                y = y * (1 - t) + raw[b]![c][1] * t;
               }
-              i = b;
+              raw[k]![c] = [x, y];
             }
           }
+          i = b;
         }
       }
     }
