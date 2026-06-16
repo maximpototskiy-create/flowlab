@@ -674,9 +674,9 @@ export async function compositeGreenScreen(opts: {
   contentIsVideo: boolean;
   keyColorHex?: string; // kept for API symmetry; detection is generic-green
   similarity?: number;
-  fit?: "cover" | "stretch"; // how content maps onto the screen quad
+  fit?: "fill" | "cover"; // how content maps onto the screen quad
 }): Promise<Buffer> {
-  const fit = opts.fit ?? "cover";
+  const fit = opts.fit ?? "fill";
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
@@ -701,7 +701,9 @@ export async function compositeGreenScreen(opts: {
 
     let contentIsVideo = opts.contentIsVideo;
     let contentFiles: string[] = [];
+    let contentFps = fps;
     if (contentIsVideo) {
+      contentFps = (await ffprobeBasic(contentPath)).fps || fps;
       await mkdir(cframesDir);
       await runFfmpeg(["-y", "-i", contentPath, "-fps_mode", "passthrough", path.join(cframesDir, "c_%05d.png")]);
       contentFiles = (await readdir(cframesDir)).filter((f) => f.endsWith(".png")).sort();
@@ -779,6 +781,59 @@ export async function compositeGreenScreen(opts: {
     const firstBox = boxes.find((b) => b) ?? null;
     for (let i = 0; i < raw.length && !raw[i]; i++) { raw[i] = firstQ; boxes[i] = firstBox; }
     if (!raw.some((q) => q)) throw new Error("No green screen detected in any frame — check the green color and lighting");
+
+    // Occlusion rejection. When a finger/hand covers part of the screen the
+    // per-frame detection can collapse or jerk, even though the phone itself
+    // keeps moving smoothly. Flag any frame whose quad deviates sharply from a
+    // robust local (±4) median and rebuild it by linear interpolation between
+    // the nearest clean frames — so the insert stays locked through taps and
+    // hand-overs instead of twitching. The threshold is generous (≈13% of the
+    // screen size) so genuine fast motion passes through untouched.
+    {
+      const Nr = raw.length;
+      const baseMed = (i: number, c: number, d: number): number => {
+        const w: number[] = [];
+        for (let j = Math.max(0, i - 4); j <= Math.min(Nr - 1, i + 4); j++) w.push(raw[j]![c][d]);
+        return median(w);
+      };
+      const ok: boolean[] = new Array(Nr).fill(true);
+      for (let i = 0; i < Nr; i++) {
+        const q = raw[i]!;
+        const scale =
+          (Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]) +
+            Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1])) / 2 || 1;
+        let maxDev = 0;
+        for (let c = 0; c < 4; c++) {
+          const dev = Math.hypot(q[c][0] - baseMed(i, c, 0), q[c][1] - baseMed(i, c, 1));
+          if (dev > maxDev) maxDev = dev;
+        }
+        if (maxDev > 0.13 * scale) ok[i] = false;
+      }
+      // Don't reject every frame (e.g. truly erratic clip) — only patch if most
+      // frames are clean.
+      const goodCount = ok.filter(Boolean).length;
+      if (goodCount >= Nr * 0.5 && goodCount < Nr) {
+        for (let c = 0; c < 4; c++) {
+          for (let d = 0; d < 2; d++) {
+            let i = 0;
+            while (i < Nr) {
+              if (ok[i]) { i++; continue; }
+              const a = i - 1;
+              let b = i;
+              while (b < Nr && !ok[b]) b++;
+              const va = a >= 0 ? raw[a]![c][d] : (b < Nr ? raw[b]![c][d] : raw[i]![c][d]);
+              const vb = b < Nr ? raw[b]![c][d] : va;
+              const span = b - a;
+              for (let k = i; k < b; k++) {
+                const t = span > 0 ? (k - a) / span : 0;
+                raw[k]![c][d] = va + (vb - va) * t;
+              }
+              i = b;
+            }
+          }
+        }
+      }
+    }
 
     // Temporal stabilization (offline, centered = zero phase lag). Detection is
     // sub-pixel now (weighted centroids), so a light LINEAR smoother suffices —
@@ -873,25 +928,33 @@ export async function compositeGreenScreen(opts: {
       const out = Buffer.from(data);
       let cD: Buffer, cW: number, cH: number, cCh: number;
       if (contentIsVideo) {
-        const c = await sharp(path.join(cframesDir, contentFiles[k % contentFiles.length])).removeAlpha().resize(contentCap, contentCap, { fit: "inside", withoutEnlargement: true }).raw().toBuffer({ resolveWithObject: true });
+        // Map the content frame by TIME, not by source-frame index. Source
+        // frame k is at t = k / fps; show content frame round(t * contentFps).
+        // This plays the content at its real speed (no speed-up when its fps
+        // differs from the source), clamps to the last frame (so a shorter
+        // content video holds on its final frame) and is naturally truncated
+        // to the source length (a longer content video is simply cut). No loop.
+        const cIdx = Math.min(contentFiles.length - 1, Math.round((k * contentFps) / fps));
+        const c = await sharp(path.join(cframesDir, contentFiles[cIdx])).removeAlpha().resize(contentCap, contentCap, { fit: "inside", withoutEnlargement: true }).raw().toBuffer({ resolveWithObject: true });
         cD = c.data; cW = c.info.width; cH = c.info.height; cCh = c.info.channels;
       } else {
         cD = stillContent!.data; cW = stillContent!.w; cH = stillContent!.h; cCh = stillContent!.ch;
       }
       const q = sm[k];
-      // Map the content onto the screen quad. "stretch" maps the whole content
-      // rect (distorts aspect). "cover" (default) keeps the content's aspect by
-      // mapping a centered crop whose aspect matches the screen — fills the
-      // screen, trims the overflowing side, no squashing.
+      // Default "fill": corner-pin the whole content onto the screen quad. The
+      // homography handles the phone's tilt, so content authored at the phone's
+      // aspect (UI screenshots) lands fully visible and undistorted — no crop.
+      // "cover" keeps the content's aspect by center-cropping it to a phone-
+      // portrait aspect first — useful for non-phone-shaped content (e.g. a
+      // landscape video). It deliberately does NOT use the 2D quad's aspect,
+      // which is foreshortened by the tilt and would over-crop.
       let dst: Pt[] = [[0, 0], [cW - 1, 0], [cW - 1, cH - 1], [0, cH - 1]];
       if (fit === "cover") {
-        const sw = (Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]) + Math.hypot(q[2][0] - q[3][0], q[2][1] - q[3][1])) / 2;
-        const sh = (Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1]) + Math.hypot(q[2][0] - q[1][0], q[2][1] - q[1][1])) / 2;
-        const screenAspect = sw / Math.max(1e-6, sh);
+        const PHONE_ASPECT = 0.462; // ~19.5:9 modern phone portrait
         const contentAspect = cW / cH;
         let cw2 = cW, ch2 = cH;
-        if (contentAspect > screenAspect) cw2 = cH * screenAspect; // content too wide → crop sides
-        else ch2 = cW / screenAspect; // content too tall → crop top/bottom
+        if (contentAspect > PHONE_ASPECT) cw2 = cH * PHONE_ASPECT; // too wide → crop sides
+        else ch2 = cW / PHONE_ASPECT; // too tall → crop top/bottom
         const ox = (cW - cw2) / 2, oy = (cH - ch2) / 2;
         dst = [[ox, oy], [ox + cw2 - 1, oy], [ox + cw2 - 1, oy + ch2 - 1], [ox, oy + ch2 - 1]];
       }

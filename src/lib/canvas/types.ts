@@ -1247,7 +1247,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "screen", type: "any", label: "Screen content (image or video)" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "cover", instructions: "" },
+    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "fill", instructions: "" },
     fields: [
       { name: "key_color", label: "Green key color", type: "text", placeholder: "#00FF00" },
       {
@@ -1255,10 +1255,10 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         label: "Content fit",
         type: "select",
         icon: "settings",
-        help: "Cover keeps the content's aspect ratio and fills the screen (trims the overflow). Stretch warps it to fill exactly.",
+        help: "Fill maps the whole content onto the screen (best for phone-shaped UI screenshots — full screen, no crop). Cover keeps the aspect ratio of non-phone-shaped content (e.g. a landscape video) by center-cropping it to portrait.",
         options: [
-          { value: "cover", label: "Cover (keep aspect, fill)" },
-          { value: "stretch", label: "Stretch (fill exactly)" },
+          { value: "fill", label: "Fill (whole content)" },
+          { value: "cover", label: "Cover (crop to phone)" },
         ],
       },
       {
