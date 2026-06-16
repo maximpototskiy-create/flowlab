@@ -14,6 +14,7 @@ import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
 import type { Graph, GraphNode } from "@/lib/canvas/types";
 
+
 import { uploadBytes } from "@/lib/storage";
 import { embedVideo } from "@/lib/twelvelabs/embed";
 
@@ -892,6 +893,17 @@ export async function compositeGreenScreen(opts: {
       // the grid fit, so this overrides only genuinely unreliable frames.
       if (gridOk.length === Nr) {
         for (let i = 0; i < Nr; i++) { if (!gridOk[i]) ok[i] = false; }
+      }
+      // Also distrust TRANSITION frames where the green is significantly
+      // reduced (a finger entering or leaving). On those frames the grid fit is
+      // biased by the shifting / partly-covered visible markers and rotates the
+      // quad a few degrees; if such a frame became the dot-follow anchor it
+      // would propagate that spurious rotation through the whole occlusion and
+      // then snap back on recovery (a corner that "flies out and returns").
+      // Only near-full-green frames anchor the rigid hold, so the orientation
+      // carried through a tap is the true pre-tap orientation.
+      if (_baseS > 0) {
+        for (let i = 0; i < Nr; i++) { if (sizes[i] < 0.9 * _baseS) ok[i] = false; }
       }
       // Don't reject every frame (e.g. truly erratic clip) — only patch if most
       // frames are clean.
