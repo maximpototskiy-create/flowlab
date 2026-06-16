@@ -674,7 +674,9 @@ export async function compositeGreenScreen(opts: {
   contentIsVideo: boolean;
   keyColorHex?: string; // kept for API symmetry; detection is generic-green
   similarity?: number;
+  fit?: "cover" | "stretch"; // how content maps onto the screen quad
 }): Promise<Buffer> {
+  const fit = opts.fit ?? "cover";
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
@@ -877,7 +879,23 @@ export async function compositeGreenScreen(opts: {
         cD = stillContent!.data; cW = stillContent!.w; cH = stillContent!.h; cCh = stillContent!.ch;
       }
       const q = sm[k];
-      const Hm = solveHomography(q, [[0, 0], [cW - 1, 0], [cW - 1, cH - 1], [0, cH - 1]]);
+      // Map the content onto the screen quad. "stretch" maps the whole content
+      // rect (distorts aspect). "cover" (default) keeps the content's aspect by
+      // mapping a centered crop whose aspect matches the screen — fills the
+      // screen, trims the overflowing side, no squashing.
+      let dst: Pt[] = [[0, 0], [cW - 1, 0], [cW - 1, cH - 1], [0, cH - 1]];
+      if (fit === "cover") {
+        const sw = (Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]) + Math.hypot(q[2][0] - q[3][0], q[2][1] - q[3][1])) / 2;
+        const sh = (Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1]) + Math.hypot(q[2][0] - q[1][0], q[2][1] - q[1][1])) / 2;
+        const screenAspect = sw / Math.max(1e-6, sh);
+        const contentAspect = cW / cH;
+        let cw2 = cW, ch2 = cH;
+        if (contentAspect > screenAspect) cw2 = cH * screenAspect; // content too wide → crop sides
+        else ch2 = cW / screenAspect; // content too tall → crop top/bottom
+        const ox = (cW - cw2) / 2, oy = (cH - ch2) / 2;
+        dst = [[ox, oy], [ox + cw2 - 1, oy], [ox + cw2 - 1, oy + ch2 - 1], [ox, oy + ch2 - 1]];
+      }
+      const Hm = solveHomography(q, dst);
       // Anti-aliased downscale: the content (full UI res) is squeezed into a
       // small on-screen quad, so one bilinear sample per output pixel under-
       // samples and fine text aliases/softens. Supersample by the downscale

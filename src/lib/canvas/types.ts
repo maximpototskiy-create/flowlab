@@ -1247,9 +1247,20 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "screen", type: "any", label: "Screen content (image or video)" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", instructions: "" },
+    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "cover", instructions: "" },
     fields: [
       { name: "key_color", label: "Green key color", type: "text", placeholder: "#00FF00" },
+      {
+        name: "fit",
+        label: "Content fit",
+        type: "select",
+        icon: "settings",
+        help: "Cover keeps the content's aspect ratio and fills the screen (trims the overflow). Stretch warps it to fill exactly.",
+        options: [
+          { value: "cover", label: "Cover (keep aspect, fill)" },
+          { value: "stretch", label: "Stretch (fill exactly)" },
+        ],
+      },
       {
         name: "key_similarity",
         label: "Key strength",
@@ -1262,7 +1273,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         ],
       },
     ],
-    quickFields: ["key_similarity"],
+    quickFields: ["fit", "key_similarity"],
     primaryField: "instructions",
     primaryLabel: "Prompt (optional)",
     primaryPlaceholder: "Describe the new screen, e.g. 'the phone screen shows the reference app UI, crisp and bright'. Leave empty for a sensible default.",

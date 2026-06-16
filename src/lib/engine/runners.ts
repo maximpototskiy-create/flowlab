@@ -964,6 +964,7 @@ export async function runNode(
         outBuf = await compositeGreenScreen({
           source: srcBuf, content: contentBuf, contentIsVideo: screenIsVideo,
           keyColorHex: keyColor, similarity,
+          fit: String(config.fit ?? "cover") === "stretch" ? "stretch" : "cover",
         });
       } catch (e) {
         throw new Error(`Composite failed (ffmpeg): ${e instanceof Error ? e.message : String(e)}`);

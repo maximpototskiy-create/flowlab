@@ -102,7 +102,19 @@ function resolveInputs(
 
   for (const edge of graph.edges) {
     if (edge.to.nodeId !== node.id) continue;
-    const upstream = outputs.get(edge.from.nodeId);
+    const upstreamNode = graph.nodes.find((n) => n.id === edge.from.nodeId) as
+      | (GraphNode & { outputs?: Record<string, unknown>; results?: { value: string; mime?: string }[] })
+      | undefined;
+    let upstream = outputs.get(edge.from.nodeId);
+    // Fallback to the graph snapshot's persisted outputs when the live run map
+    // doesn't have this upstream (e.g. a ▶-on-node run where the upstream was
+    // produced in a previous run and isn't part of this run's executed set).
+    // Without this the input looks "empty" even though the upstream clearly
+    // shows a result on the canvas — the source of the false
+    // "Connect the … to the … port" errors.
+    if (!upstream && upstreamNode?.outputs && Object.keys(upstreamNode.outputs).length > 0) {
+      upstream = upstreamNode.outputs;
+    }
     if (!upstream) continue;
 
     // Determine the value flowing through this edge. By default it's
@@ -112,7 +124,6 @@ function resolveInputs(
     // This lets users click a thumbnail to choose which of N generated
     // images flows into the next node.
     let value = upstream[edge.from.port];
-    const upstreamNode = graph.nodes.find((n) => n.id === edge.from.nodeId);
     if (
       upstreamNode?.results &&
       upstreamNode.results.length > 1 &&
@@ -128,6 +139,16 @@ function resolveInputs(
           value = picked.value;
         }
       }
+    }
+
+    // Single-port fallback: some nodes (e.g. Brand Assets) keep their primary
+    // value in `results[]` and may leave `outputs[port]` empty. If the port
+    // value is missing, use the first available result so a single-port
+    // destination (like Screen Replace's screen content) still receives it.
+    if (value === undefined || value === null) {
+      const live = results.get(edge.from.nodeId);
+      const first = (live && live[0]) || (upstreamNode?.results && upstreamNode.results[0]);
+      if (first && typeof first.value === "string") value = first.value;
     }
 
     if (value === undefined || value === null) continue;
