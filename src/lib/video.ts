@@ -722,6 +722,7 @@ export async function compositeGreenScreen(opts: {
     const cents: ([Pt, Pt, Pt, Pt] | null)[] = [];
     const allBlobs: Pt[][] = [];
     const greenQuads: GQuad[] = [];
+    const sizes: number[] = []; // green-component pixel count per frame (occlusion signal)
     const insetH: number[] = [], insetV: number[] = [];
     const reader1 = openFrameStream(srcPath, frameSize);
     let nFrames = 0;
@@ -730,9 +731,10 @@ export async function compositeGreenScreen(opts: {
       if (data === null) break;
       if (++nFrames > 1500) { reader1.destroy(); throw new Error("Clip is too long for screen-replace tracking — trim it shorter."); }
       const comp = greenComponent(data, W, H, 3);
-      if (!comp || comp.size < MIN_SIZE) { cents.push(null); boxes.push(null); greenQuads.push(null); allBlobs.push([]); continue; }
+      if (!comp || comp.size < MIN_SIZE) { cents.push(null); boxes.push(null); greenQuads.push(null); allBlobs.push([]); sizes.push(0); continue; }
       const c = detectMarkers(data, W, H, 3, comp.bbox);
       cents.push(c);
+      sizes.push(comp.size);
       if (c) sampleMarkerInset(data, W, 3, comp.bbox, c, insetH, insetV);
       // All dark-green marker blobs (corners + interior dot grid) for the
       // over-determined homography fit; empty/4 on the old 4-marker template.
@@ -816,6 +818,18 @@ export async function compositeGreenScreen(opts: {
           if (dev > maxDev) maxDev = dev;
         }
         if (maxDev > 0.13 * scale) ok[i] = false;
+      }
+      // Area-based occlusion: a finger/hand over the screen hides green, so the
+      // component area drops sharply. Unlike the local-median shape test this
+      // SURVIVES LONG occlusions (a finger resting for seconds) — the baseline
+      // is a global high percentile set by the many clean frames, so it can't
+      // be dragged down by the occluded stretch itself.
+      const detected = sizes.filter((s) => s > 0).sort((a, b) => a - b);
+      if (detected.length >= 8) {
+        const base = detected[Math.floor(detected.length * 0.7)];
+        for (let i = 0; i < Nr; i++) {
+          if (sizes[i] > 0 && base > 0 && sizes[i] < 0.8 * base) ok[i] = false;
+        }
       }
       // Don't reject every frame (e.g. truly erratic clip) — only patch if most
       // frames are clean.
@@ -978,10 +992,23 @@ export async function compositeGreenScreen(opts: {
       // smaller-than-max frames) is plenty — no more 4x4 supersampling.
       const ss = Math.max(1, Math.min(2, Math.ceil(ratio - 0.05)));
       const inv = 1 / ss, norm = 1 / (ss * ss);
-      const box = boxes[k]!;
-      const MG = 12;
-      const x0 = Math.max(0, box[0] - MG), y0 = Math.max(0, box[1] - MG);
-      const x1 = Math.min(W - 1, box[2] + MG), y1 = Math.min(H - 1, box[3] + MG);
+      // Key region from the STABILIZED quad's bounding box (+ generous margin),
+      // NOT the live green component box. When a finger splits the green, the
+      // live component collapses and its bbox shrinks — that left a big un-keyed
+      // green patch on screen. The stabilized quad doesn't collapse, so the key
+      // region stays on the whole screen. Expanding the box only widens where we
+      // LOOK for green (non-green pixels are skipped), so a wide margin is free
+      // and also catches the bezel green just outside the marker quad.
+      let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+      for (let c = 0; c < 4; c++) {
+        if (q[c][0] < bx0) bx0 = q[c][0];
+        if (q[c][1] < by0) by0 = q[c][1];
+        if (q[c][0] > bx1) bx1 = q[c][0];
+        if (q[c][1] > by1) by1 = q[c][1];
+      }
+      const mgx = Math.max(12, (bx1 - bx0) * 0.08), mgy = Math.max(12, (by1 - by0) * 0.08);
+      const x0 = Math.max(0, Math.floor(bx0 - mgx)), y0 = Math.max(0, Math.floor(by0 - mgy));
+      const x1 = Math.min(W - 1, Math.ceil(bx1 + mgx)), y1 = Math.min(H - 1, Math.ceil(by1 + mgy));
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const i = (y * W + x) * ch;
