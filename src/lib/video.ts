@@ -791,9 +791,17 @@ export async function compositeGreenScreen(opts: {
     // screen size) so genuine fast motion passes through untouched.
     {
       const Nr = raw.length;
+      // Wide robust baseline (±12 frames ≈ 0.4–0.5s at 50–60fps). A ±4 window
+      // was too narrow: a finger held on the screen for more than a few frames
+      // corrupted its own baseline (most of the window became occluded), so the
+      // bad frames stopped being flagged and the insert twitched. ±12 keeps the
+      // median dominated by clean frames through ordinary taps/holds. It only
+      // sets the deviation reference — fast genuine motion still passes because
+      // the median tracks it.
+      const WIN = 12;
       const baseMed = (i: number, c: number, d: number): number => {
         const w: number[] = [];
-        for (let j = Math.max(0, i - 4); j <= Math.min(Nr - 1, i + 4); j++) w.push(raw[j]![c][d]);
+        for (let j = Math.max(0, i - WIN); j <= Math.min(Nr - 1, i + WIN); j++) w.push(raw[j]![c][d]);
         return median(w);
       };
       const ok: boolean[] = new Array(Nr).fill(true);
