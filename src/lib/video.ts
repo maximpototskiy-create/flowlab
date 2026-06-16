@@ -13,6 +13,7 @@ import path from "path";
 import ffmpegPath from "ffmpeg-static";
 import sharp from "sharp";
 import type { Graph, GraphNode } from "@/lib/canvas/types";
+
 import { uploadBytes } from "@/lib/storage";
 import { embedVideo } from "@/lib/twelvelabs/embed";
 
@@ -502,7 +503,7 @@ function screenFromGrid(
     return [(H0[0] * p[0] + H0[1] * p[1] + H0[2]) / w, (H0[3] * p[0] + H0[4] * p[1] + H0[5]) / w];
   };
   const sp = Math.hypot(cents[1][0] - cents[0][0], cents[1][1] - cents[0][1]) || (bbox[2] - bbox[0]); // ~screen width px
-  const tol = 0.07 * sp;
+  const tol = 0.085 * sp;
   // Match ALL template points (4 corners + interior grid) to detected blobs via
   // the H0 prediction. With a temporal seed (previous frame's H), the prediction
   // is correct even when a finger covers a corner — the covered point simply
@@ -517,7 +518,7 @@ function screenFromGrid(
     for (let k = 0; k < blobs.length; k++) { if (used[k]) continue; const d = Math.hypot(blobs[k][0] - pp[0], blobs[k][1] - pp[1]); if (d < bd) { bd = d; bi = k; } }
     if (bi >= 0 && bd < tol) { used[bi] = true; src.push(tp); dst.push(blobs[bi]); }
   }
-  if (src.length < 8) return null; // not a grid template — use the 4-corner fit
+  if (src.length < 6) return null; // not a grid template — use the 4-corner fit
   let H = solveHomographyLSQ(src, dst);
   // One round of robust reweighting: a covered/false corner can still slip in as
   // a match; drop pairs whose reprojection residual is far above the median and
@@ -781,7 +782,20 @@ export async function compositeGreenScreen(opts: {
     if (!(fV >= 0.04 && fV <= 0.20)) fV = 0.14;
     const calibTMPL: Pt[] = [[fH, fV], [1 - fH, fV], [1 - fH, 1 - fV], [fH, 1 - fV]];
     let prevH: number[] | null = null; // temporal homography seed for the grid fit
+    let prevQuad: GQuad = null; // previous frame quad — fresh seed for the grid fit
     const gridOk: boolean[] = []; // did the precise grid fit succeed for this frame?
+    // Expected FULL-screen size, from the clean frames. On clean frames the
+    // green fills the whole screen, so the component box spans the real screen;
+    // its median over high-area frames is a stable reference that does NOT
+    // shrink when a finger later splits the green. Used to reject a collapsed
+    // fit (a quad far smaller than this) even when the collapse builds up
+    // gradually frame to frame.
+    const _detS = sizes.filter((s) => s > 0).sort((a, b) => a - b);
+    const _baseS = _detS.length ? _detS[Math.floor(_detS.length * 0.7)] : 0;
+    const _eh: number[] = [], _ew: number[] = [];
+    for (let i = 0; i < sizes.length; i++) { const bb = boxes[i]; if (bb && _baseS > 0 && sizes[i] > 0.6 * _baseS) { _eh.push(bb[3] - bb[1]); _ew.push(bb[2] - bb[0]); } }
+    const expH = _eh.length ? median(_eh) : 0;
+    const expW = _ew.length ? median(_ew) : 0;
     // Build per-frame quads: calibrated marker extrapolation (stable, blur-proof,
     // matches the screen extent), else the green-edge quad.
     const raw: GQuad[] = [];
@@ -790,14 +804,34 @@ export async function compositeGreenScreen(opts: {
         // Prefer the over-determined fit from the full dot grid; fall back to
         // the 4-corner fit, then to the green-edge quad.
         // Try the grid fit seeded from the detected corners first (precise on
-        // clean frames). If it fails (e.g. a finger covered a corner so the
-        // corner-seeded prediction is wrong), retry seeded from the PREVIOUS
-        // frame's homography — that predicts the dots correctly from temporal
-        // continuity and tracks precisely off whatever markers stay visible.
+        // clean frames). If it fails — e.g. a finger covered a corner, so the
+        // corner-seeded prediction is wrong — retry seeded from the PREVIOUS
+        // frame's quad (always fresh, independent of the possibly-false current
+        // corners). The seed predicts where every dot should be, the visible
+        // markers refine the homography, the covered corner finds no blob and is
+        // dropped, and ALL four corners are then reconstructed FROM THE PLANE —
+        // so a covered corner moves rigidly with the rest instead of flying off.
         let gr = screenFromGrid(cents[i]!, allBlobs[i], calibTMPL, boxes[i]!);
-        if (!gr && prevH) gr = screenFromGrid(cents[i]!, allBlobs[i], calibTMPL, boxes[i]!, prevH);
-        if (gr) { raw.push(gr.quad); prevH = gr.H; gridOk.push(true); }
-        else { const s = screenFromMarkers(cents[i]!, calibTMPL, boxes[i]!); raw.push(s ?? greenQuads[i]); gridOk.push(false); }
+        if (!gr) {
+          const seed = prevQuad ? solveHomography(TMPL_CORNERS, prevQuad) : prevH;
+          if (seed) gr = screenFromGrid(cents[i]!, allBlobs[i], calibTMPL, boxes[i]!, seed);
+        }
+        // Reject a COLLAPSED fit. When the visible markers are clustered (a hand
+        // covers part of the screen, and the finger even SPLITS the green into
+        // pieces) the homography is poorly constrained and its extrapolation to
+        // the uncovered corners can collapse — a quad far smaller than the real
+        // screen. The previous accepted quad is a reliable reference for the
+        // screen size (it barely changes frame to frame); if the new quad is far
+        // smaller, the fit collapsed: drop it and fall through to the rigid
+        // dot-follow, which preserves the last good FULL-screen shape and slides
+        // every corner together so none flies off when its marker is covered.
+        if (gr && expH > 0) {
+          let qx0 = Infinity, qy0 = Infinity, qx1 = -Infinity, qy1 = -Infinity;
+          for (let c = 0; c < 4; c++) { const p = gr.quad[c]; if (p[0] < qx0) qx0 = p[0]; if (p[1] < qy0) qy0 = p[1]; if (p[0] > qx1) qx1 = p[0]; if (p[1] > qy1) qy1 = p[1]; }
+          if ((qy1 - qy0) < 0.7 * expH || (qx1 - qx0) < 0.7 * expW) gr = null;
+        }
+        if (gr) { raw.push(gr.quad); prevH = gr.H; prevQuad = gr.quad; gridOk.push(true); }
+        else { const s = screenFromMarkers(cents[i]!, calibTMPL, boxes[i]!); const q = s ?? greenQuads[i]; raw.push(q); if (q) prevQuad = q; gridOk.push(false); }
       } else {
         raw.push(greenQuads[i]); gridOk.push(false);
       }
@@ -849,19 +883,15 @@ export async function compositeGreenScreen(opts: {
         }
         if (maxDev > 0.13 * scale) ok[i] = false;
       }
-      // Heavy-occlusion flag. The shape test above already catches frames whose
-      // quad JUMPS. This adds the sustained case: when a hand covers MOST of the
-      // screen, the green area collapses and per-frame detection is unreliable
-      // even though the quad may not "jump" much (its own corrupted neighbours
-      // become the baseline). Flag only HEAVY occlusion (area well below the
-      // clip's norm) — moderate/partial occlusion is now tracked precisely by
-      // the temporal grid fit and must be kept, not overridden.
-      const detected = sizes.filter((s) => s > 0).sort((a, b) => a - b);
-      if (detected.length >= 8) {
-        const base = detected[Math.floor(detected.length * 0.7)];
-        for (let i = 0; i < Nr; i++) {
-          if (sizes[i] > 0 && base > 0 && sizes[i] < 0.8 * base && gridOk.length === Nr && !gridOk[i]) ok[i] = false;
-        }
+      // Planar-only rule (the rigid-plane idea): a frame is trusted ONLY if the
+      // homography grid fit succeeded — then all four corners are reconstructed
+      // FROM THE PLANE and a covered corner moves rigidly with the rest. Every
+      // other frame (a corner detected wrong under a finger, or heavy occlusion)
+      // is rebuilt by the rigid dot-follow between the nearest planar frames, so
+      // no single corner can drift off on its own. Clean frames almost all pass
+      // the grid fit, so this overrides only genuinely unreliable frames.
+      if (gridOk.length === Nr) {
+        for (let i = 0; i < Nr; i++) { if (!gridOk[i]) ok[i] = false; }
       }
       // Don't reject every frame (e.g. truly erratic clip) — only patch if most
       // frames are clean.
@@ -1055,6 +1085,19 @@ export async function compositeGreenScreen(opts: {
         if (q[c][1] < by0) by0 = q[c][1];
         if (q[c][0] > bx1) bx1 = q[c][0];
         if (q[c][1] > by1) by1 = q[c][1];
+      }
+      // UNION with the live green component box. If the tracked quad is a touch
+      // small/skewed under occlusion, its bbox can stop short of the real screen
+      // edge and leave a green sliver un-keyed at a corner. The green box covers
+      // wherever green actually is; since the key loop only ever REPLACES green
+      // pixels (non-green is skipped), widening the search box can't hurt — it
+      // just guarantees no visible green is missed.
+      const gb = boxes[k];
+      if (gb) {
+        if (gb[0] < bx0) bx0 = gb[0];
+        if (gb[1] < by0) by0 = gb[1];
+        if (gb[2] > bx1) bx1 = gb[2];
+        if (gb[3] > by1) by1 = gb[3];
       }
       const mgx = Math.max(12, (bx1 - bx0) * 0.08), mgy = Math.max(12, (by1 - by0) * 0.08);
       const x0 = Math.max(0, Math.floor(bx0 - mgx)), y0 = Math.max(0, Math.floor(by0 - mgy));
