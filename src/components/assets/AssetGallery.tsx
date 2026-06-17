@@ -27,6 +27,20 @@ const SOURCES = [
 // first paint instead of all ~240 at once (TBT was ~1.8s before this).
 const PAGE = 48;
 
+// Bucket an asset into a standard aspect ratio from its stored pixel size.
+function aspectBucketWH(w?: number | null, h?: number | null): string | null {
+  if (!w || !h) return null;
+  const r = w / h;
+  const near = (t: number) => Math.abs(r - t) / t < 0.06;
+  if (near(1)) return "1:1";
+  if (near(4 / 5)) return "4:5";
+  if (near(9 / 16)) return "9:16";
+  if (near(16 / 9)) return "16:9";
+  if (near(3 / 4)) return "3:4";
+  if (near(2 / 3)) return "2:3";
+  return r < 1 ? "Portrait" : "Landscape";
+}
+
 // Existing rows may carry a stale kind="text" for what is really an image or
 // video (old inferKind bug). Every Asset cdnUrl is an http media URL — text
 // outputs were never stored — so re-derive the real kind from the URL.
@@ -85,6 +99,9 @@ export default function AssetGallery({
   const params = useSearchParams();
   const [lightbox, setLightbox] = useState<AssetItem | null>(null);
   const [search, setSearch] = useState(active.q ?? "");
+  const [aspect, setAspect] = useState("all");
+  // Client-side aspect-ratio (resolution) filter over the loaded list.
+  const filtered = aspect === "all" ? assets : assets.filter((a) => aspectBucketWH(a.width, a.height) === aspect);
 
   // ── Client-side windowing (infinite scroll) ──
   // Render `visible` cards; a sentinel below the grid bumps it by PAGE when it
@@ -94,23 +111,23 @@ export default function AssetGallery({
 
   useEffect(() => {
     setVisible(PAGE);
-  }, [assets]);
+  }, [assets, aspect]);
 
   useEffect(() => {
-    if (visible >= assets.length) return;
+    if (visible >= filtered.length) return;
     const el = sentinelRef.current;
     if (!el) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
-          setVisible((v) => Math.min(v + PAGE, assets.length));
+          setVisible((v) => Math.min(v + PAGE, filtered.length));
         }
       },
       { rootMargin: "800px" }, // start loading the next page well before it's on screen
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [assets.length, visible]);
+  }, [filtered.length, visible]);
 
   // Update one filter key in the URL (null clears it). Keeps the rest.
   const setFilter = useCallback(
@@ -128,7 +145,7 @@ export default function AssetGallery({
     setFilter(key, active[key as keyof typeof active] === value ? null : value);
 
   const hasFilters = active.project || active.brand || active.kind || active.source || active.q;
-  const shown = assets.slice(0, visible);
+  const shown = filtered.slice(0, visible);
 
   return (
     <div>
@@ -209,6 +226,22 @@ export default function AssetGallery({
           <option value="newest">Newest first</option>
           <option value="oldest">Oldest first</option>
         </select>
+        <select
+          value={aspect}
+          onChange={(e) => setAspect(e.target.value)}
+          className="bg-bg-card border border-border rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
+          title="Filter by aspect ratio (resolution)"
+        >
+          <option value="all">All ratios</option>
+          <option value="1:1">1:1 · square</option>
+          <option value="4:5">4:5 · portrait</option>
+          <option value="9:16">9:16 · story</option>
+          <option value="16:9">16:9 · wide</option>
+          <option value="3:4">3:4</option>
+          <option value="2:3">2:3</option>
+          <option value="Portrait">Other portrait</option>
+          <option value="Landscape">Other landscape</option>
+        </select>
 
         {hasFilters && (
           <button
@@ -225,6 +258,11 @@ export default function AssetGallery({
         <div className="bg-bg border border-dashed border-border-strong rounded-sm py-20 text-center">
           <h3 className="font-display text-3xl mb-2">Nothing here yet.</h3>
           <p className="text-fg-muted text-sm">Generate or upload assets and they'll show up here.</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-bg border border-dashed border-border-strong rounded-sm py-20 text-center">
+          <h3 className="font-display text-2xl mb-2">No assets in this ratio.</h3>
+          <p className="text-fg-muted text-sm">Try a different aspect-ratio filter, or pick “All ratios”.</p>
         </div>
       ) : (
         <>
@@ -253,9 +291,9 @@ export default function AssetGallery({
           </div>
 
           {/* Infinite-scroll sentinel — bumps `visible` by PAGE when reached */}
-          {visible < assets.length && (
+          {visible < filtered.length && (
             <div ref={sentinelRef} className="py-8 text-center text-fg-subtle text-[11px]">
-              Loading more… ({visible} / {assets.length})
+              Loading more… ({visible} / {filtered.length})
             </div>
           )}
         </>

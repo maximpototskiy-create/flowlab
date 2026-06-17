@@ -214,13 +214,31 @@ export default function AssetDrawer({
 
   // Tab filter is purely local now → instant switching, no refetch.
   const [sortBy, setSortBy] = useState<"newest" | "name" | "kind">("newest");
+  const [aspect, setAspect] = useState<string>("all");
   const [dims, setDims] = useState<Record<string, string>>({});
   const noteDims = (url: string, w: number, h: number) => { if (w && h) setDims((p) => (p[url] ? p : { ...p, [url]: `${w}×${h}` })); };
+  // Bucket an asset into a standard aspect ratio from its measured pixel size.
+  // Returns null until dimensions are known (probed lazily + eagerly below).
+  const aspectBucket = (url: string): string | null => {
+    const d = dims[url]; if (!d) return null;
+    const m = d.match(/(\d+)×(\d+)/); if (!m) return null;
+    const w = +m[1], h = +m[2]; if (!w || !h) return null;
+    const r = w / h;
+    const near = (t: number) => Math.abs(r - t) / t < 0.06;
+    if (near(1)) return "1:1";
+    if (near(4 / 5)) return "4:5";
+    if (near(9 / 16)) return "9:16";
+    if (near(16 / 9)) return "16:9";
+    if (near(3 / 4)) return "3:4";
+    if (near(2 / 3)) return "2:3";
+    return r < 1 ? "Portrait" : "Landscape";
+  };
   const extOf = (url: string) => { const m = url.split("?")[0].match(/\.([a-z0-9]{2,4})$/i); return m ? m[1].toUpperCase() : ""; };
   const nameOf = (a: AssetItem) => a.prompt || a.model || a.kind;
   const visibleBase = source === "library" && libSub !== "all" ? assets.filter((a) => subByUrl[a.cdnUrl] === libSub) : assets;
   const visibleKind = kind ? visibleBase.filter((a) => a.kind === kind) : visibleBase;
-  const visible = sortBy === "newest" ? visibleKind : [...visibleKind].sort((a, b) =>
+  const visibleAspect = aspect === "all" ? visibleKind : visibleKind.filter((a) => aspectBucket(a.cdnUrl) === aspect);
+  const visible = sortBy === "newest" ? visibleAspect : [...visibleAspect].sort((a, b) =>
     sortBy === "name" ? nameOf(a).localeCompare(nameOf(b)) : a.kind.localeCompare(b.kind) || nameOf(a).localeCompare(nameOf(b)));
 
   // Stop wheel from reaching the canvas. The canvas binds a NATIVE wheel
@@ -258,6 +276,28 @@ export default function AssetDrawer({
     el.addEventListener("wheel", stop, { passive: true });
     return () => el.removeEventListener("wheel", stop);
   }, []);
+
+  // Eagerly measure media dimensions for the current list so the aspect-ratio
+  // filter can bucket assets even before their (lazy) thumbnail scrolls in.
+  // Images/videos already in `dims` are skipped; videos load metadata only.
+  useEffect(() => {
+    const vids: HTMLVideoElement[] = [];
+    for (const a of assets) {
+      if (dims[a.cdnUrl]) continue;
+      if (a.kind === "video") {
+        const v = document.createElement("video");
+        v.preload = "metadata"; v.muted = true;
+        v.onloadedmetadata = () => noteDims(a.cdnUrl, v.videoWidth, v.videoHeight);
+        v.src = a.cdnUrl; vids.push(v);
+      } else if (a.kind === "image") {
+        const img = new Image();
+        img.onload = () => noteDims(a.cdnUrl, img.naturalWidth, img.naturalHeight);
+        img.src = a.cdnUrl;
+      }
+    }
+    return () => { vids.forEach((v) => { v.onloadedmetadata = null; v.src = ""; }); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets]);
 
   return (
     <div
@@ -417,6 +457,7 @@ export default function AssetDrawer({
           )}
         </div>
         {source !== "ui" && (
+          <>
           <div className="flex gap-1">
             {KINDS.map((k) => (
               <button
@@ -433,6 +474,26 @@ export default function AssetDrawer({
             <option value="newest">Newest</option><option value="name">Name</option><option value="kind">Type</option>
           </select>
         </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[9px] uppercase tracking-wider text-fg-subtle shrink-0">Ratio</span>
+            <select
+              value={aspect}
+              onChange={(e) => setAspect(e.target.value)}
+              className="flex-1 bg-bg border border-border rounded px-1 py-0.5 text-[10px] text-fg-muted outline-none"
+              title="Filter assets by aspect ratio (resolution)"
+            >
+              <option value="all">All ratios</option>
+              <option value="1:1">1:1 · square</option>
+              <option value="4:5">4:5 · portrait</option>
+              <option value="9:16">9:16 · story</option>
+              <option value="16:9">16:9 · wide</option>
+              <option value="3:4">3:4</option>
+              <option value="2:3">2:3</option>
+              <option value="Portrait">Other portrait</option>
+              <option value="Landscape">Other landscape</option>
+            </select>
+          </div>
+          </>
         )}
         {/* Explicit drop zone for image search (clear where to drop). */}
         {(source === "library" || isFal) && !similar && (
