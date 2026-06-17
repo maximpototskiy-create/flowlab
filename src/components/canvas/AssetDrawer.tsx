@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Play, Pause, Trash2 } from "lucide-react";
+import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Play, Pause, Trash2, RefreshCw, Cloud } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
 import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
@@ -193,7 +193,11 @@ export default function AssetDrawer({
         p.set("source", "brand_kit");
         if (brandSel) p.set("brand", brandSel);
       }
-      if (source === "generated" && !isFal && brandSel) p.set("brand", brandSel);
+      if (source === "generated" && !isFal) {
+        // Only TRUE generations here — exclude uploads / UI-added / brand-kit.
+        p.set("source", "generated");
+        if (brandSel) p.set("brand", brandSel);
+      }
       const endpoint = isFal ? "/api/fal-assets" : "/api/assets";
       const res = await fetch(`${endpoint}?${p.toString()}`);
       const data = await res.json();
@@ -224,6 +228,51 @@ export default function AssetDrawer({
     setLimit(next);
     loadPage(next, true);
   }, [limit, loadPage]);
+
+  // ── Library maintenance: refresh, import-from-Drive, background re-index.
+  // Mirrors the editor's Brand tab so the canvas Asset Library can be kept
+  // fresh without leaving the canvas.
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
+  const [embedMsg, setEmbedMsg] = useState("");
+  const embedLoopRef = useRef(false);
+  const startEmbedLoop = useCallback(async (bId: string) => {
+    if (embedLoopRef.current || !bId) return;
+    embedLoopRef.current = true;
+    try {
+      for (let i = 0; i < 200; i++) {
+        const r = await fetch("/api/brand-assets/embed-skipped", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandId: bId }) });
+        const j = (await r.json()) as { ok?: boolean; started?: number; remaining?: number; error?: string };
+        if (!r.ok || j.error) { setEmbedMsg(""); break; }
+        if (!j.remaining) { setEmbedMsg(j.started || i > 0 ? "Indexing done." : ""); setTimeout(() => setEmbedMsg(""), 4000); break; }
+        setEmbedMsg(`Indexing… ${j.remaining} left`);
+      }
+    } catch { setEmbedMsg(""); }
+    embedLoopRef.current = false;
+  }, []);
+  const refreshAssets = useCallback(() => { setSyncMsg(""); loadPage(limit, false); }, [limit, loadPage]);
+  const reindex = useCallback(() => { if (brandSel) void startEmbedLoop(brandSel); }, [brandSel, startEmbedLoop]);
+  const syncDrive = useCallback(async () => {
+    if (!brandSel) { setSyncMsg("Pick a brand first."); return; }
+    setSyncBusy(true); setSyncMsg("Checking Drive…");
+    try {
+      let total = 0;
+      for (let i = 0; i < 60; i++) {
+        const ctl = new AbortController();
+        const tmo = setTimeout(() => ctl.abort(), 120000);
+        const r = await fetch("/api/drive/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brandId: brandSel }), signal: ctl.signal }).finally(() => clearTimeout(tmo));
+        const j = (await r.json()) as { ok?: boolean; imported?: number; remaining?: number; error?: string };
+        if (!r.ok || j.error) { setSyncMsg(`Sync failed: ${j.error || r.status}`); setSyncBusy(false); return; }
+        total += j.imported || 0;
+        if (!j.remaining) { setSyncMsg(total ? `Imported ${total} new.` : "Up to date."); void startEmbedLoop(brandSel); break; }
+        setSyncMsg(`Imported ${total}… ${j.remaining} left`);
+      }
+      loadPage(limit, false);
+    } catch (e) {
+      setSyncMsg(e instanceof DOMException && e.name === "AbortError" ? "Batch timed out — press Sync Drive again." : `Sync failed: ${e instanceof Error ? e.message : "error"}`);
+    }
+    setSyncBusy(false);
+  }, [brandSel, limit, loadPage, startEmbedLoop]);
 
   // Tab filter is purely local now → instant switching, no refetch.
   const [sortBy, setSortBy] = useState<"newest" | "name" | "kind">("newest");
@@ -391,6 +440,26 @@ export default function AssetDrawer({
             ? "Your saved brand assets + brand-kit UI — search by meaning (text or image)."
             : "Generated content. Switch between this project and your full fal.ai library."}
         </p>
+
+        {/* Library maintenance — refresh, import from Drive, background re-index. */}
+        {source === "library" && (
+          <div className="space-y-1">
+            <div className="flex gap-1">
+              <button onClick={refreshAssets} disabled={loading} title="Reload assets" className="flex-1 inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-50">
+                <RefreshCw size={11} className={loading ? "animate-spin" : ""} /> Refresh
+              </button>
+              <button onClick={syncDrive} disabled={syncBusy || !brandSel} title="Import all new files from the brand's Google Drive, then index" className="flex-1 inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-50">
+                <Cloud size={11} className={syncBusy ? "animate-pulse" : ""} /> Sync Drive
+              </button>
+              <button onClick={reindex} disabled={!brandSel} title="Run semantic indexing in the background" className="flex-1 inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-50">
+                <Sparkles size={11} /> Reindex
+              </button>
+            </div>
+            {(syncMsg || embedMsg) && (
+              <p className="text-[9px] text-fg-subtle">{syncMsg}{syncMsg && embedMsg ? " · " : ""}{embedMsg}</p>
+            )}
+          </div>
+        )}
 
         {/* Generated: sub-source (our projects vs fal) */}
         {source === "generated" && (
@@ -704,7 +773,7 @@ export default function AssetDrawer({
           </div>
 
           {/* Media */}
-          <div className="bg-black flex items-center justify-center" style={{ maxHeight: "45%" }}>
+          <div className="bg-bg-subtle flex items-center justify-center" style={{ maxHeight: "45%" }}>
             {preview.kind === "image" && (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={preview.cdnUrl} alt="" className="max-w-full max-h-[45vh] object-contain" />
