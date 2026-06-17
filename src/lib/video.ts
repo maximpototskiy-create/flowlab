@@ -720,6 +720,10 @@ export async function compositeGreenScreen(opts: {
   // interpolated per frame and ADDED to the global offset; frames between keys with
   // zero correction stay exactly as the auto-track. dx/dy px, rot deg.
   trackKeys?: { t: number; dx?: number; dy?: number; rot?: number }[];
+  // Optional out-param: if provided, it's filled with the per-frame auto-tracked
+  // screen quads (BEFORE manual correction) + fps/dims. Lets the editor draw the
+  // track for interactive keyframing. Does not affect the rendered output.
+  captureTrack?: { fps?: number; w?: number; h?: number; quads?: number[][][] };
 }): Promise<Buffer> {
   const fit = opts.fit ?? "fill";
   // Clamp the on-screen scale to a sane range so a stray value can't invert/blow up.
@@ -1180,6 +1184,13 @@ export async function compositeGreenScreen(opts: {
       const q: Pt[] = [];
       for (let c = 0; c < 4; c++) q.push([sgQuad(c, 0, i), sgQuad(c, 1, i)]);
       sm.push(q);
+    }
+    // Expose the auto-track (pre-correction) for interactive keyframing in the UI.
+    if (opts.captureTrack) {
+      opts.captureTrack.fps = fps;
+      opts.captureTrack.w = W;
+      opts.captureTrack.h = H;
+      opts.captureTrack.quads = sm.map((q) => q.map((p) => [p[0], p[1]]));
     }
 
     // Pre-scale the content to ~the largest on-screen size across the clip. The
