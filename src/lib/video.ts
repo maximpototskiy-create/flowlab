@@ -694,7 +694,7 @@ export async function compositeGreenScreen(opts: {
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
-  const srcPath = path.join(dir, "src.mp4");
+  let srcPath = path.join(dir, "src.mp4");
   const contentPath = path.join(dir, opts.contentIsVideo ? "content.mp4" : "content.png");
   const cframesDir = path.join(dir, "cframes");
   const outPath = path.join(dir, "out.mp4");
@@ -708,9 +708,30 @@ export async function compositeGreenScreen(opts: {
     const probePath = path.join(dir, "probe.png");
     await runFfmpeg(["-y", "-i", srcPath, "-frames:v", "1", probePath]);
     const meta0 = await sharp(probePath).metadata();
-    const W = meta0.width ?? 0, H = meta0.height ?? 0;
+    let W = meta0.width ?? 0, H = meta0.height ?? 0;
     await unlink(probePath).catch(() => {});
     if (!W || !H) throw new Error("Could not read source frame dimensions");
+
+    // 4K cap. Tracking + compositing are O(W*H) per frame, and the marker scan is
+    // per-pixel, so a 4K source (e.g. 2160x3840 ≈ 8.3 MP — ~4x a 1080p frame)
+    // blows the function's time budget and the run just hangs. Downscale the
+    // SOURCE to a working resolution (longest side ≤ MAX_DIM) before any
+    // processing. The content/UI is mapped onto the (small) on-screen quad
+    // anyway, so visible screen quality barely changes while throughput rises
+    // ~4x. The composite output is produced at this working resolution.
+    const MAX_DIM = 1920;
+    if (Math.max(W, H) > MAX_DIM) {
+      const scaledPath = path.join(dir, "src_scaled.mp4");
+      // Longest side → MAX_DIM, aspect preserved, dims forced even (encoder needs
+      // even). Re-encode so downstream pipe-streaming of frames stays uniform.
+      const vf = W >= H ? `scale=${MAX_DIM}:-2` : `scale=-2:${MAX_DIM}`;
+      await runFfmpeg(["-y", "-i", srcPath, "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-an", scaledPath]);
+      const probe2 = path.join(dir, "probe2.png");
+      await runFfmpeg(["-y", "-i", scaledPath, "-frames:v", "1", probe2]);
+      const m2 = await sharp(probe2).metadata();
+      await unlink(probe2).catch(() => {});
+      if (m2.width && m2.height) { W = m2.width; H = m2.height; srcPath = scaledPath; }
+    }
     const frameSize = W * H * 3;
 
     let contentIsVideo = opts.contentIsVideo;
