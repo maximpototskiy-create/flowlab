@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, Loader2, Trash2, Plus, RotateCcw, Maximize2 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,6 +78,8 @@ export default function TrackEditor({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drag = useRef<{ mode: number | "move"; lastX: number; lastY: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     let off = false;
@@ -182,9 +185,10 @@ export default function TrackEditor({
   const handleR = track ? track.w / 95 : 6;
   const strokeW = track ? Math.max(2, track.w / 520) : 2;
 
-  return (
+  if (!mounted) return null;
+  return createPortal(
     <div className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3" onClick={onClose}>
-      <div className="bg-bg-card border border-border rounded-xl w-full max-w-[1040px] max-h-[96vh] flex flex-col overflow-hidden shadow-panel" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-bg-card border border-border rounded-xl w-full max-w-[880px] h-[90vh] flex flex-col overflow-hidden shadow-panel" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
           <div className="text-[13px] font-medium text-fg">Adjust track <span className="text-fg-subtle font-normal">— drag the corners to pin the screen, or the body to move it; keyframes are set as you go</span></div>
           <button type="button" onClick={onClose} className="w-7 h-7 rounded-md hover:bg-white/10 text-fg-muted flex items-center justify-center"><X size={16} /></button>
@@ -200,7 +204,7 @@ export default function TrackEditor({
             {/* video + scrub */}
             <div className="flex-1 min-h-0 flex flex-col p-3 gap-2 bg-black/30">
               <div className="flex-1 min-h-0 flex items-center justify-center">
-                <div className="relative max-h-full max-w-full bg-black rounded-lg overflow-hidden" style={{ aspectRatio: aspect, height: "min(82vh, 100%)" }}>
+                <div className="relative h-full max-h-full max-w-full bg-black rounded-lg overflow-hidden" style={{ aspectRatio: aspect }}>
                   <video ref={videoRef} src={source} className="absolute inset-0 w-full h-full object-contain" onLoadedMetadata={(e) => setDur(e.currentTarget.duration || 0)} playsInline muted />
                   <svg
                     ref={svgRef}
@@ -270,6 +274,7 @@ export default function TrackEditor({
           <button type="button" onClick={() => { onSave(keys); onClose(); }} className="px-4 py-1.5 rounded text-[12px] bg-brand text-white hover:bg-brand/90 font-medium">Save keyframes</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
