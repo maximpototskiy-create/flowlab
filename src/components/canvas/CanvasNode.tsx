@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, memo } from "react";
-import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand } from "lucide-react";
+import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand, Move } from "lucide-react";
 import { WheelScroll } from "./WheelScroll";
 import VideoGenControls from "./VideoGenControls";
 import Lightbox from "./Lightbox";
+import TrackEditor, { type TrackKey } from "./TrackEditor";
 import { NODE_TYPES, getActiveInputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import UploadZone from "./UploadZone";
@@ -147,6 +148,12 @@ function CanvasNodeImpl({
     list?: string[];
     idx?: number;
   } | null>(null);
+  // Screen Replace: interactive track-corrector modal open state.
+  const [trackOpen, setTrackOpen] = useState(false);
+  const parseTrackKeys = (s: unknown): TrackKey[] => {
+    if (typeof s !== "string" || !s.trim()) return [];
+    try { const a = JSON.parse(s); return Array.isArray(a) ? a : []; } catch { return []; }
+  };
   // Pre-filter edges incoming to this node — used to count refs on multi-ports.
   const edgesTo = edges.filter((e) => e.to.nodeId === node.id);
 
@@ -645,6 +652,17 @@ function CanvasNodeImpl({
             OutputPreview on top duplicates the same image with an Expand
             button — the cause of the "image doubled" UX bug. Skip it for
             those node types; the upload preview IS the output preview. */}
+        {/* Screen Replace: open the interactive track corrector (drag → keyframes). */}
+        {node.type === "screenReplace" && resolvedInputs["source_video"] && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setTrackOpen(true); }}
+            className="nodrag w-full mb-1.5 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]"
+            title="Visually correct the screen track with keyframes"
+          >
+            <Move size={12} /> Adjust track
+          </button>
+        )}
         {((node.outputs && Object.keys(node.outputs).length > 0) ||
           (node.results && node.results.length > 0)) &&
           !def.custom?.startsWith("upload-") && (
@@ -1001,6 +1019,18 @@ function CanvasNodeImpl({
                 },
               }
             : {})}
+        />
+      )}
+
+      {/* Screen Replace: interactive track corrector. Renders fixed (escapes the
+          canvas transform). Source = the connected source_video; saves keyframes
+          back into config.track_keys, consumed by the compositor on the next run. */}
+      {trackOpen && node.type === "screenReplace" && resolvedInputs["source_video"] && (
+        <TrackEditor
+          source={resolvedInputs["source_video"]}
+          value={parseTrackKeys(node.config.track_keys)}
+          onSave={(keys) => onConfigChange("track_keys", JSON.stringify(keys))}
+          onClose={() => setTrackOpen(false)}
         />
       )}
     </div>
