@@ -1504,6 +1504,53 @@ export default function Canvas({
     return { cdnUrl };
   }
 
+  // Import dropped/pasted media files as Upload nodes. Each file goes through the
+  // same direct-to-Supabase upload, then an Upload node carrying the CDN URL is
+  // dropped at `at` (or canvas centre), staggered when there are several.
+  async function importFiles(files: File[], at?: { x: number; y: number }) {
+    const media = files.filter((f) => /^(image|video|audio)\//.test(f.type));
+    if (media.length === 0) return;
+    let base = at;
+    if (!base) {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      base = rect ? screenToCanvas(rect.left + rect.width / 2, rect.top + rect.height / 2) : { x: 0, y: 0 };
+    }
+    for (let i = 0; i < media.length; i++) {
+      const f = media[i];
+      const kind = f.type.startsWith("video/") ? "video" : f.type.startsWith("audio/") ? "audio" : "image";
+      try {
+        const { cdnUrl } = await uploadFile(f);
+        addAssetNode(cdnUrl, kind, base.x + i * 40, base.y + i * 40);
+      } catch (err) {
+        console.error("[FlowLab] file import failed", err);
+      }
+    }
+  }
+  // Ctrl/Cmd+V anywhere on the canvas pastes clipboard images/videos/audio as
+  // Upload nodes (skipped while typing in a field, so paste-into-prompt still
+  // works). Uses a ref so the listener binds once but always runs the latest fn.
+  const importFilesRef = useRef(importFiles);
+  importFilesRef.current = importFiles;
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const dt = e.clipboardData;
+      if (!dt) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const files: File[] = [];
+      for (const item of Array.from(dt.items || [])) {
+        if (item.kind === "file") { const f = item.getAsFile(); if (f) files.push(f); }
+      }
+      if (files.length === 0 && dt.files) for (const f of Array.from(dt.files)) files.push(f);
+      const media = files.filter((f) => /^(image|video|audio)\//.test(f.type));
+      if (media.length === 0) return;
+      e.preventDefault();
+      void importFilesRef.current(media);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   // ─────────────────────────────── Run execution
   // Track which scope nodes have an in-flight run so we don't start a duplicate
   // when the user accidentally double-clicks or clicks again while a run is going.
@@ -1761,21 +1808,29 @@ export default function Canvas({
           onPointerDown={onCanvasPointerDown}
           onContextMenu={onCanvasContextMenu}
           onDragOver={(e) => {
-            if (e.dataTransfer.types.includes("application/x-flowlab-asset")) {
+            if (e.dataTransfer.types.includes("application/x-flowlab-asset") || e.dataTransfer.types.includes("Files")) {
               e.preventDefault();
               e.dataTransfer.dropEffect = "copy";
             }
           }}
           onDrop={(e) => {
             const raw = e.dataTransfer.getData("application/x-flowlab-asset");
-            if (!raw) return;
-            e.preventDefault();
-            try {
-              const { cdnUrl, kind } = JSON.parse(raw) as { cdnUrl: string; kind: string };
+            if (raw) {
+              e.preventDefault();
+              try {
+                const { cdnUrl, kind } = JSON.parse(raw) as { cdnUrl: string; kind: string };
+                const pt = screenToCanvas(e.clientX, e.clientY);
+                addAssetNode(cdnUrl, kind, pt.x, pt.y);
+              } catch {
+                /* ignore malformed drop */
+              }
+              return;
+            }
+            const files = e.dataTransfer.files;
+            if (files && files.length) {
+              e.preventDefault();
               const pt = screenToCanvas(e.clientX, e.clientY);
-              addAssetNode(cdnUrl, kind, pt.x, pt.y);
-            } catch {
-              /* ignore malformed drop */
+              void importFiles(Array.from(files), pt);
             }
           }}
           style={{

@@ -112,24 +112,37 @@ export default function AssetDrawer({
           const sm: Record<string, string> = {};
           for (const r of brows) if (r.subpath) sm[r.url] = r.subpath.split("/")[0];
           setSubByUrl(sm);
-          setAssets(
-            brows.map((r, i) => ({
-              id: `lib-b-${i}-${r.url}`,
-              cdnUrl: r.url,
-              kind: r.kind === "audio" ? "audio" : r.kind === "video" ? "video" : "image",
-              mimeType: null,
-              sizeBytes: null,
-              width: null,
-              height: null,
-              durationSec: null,
-              source: "library",
-              model: null,
-              prompt: r.label || r.category,
-              createdAt: new Date().toISOString(),
-              projectName: null,
-              brandName: null,
-            })),
-          );
+          const libAssets: AssetItem[] = brows.map((r, i) => ({
+            id: `lib-b-${i}-${r.url}`,
+            cdnUrl: r.url,
+            kind: r.kind === "audio" ? "audio" : r.kind === "video" ? "video" : "image",
+            mimeType: null,
+            sizeBytes: null,
+            width: null,
+            height: null,
+            durationSec: null,
+            source: "library",
+            model: null,
+            prompt: r.label || r.category,
+            createdAt: new Date().toISOString(),
+            projectName: null,
+            brandName: null,
+          }));
+          // Fold brand-kit UI screenshots INTO Library (no separate tab). Only in
+          // the unfiltered "all" view; guarded so a failure never breaks Library.
+          let uiAssets: AssetItem[] = [];
+          if (libCategory === "all") {
+            try {
+              const up = new URLSearchParams();
+              up.set("source", "brand_kit");
+              if (brandSel) up.set("brand", brandSel);
+              up.set("limit", String(targetLimit));
+              const ures = await fetch(`/api/assets?${up.toString()}`);
+              const udata = await ures.json();
+              uiAssets = ((udata.assets ?? []) as AssetItem[]).map((a) => ({ ...a, source: a.source || "brand_kit" }));
+            } catch { /* curated only on failure */ }
+          }
+          setAssets([...libAssets, ...uiAssets]);
           setHasMore(false);
           return;
         }
@@ -217,6 +230,9 @@ export default function AssetDrawer({
   const [aspect, setAspect] = useState<string>("all");
   const [dims, setDims] = useState<Record<string, string>>({});
   const noteDims = (url: string, w: number, h: number) => { if (w && h) setDims((p) => (p[url] ? p : { ...p, [url]: `${w}×${h}` })); };
+  const [durs, setDurs] = useState<Record<string, string>>({});
+  const fmtDur = (s: number) => { if (!isFinite(s) || s <= 0) return ""; const m = Math.floor(s / 60), ss = Math.round(s % 60); return `${m}:${String(ss).padStart(2, "0")}`; };
+  const noteDur = (url: string, sec: number) => { const f = fmtDur(sec); if (f) setDurs((p) => (p[url] ? p : { ...p, [url]: f })); };
   // Bucket an asset into a standard aspect ratio from its measured pixel size.
   // Returns null until dimensions are known (probed lazily + eagerly below).
   const aspectBucket = (url: string): string | null => {
@@ -281,21 +297,28 @@ export default function AssetDrawer({
   // filter can bucket assets even before their (lazy) thumbnail scrolls in.
   // Images/videos already in `dims` are skipped; videos load metadata only.
   useEffect(() => {
-    const vids: HTMLVideoElement[] = [];
+    const els: HTMLMediaElement[] = [];
     for (const a of assets) {
-      if (dims[a.cdnUrl]) continue;
       if (a.kind === "video") {
+        if (dims[a.cdnUrl] && durs[a.cdnUrl]) continue;
         const v = document.createElement("video");
         v.preload = "metadata"; v.muted = true;
-        v.onloadedmetadata = () => noteDims(a.cdnUrl, v.videoWidth, v.videoHeight);
-        v.src = a.cdnUrl; vids.push(v);
+        v.onloadedmetadata = () => { noteDims(a.cdnUrl, v.videoWidth, v.videoHeight); noteDur(a.cdnUrl, v.duration); };
+        v.src = a.cdnUrl; els.push(v);
+      } else if (a.kind === "audio") {
+        if (durs[a.cdnUrl]) continue;
+        const au = document.createElement("audio");
+        au.preload = "metadata";
+        au.onloadedmetadata = () => noteDur(a.cdnUrl, au.duration);
+        au.src = a.cdnUrl; els.push(au);
       } else if (a.kind === "image") {
+        if (dims[a.cdnUrl]) continue;
         const img = new Image();
         img.onload = () => noteDims(a.cdnUrl, img.naturalWidth, img.naturalHeight);
         img.src = a.cdnUrl;
       }
     }
-    return () => { vids.forEach((v) => { v.onloadedmetadata = null; v.src = ""; }); };
+    return () => { els.forEach((e) => { e.onloadedmetadata = null; e.src = ""; }); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assets]);
 
@@ -330,7 +353,7 @@ export default function AssetDrawer({
         }}
         style={dragOver ? { outline: "2px dashed var(--brand)", outlineOffset: "-4px" } : undefined}
       >
-        {/* Source switch — 3 top-level sources */}
+        {/* Source switch — Library (curated + brand UI) and Generated. */}
         <div className="flex gap-1">
           <button
             onClick={() => setSource("library")}
@@ -348,21 +371,11 @@ export default function AssetDrawer({
           >
             Generated
           </button>
-          <button
-            onClick={() => setSource("ui")}
-            className={`flex-1 px-2 py-1 rounded text-[10px] border transition ${
-              source === "ui" ? "bg-brand/15 border-brand text-brand" : "border-border text-fg-muted hover:text-fg"
-            }`}
-          >
-            Brand UI
-          </button>
         </div>
         <p className="text-[9px] text-fg-subtle leading-tight">
           {source === "library"
-            ? "Your saved brand assets — search by meaning (text or image)."
-            : source === "generated"
-              ? "Generated content. Switch between this project and your full fal.ai library."
-              : "This brand's UI screenshots from the Brand Kit."}
+            ? "Your saved brand assets + brand-kit UI — search by meaning (text or image)."
+            : "Generated content. Switch between this project and your full fal.ai library."}
         </p>
 
         {/* Generated: sub-source (our projects vs fal) */}
@@ -611,7 +624,7 @@ export default function AssetDrawer({
                   <img src={a.cdnUrl} alt="" onLoad={(e) => noteDims(a.cdnUrl, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className="w-full h-full object-cover pointer-events-none" loading="lazy" />
                 )}
                 {a.kind === "video" && (
-                  <video src={a.cdnUrl} onLoadedMetadata={(e) => noteDims(a.cdnUrl, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} className="w-full h-full object-cover pointer-events-none" muted loop preload="metadata" />
+                  <video src={a.cdnUrl} onLoadedMetadata={(e) => { noteDims(a.cdnUrl, e.currentTarget.videoWidth, e.currentTarget.videoHeight); noteDur(a.cdnUrl, e.currentTarget.duration); }} className="w-full h-full object-cover pointer-events-none" muted loop preload="metadata" />
                 )}
                 {a.kind === "audio" && (
                   <div className="w-full h-full flex items-center justify-center text-fg-subtle relative"><Music size={20} />
@@ -629,7 +642,8 @@ export default function AssetDrawer({
                 <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/50 text-[7px] uppercase text-white/80">
                   {a.kind}
                 </span>
-                {extOf(a.cdnUrl) && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[7px] text-white/70">{extOf(a.cdnUrl)}</span>}
+                {extOf(a.cdnUrl) && a.kind !== "video" && a.kind !== "audio" && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[7px] text-white/70">{extOf(a.cdnUrl)}</span>}
+                {durs[a.cdnUrl] && (a.kind === "video" || a.kind === "audio") && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[7px] text-white/80">{durs[a.cdnUrl]}</span>}
                 {dims[a.cdnUrl] && <span className="absolute bottom-1 right-1 px-1 rounded bg-black/60 text-[7px] text-white/70">{dims[a.cdnUrl]}</span>}
                 {subByUrl[a.cdnUrl] && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[7px] text-white/80">{subByUrl[a.cdnUrl]}</span>}
                 <div className="absolute inset-x-0 bottom-0 translate-y-full pt-0.5 text-[8px] text-fg-subtle truncate pointer-events-none">{nameOf(a)}</div>
