@@ -92,7 +92,7 @@ export async function queryAssets(f: AssetFilters): Promise<{
         brand: { select: { id: true, name: true, slug: true } },
       },
     }),
-    prisma.project.findMany({ where: { archivedAt: null }, orderBy: { updatedAt: "desc" }, select: { id: true, name: true } }),
+    prisma.project.findMany({ where: { archivedAt: null, ...(f.brand ? { brandId: f.brand } : {}) }, orderBy: { updatedAt: "desc" }, select: { id: true, name: true } }),
     prisma.brand.findMany({ where: { archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
   ]);
 

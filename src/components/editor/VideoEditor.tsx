@@ -1420,7 +1420,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
             <input ref={fileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ""; }} />
             <input value={binQuery} onChange={(e) => setBinQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} placeholder="Semantic search… (Enter)" className="w-full bg-bg-card border border-border rounded px-2 py-1.5 text-[11px] text-fg outline-none focus:border-brand" />
             {brands.length > 0 && (
-              <select value={binBrand} onChange={(e) => { setBinBrand(e.target.value); loadGen({ brand: e.target.value }); loadBrand(e.target.value); }} className="w-full bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
+              <select value={binBrand} onChange={(e) => { const b = e.target.value; setBinBrand(b); setBinProject(""); loadGen({ brand: b, project: "" }); loadBrand(b); }} className="w-full bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
                 <option value="">All brands</option>
                 {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
               </select>
