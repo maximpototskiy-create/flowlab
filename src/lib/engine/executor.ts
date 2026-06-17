@@ -5,11 +5,27 @@
 // - Updates DB run/run_steps as it goes
 
 import { prisma } from "@/lib/prisma";
-import type { Prisma } from "@prisma/client";
 import { runNode, type RunnerContext, type RunnerResult } from "./runners";
 import { kindFromMime } from "@/lib/storage";
 import type { Graph, GraphNode } from "@/lib/canvas/types";
 import { NODE_TYPES } from "@/lib/canvas/types";
+
+// Per-workflow in-process serialisation for graph persists. Parallel node
+// completions (Promise.all within a layer) all read-modify-write the SAME
+// workflow.graph row; serialising them here means each read sees the prior
+// write (no lost node outputs) WITHOUT an interactive DB transaction.
+// Interactive transactions over the Supabase transaction pooler can be left
+// OPEN when the serverless instance is frozen/killed mid-run (the in-JS
+// transaction-timeout timer never fires) — that held the workflow row lock for
+// ~2 min and cascaded into connection-pool-exhaustion (P2024) 500s across the
+// whole app. A single UPDATE statement can't be "left open", so this avoids it.
+const graphPersistChain = new Map<string, Promise<unknown>>();
+function withGraphLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = graphPersistChain.get(key) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  graphPersistChain.set(key, next.then(() => {}, () => {}));
+  return next;
+}
 
 type NodeStatus = "pending" | "running" | "done" | "error" | "skipped";
 
@@ -327,17 +343,16 @@ async function executeOne(
     // safely complete while the user is editing other nodes — no overwrites.
     // ─────────────────────────────────────────────────────────────────────
     if (state.ctx.workflowId) {
-      // Retry loop for the graph persist — the transactional read-modify-write
-      // can lose to a pool-timeout if the DB is briefly busy (the symptom we
-      // hit in 4.10.1: 4 images generated, Asset rows saved, but the merge
-      // into workflow.graph failed with P2024 and node showed 1 image after
-      // refresh). Up to 3 attempts with exponential backoff. Pure UPDATE so
+      // Retry loop for the graph persist. Serialised per workflow (withGraphLock)
+      // and done as a plain read-then-update — NOT an interactive transaction —
+      // so we never hold the workflow row lock open across a serverless
+      // suspension. Up to 3 attempts with exponential backoff. Pure UPDATE so
       // retrying is safe — idempotent by node id.
       const MAX_ATTEMPTS = 3;
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
-          await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-            const wf = await tx.workflow.findUnique({
+          await withGraphLock(state.ctx.workflowId!, async () => {
+            const wf = await prisma.workflow.findUnique({
               where: { id: state.ctx.workflowId! },
               select: { graph: true },
             });
@@ -360,7 +375,7 @@ async function executeOne(
                 ? { results: result.results }
                 : { results: undefined }),
             };
-            await tx.workflow.update({
+            await prisma.workflow.update({
               where: { id: state.ctx.workflowId! },
               data: { graph: { ...g, nodes: nodesArr } as never },
             });
