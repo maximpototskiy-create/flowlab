@@ -1,18 +1,25 @@
 // src/lib/prisma.ts
-// Prisma client singleton, configured for Supabase Transaction Pooler.
+// Prisma client singleton, configured for Supabase Transaction Pooler (port 6543).
 //
-// Key fixes:
+// Key points:
 // 1. Singleton via globalThis — survives module re-evaluation in dev hot-reload.
-// 2. Disable prepared statements via URL params — transaction pooler (port 6543)
-//    doesn't support them, causing "prepared statement already exists" errors (code 42P05).
-// 3. connection_limit=3 — was 1, but Supabase official docs literally say
-//    "set connection_limit=1 AND GRADUALLY INCREASE IF NECESSARY". Reality:
-//    we have `after()` background jobs in /api/runs/start that hold a connection
-//    for 30-180s while waiting on fal.ai. With limit=1, every other request
-//    (dashboard, page loads, polling) waits the full pool_timeout and then
-//    500s. Raising to 3 makes background+foreground+polling coexist.
-//    Supabase pooler still multiplexes server-side; we're not making 3 real
-//    db connections, just 3 slots into the pooler.
+// 2. Disable prepared statements via URL params — the transaction pooler doesn't
+//    preserve session state, so cached prepared statements collide (code 42P05).
+// 3. connection_limit=1 — this is the CORRECT value for a transaction pooler in
+//    serverless, and reverts a bad bump to 15 that caused a site-wide outage.
+//    Why 1: each Vercel lambda instance gets its own Prisma pool. Supavisor (the
+//    pooler) only has a small fixed pool of REAL Postgres connections (default
+//    15). When many instances each demand several connections at once — the
+//    Brand Assets node fires one /api/brand-assets/check per asset (dozens at a
+//    time), plus run-status polling, plus a running generation — the pooler's
+//    real-PG pool stays saturated past its 60s checkout timeout and every query
+//    fails with FATAL (ECHECKOUTTIMEOUT), cascading to all routes.
+//    With limit=1 each lambda holds at most one connection, so peak concurrent
+//    transactions ≈ peak concurrent lambdas (observed ≤ 8) — comfortably under
+//    the pooler's pool. The pooler multiplexes; we don't need a big client pool.
+//    Long background work (generations) runs on Inngest in its own invocations,
+//    so request handlers no longer hold a connection across a long external call
+//    — which was the original (now obsolete) reason the limit had been raised.
 
 import { PrismaClient } from "@prisma/client";
 
@@ -25,17 +32,15 @@ function buildDatabaseUrl(): string | undefined {
     // Force-set the parameters Prisma needs for pgBouncer transaction mode.
     // These override whatever is already there.
     u.searchParams.set("pgbouncer", "true");
-    // Raised from 1 → 3 to handle long-running `after()` background jobs that
-    // would otherwise starve all other requests. Supavisor (pgBouncer) still
-    // multiplexes server-side, so we're not actually opening 3 PG sessions —
-    // just allowing 3 concurrent pooler clients per lambda instance.
-    // Symptom this fixes: dashboard/workflow pages returning 500 with
-    // "P2024: Timed out fetching a new connection from the connection pool"
-    // while a long generation is running.
-    u.searchParams.set("connection_limit", "15");
-    // pool_timeout: how long a query waits for a free connection before P2024.
-    // Bumped to 15s so brief spikes (polling + a page load + a running
-    // generation) queue instead of erroring out with a 500.
+    // One connection per serverless instance. Raising this does NOT help — the
+    // bottleneck is the pooler's server-side pool of real Postgres connections,
+    // not the client pool — and it actively hurts: a high limit lets a handful
+    // of instances drain the pooler, producing FATAL (ECHECKOUTTIMEOUT) for
+    // everyone. The pooler multiplexes, so 1 is the right value here.
+    u.searchParams.set("connection_limit", "1");
+    // pool_timeout: how long a query waits for a free client-pool slot before
+    // P2024. With limit=1 and sequential queries per request this is rarely hit;
+    // kept generous so brief spikes queue instead of erroring.
     u.searchParams.set("pool_timeout", "15");
     // Disable Prisma's prepared statement caching — pgBouncer transaction mode
     // doesn't preserve session state between queries, so cached statements collide.

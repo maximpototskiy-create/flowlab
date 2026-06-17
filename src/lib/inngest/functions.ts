@@ -17,7 +17,10 @@ export const runWorkflowFn = inngest.createFunction(
     // the 50 nodes inside one run are parallelised in-process by the executor,
     // and Inngest sees the whole run as a single function). This is a global
     // safety valve, not a per-user throttle: it protects the Postgres pool
-    // (connection_limit=15 in prisma.ts) and fal.ai / TwelveLabs rate limits.
+    // (connection_limit=1 per instance in prisma.ts — the pooler multiplexes) and
+    // fal.ai / TwelveLabs rate limits. With limit=1, this concurrency cap plus the
+    // request lambdas must stay under Supavisor's real-PG pool (~15): 5 runs + a
+    // handful of request instances ≈ well under it.
     // MUST be <= the Inngest plan's concurrency limit, otherwise the dashboard
     // warns and clamps it. Free plan = 5. Set INNGEST_CONCURRENCY in env to
     // raise it after upgrading the plan (and pair with a bigger DB pool). A
