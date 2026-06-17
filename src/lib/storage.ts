@@ -29,6 +29,12 @@ export async function ensureBucket() {
   await supa.storage.createBucket(BUCKET, { public: false, fileSizeLimit: LIMIT });
 }
 
+/** Best-effort delete of a stored object (used when removing an asset). */
+export async function deleteObject(storagePath: string): Promise<void> {
+  const supa = adminClient();
+  await supa.storage.from(BUCKET).remove([storagePath]);
+}
+
 /** Create a one-time signed UPLOAD url so the browser can PUT a file
  *  DIRECTLY into Supabase Storage, bypassing our serverless route (and its
  *  ~4.5MB request-body limit). Server uses the service-role key to authorise;

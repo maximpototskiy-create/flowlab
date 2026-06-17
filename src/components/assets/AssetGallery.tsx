@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, Download, X, Image as ImageIcon, Video, Music, FileText } from "lucide-react";
+import { Search, Download, X, Image as ImageIcon, Video, Music, FileText, Trash2, Loader2 } from "lucide-react";
 import type { AssetItem, FilterOption } from "@/lib/assetsQuery";
 import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
@@ -300,7 +300,7 @@ export default function AssetGallery({
       )}
 
       {/* ── Lightbox ── */}
-      {lightbox && <Lightbox asset={lightbox} onClose={() => setLightbox(null)} />}
+      {lightbox && <Lightbox asset={lightbox} onClose={() => setLightbox(null)} onDeleted={() => { setLightbox(null); router.refresh(); }} />}
     </div>
   );
 }
@@ -399,8 +399,20 @@ function LazyVideoThumb({ src }: { src: string }) {
   );
 }
 
-function Lightbox({ asset, onClose }: { asset: AssetItem; onClose: () => void }) {
+function Lightbox({ asset, onClose, onDeleted }: { asset: AssetItem; onClose: () => void; onDeleted: () => void }) {
   const ek = effectiveKind(asset);
+  const [deleting, setDeleting] = useState(false);
+  const canDelete = asset.source === "generated" || asset.source === "upload";
+  const doDelete = async () => {
+    if (!window.confirm("Delete this asset permanently? It will be removed from the site.")) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/assets?id=${encodeURIComponent(asset.id)}`, { method: "DELETE" });
+      if (res.ok) { onDeleted(); return; }
+      window.alert("Delete failed.");
+    } catch { window.alert("Delete failed."); }
+    setDeleting(false);
+  };
   return (
     <div
       className="fixed inset-0 z-[800] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
@@ -465,6 +477,15 @@ function Lightbox({ asset, onClose }: { asset: AssetItem; onClose: () => void })
             >
               <Download size={13} /> Download
             </a>
+            {canDelete && (
+              <button
+                onClick={doDelete}
+                disabled={deleting}
+                className="flex items-center justify-center gap-2 border border-red-500/40 text-red-400 hover:bg-red-600 hover:text-white font-medium text-[12px] py-2 rounded-md transition disabled:opacity-50"
+              >
+                {deleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Delete permanently
+              </button>
+            )}
           </div>
         </div>
       </div>

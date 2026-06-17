@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Play, Pause } from "lucide-react";
+import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Play, Pause, Trash2 } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
 import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
@@ -233,6 +233,20 @@ export default function AssetDrawer({
   const [durs, setDurs] = useState<Record<string, string>>({});
   const fmtDur = (s: number) => { if (!isFinite(s) || s <= 0) return ""; const m = Math.floor(s / 60), ss = Math.round(s % 60); return `${m}:${String(ss).padStart(2, "0")}`; };
   const noteDur = (url: string, sec: number) => { const f = fmtDur(sec); if (f) setDurs((p) => (p[url] ? p : { ...p, [url]: f })); };
+  // Delete a generated/uploaded asset (our DB rows only — not fal or curated
+  // library items). Removes it from the site (DB row + storage) and the list.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deleteAsset = async (a: AssetItem) => {
+    if (isFal || source !== "generated" || !a.id) return;
+    if (!window.confirm("Delete this asset permanently? It will be removed from the site.")) return;
+    setDeletingId(a.id);
+    try {
+      const res = await fetch(`/api/assets?id=${encodeURIComponent(a.id)}`, { method: "DELETE" });
+      if (res.ok) setAssets((prev) => prev.filter((x) => x.id !== a.id));
+      else window.alert("Delete failed.");
+    } catch { window.alert("Delete failed."); }
+    finally { setDeletingId(null); }
+  };
   // Bucket an asset into a standard aspect ratio from its measured pixel size.
   // Returns null until dimensions are known (probed lazily + eagerly below).
   const aspectBucket = (url: string): string | null => {
@@ -642,6 +656,15 @@ export default function AssetDrawer({
                 <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/50 text-[7px] uppercase text-white/80">
                   {a.kind}
                 </span>
+                {source === "generated" && !isFal && a.id && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); void deleteAsset(a); }}
+                    title="Delete asset permanently"
+                    className="absolute top-1 right-1 w-6 h-6 grid place-items-center rounded-full bg-black/70 text-white/90 hover:bg-red-600 opacity-0 group-hover:opacity-100 transition z-10"
+                  >
+                    {deletingId === a.id ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                  </button>
+                )}
                 {extOf(a.cdnUrl) && a.kind !== "video" && a.kind !== "audio" && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[7px] text-white/70">{extOf(a.cdnUrl)}</span>}
                 {durs[a.cdnUrl] && (a.kind === "video" || a.kind === "audio") && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[7px] text-white/80">{durs[a.cdnUrl]}</span>}
                 {dims[a.cdnUrl] && <span className="absolute bottom-1 right-1 px-1 rounded bg-black/60 text-[7px] text-white/70">{dims[a.cdnUrl]}</span>}
