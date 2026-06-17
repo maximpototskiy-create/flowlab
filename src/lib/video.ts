@@ -375,7 +375,14 @@ function detectMarkers(
   // the centroid.
   const wDG = (_r: number, g: number, _b: number) => darkMax - g;
   const minPx = Math.max(20, 0.0006 * bw * bh);
-  const qw = Math.round(0.5 * bw), qh = Math.round(0.5 * bh);
+  // Corner search windows = the OUTER 42% of each side, NOT the full half. A
+  // dense marker pattern can have a large marker near the screen CENTRE (e.g. an
+  // asymmetry/orientation mark); at half-size the quadrants meet at the centre
+  // and that central marker, being large, gets picked as a "corner", skewing the
+  // whole fit. Shrinking to 0.42 leaves a cross-shaped gap in the middle so a
+  // central marker is excluded, while true corner markers (hard against the
+  // corners) stay well inside their window. Sparse templates are unaffected.
+  const qw = Math.round(0.42 * bw), qh = Math.round(0.42 * bh);
   const tl = blobCentroidCompact(data, W, ch, tDG, wDG, bx0, by0, bx0 + qw, by0 + qh, minPx, 0.45);
   const tr = blobCentroidCompact(data, W, ch, tDG, wDG, bx1 - qw, by0, bx1, by0 + qh, minPx, 0.45);
   const br = blobCentroidCompact(data, W, ch, tDG, wDG, bx1 - qw, by1 - qh, bx1, by1, minPx, 0.45);
@@ -495,7 +502,7 @@ function detectDarkGreenBlobs(
 // can fall back to the plain 4-corner fit.
 function screenFromGrid(
   cents: [Pt, Pt, Pt, Pt], blobs: Pt[], calibTMPL: Pt[], bbox: [number, number, number, number],
-  seedH?: number[] | null,
+  seedH?: number[] | null, interiorTmpl: Pt[] = INTERIOR_TMPL,
 ): { quad: [Pt, Pt, Pt, Pt]; H: number[] } | null {
   if (blobs.length < 8) return null;
   const H0 = seedH ?? solveHomography(calibTMPL, cents);
@@ -504,7 +511,6 @@ function screenFromGrid(
     return [(H0[0] * p[0] + H0[1] * p[1] + H0[2]) / w, (H0[3] * p[0] + H0[4] * p[1] + H0[5]) / w];
   };
   const sp = Math.hypot(cents[1][0] - cents[0][0], cents[1][1] - cents[0][1]) || (bbox[2] - bbox[0]); // ~screen width px
-  const tol = 0.085 * sp;
   // Match ALL template points (4 corners + interior grid) to detected blobs via
   // the H0 prediction. With a temporal seed (previous frame's H), the prediction
   // is correct even when a finger covers a corner — the covered point simply
@@ -512,12 +518,24 @@ function screenFromGrid(
   const used = new Array(blobs.length).fill(false);
   let src: Pt[] = [];
   let dst: Pt[] = [];
-  const allTmpl: Pt[] = [calibTMPL[0], calibTMPL[1], calibTMPL[2], calibTMPL[3], ...INTERIOR_TMPL];
-  for (const tp of allTmpl) {
-    const pp = proj0(tp);
+  const allTmpl: Pt[] = [calibTMPL[0], calibTMPL[1], calibTMPL[2], calibTMPL[3], ...interiorTmpl];
+  const projected = allTmpl.map(proj0);
+  // Adaptive match radius: never match a template point across more than ~half
+  // the spacing to its nearest neighbour, so a DENSE marker grid can't snap a
+  // template point onto an ADJACENT marker (which silently corrupts the fit).
+  // Sparse templates keep the generous radius.
+  const nn: number[] = [];
+  for (let a = 0; a < projected.length; a++) {
+    let bd = Infinity;
+    for (let b = 0; b < projected.length; b++) { if (a === b) continue; const d = Math.hypot(projected[a][0] - projected[b][0], projected[a][1] - projected[b][1]); if (d < bd) bd = d; }
+    if (isFinite(bd)) nn.push(bd);
+  }
+  const tol = Math.min(0.085 * sp, nn.length ? 0.45 * median(nn) : 0.085 * sp);
+  for (let t = 0; t < allTmpl.length; t++) {
+    const pp = projected[t];
     let bi = -1, bd = Infinity;
     for (let k = 0; k < blobs.length; k++) { if (used[k]) continue; const d = Math.hypot(blobs[k][0] - pp[0], blobs[k][1] - pp[1]); if (d < bd) { bd = d; bi = k; } }
-    if (bi >= 0 && bd < tol) { used[bi] = true; src.push(tp); dst.push(blobs[bi]); }
+    if (bi >= 0 && bd < tol) { used[bi] = true; src.push(allTmpl[t]); dst.push(blobs[bi]); }
   }
   if (src.length < 6) return null; // not a grid template — use the 4-corner fit
   let H = solveHomographyLSQ(src, dst);
@@ -818,6 +836,46 @@ export async function compositeGreenScreen(opts: {
     for (let i = 0; i < sizes.length; i++) { const bb = boxes[i]; if (bb && _baseS > 0 && sizes[i] > 0.6 * _baseS) { _eh.push(bb[3] - bb[1]); _ew.push(bb[2] - bb[0]); } }
     const expH = _eh.length ? median(_eh) : 0;
     const expW = _ew.length ? median(_ew) : 0;
+    // ── Self-calibrating interior template ────────────────────────────────
+    // The built-in INTERIOR_TMPL only matches the original sparse marker sheet.
+    // A denser or differently-laid-out marker pattern, matched against it, snaps
+    // template points onto the WRONG markers and the homography fit goes wild
+    // (diagonal smearing on busy frames). Instead LEARN this clip's marker layout
+    // from its cleanest full-green frame: map every detected marker into
+    // normalized screen coords via the inverse 4-corner homography, drop the
+    // corners, and use the rest as the interior template for every frame.
+    // Pattern-agnostic; falls back to INTERIOR_TMPL when no clean frame exists.
+    let interiorTmpl: Pt[] = INTERIOR_TMPL;
+    {
+      let calI = -1, calBlobs = -1;
+      for (let i = 0; i < cents.length; i++) {
+        if (!cents[i] || !boxes[i]) continue;
+        if (_baseS > 0 && sizes[i] < 0.9 * _baseS) continue; // full (unoccluded) green only
+        const nb = allBlobs[i].length;
+        if (nb > calBlobs) { calBlobs = nb; calI = i; }
+      }
+      if (calI >= 0 && calBlobs >= 8) {
+        const Hpx2n = solveHomography(cents[calI]!, calibTMPL); // px -> normalized
+        const toN = (p: Pt): Pt => {
+          const w = Hpx2n[6] * p[0] + Hpx2n[7] * p[1] + Hpx2n[8];
+          return [(Hpx2n[0] * p[0] + Hpx2n[1] * p[1] + Hpx2n[2]) / w, (Hpx2n[3] * p[0] + Hpx2n[4] * p[1] + Hpx2n[5]) / w];
+        };
+        const derived: Pt[] = [];
+        for (const b of allBlobs[calI]) {
+          const n = toN(b);
+          if (!isFinite(n[0]) || !isFinite(n[1])) continue;
+          if (n[0] < 0.05 || n[0] > 0.95 || n[1] < 0.03 || n[1] > 0.97) continue; // inside the screen
+          if (calibTMPL.some((c) => Math.hypot(c[0] - n[0], c[1] - n[1]) < 0.06)) continue; // skip the 4 corners
+          derived.push(n);
+        }
+        // Use it only if it's a well-formed, sufficiently dense, spread-out set.
+        if (derived.length >= 6) {
+          let nx0 = Infinity, ny0 = Infinity, nx1 = -Infinity, ny1 = -Infinity;
+          for (const [x, y] of derived) { if (x < nx0) nx0 = x; if (x > nx1) nx1 = x; if (y < ny0) ny0 = y; if (y > ny1) ny1 = y; }
+          if (nx1 - nx0 > 0.3 && ny1 - ny0 > 0.3) interiorTmpl = derived;
+        }
+      }
+    }
     // Build per-frame quads: calibrated marker extrapolation (stable, blur-proof,
     // matches the screen extent), else the green-edge quad.
     const raw: GQuad[] = [];
@@ -833,10 +891,10 @@ export async function compositeGreenScreen(opts: {
         // markers refine the homography, the covered corner finds no blob and is
         // dropped, and ALL four corners are then reconstructed FROM THE PLANE —
         // so a covered corner moves rigidly with the rest instead of flying off.
-        let gr = screenFromGrid(cents[i]!, allBlobs[i], calibTMPL, boxes[i]!);
+        let gr = screenFromGrid(cents[i]!, allBlobs[i], calibTMPL, boxes[i]!, null, interiorTmpl);
         if (!gr) {
           const seed = prevQuad ? solveHomography(TMPL_CORNERS, prevQuad) : prevH;
-          if (seed) gr = screenFromGrid(cents[i]!, allBlobs[i], calibTMPL, boxes[i]!, seed);
+          if (seed) gr = screenFromGrid(cents[i]!, allBlobs[i], calibTMPL, boxes[i]!, seed, interiorTmpl);
         }
         // Reject a COLLAPSED fit. When the visible markers are clustered (a hand
         // covers part of the screen, and the finger even SPLITS the green into
@@ -947,7 +1005,7 @@ export async function compositeGreenScreen(opts: {
         const w = H[6] * p[0] + H[7] * p[1] + H[8];
         return [(H[0] * p[0] + H[1] * p[1] + H[2]) / w, (H[3] * p[0] + H[4] * p[1] + H[5]) / w];
       };
-      const allTmplPts: Pt[] = [calibTMPL[0], calibTMPL[1], calibTMPL[2], calibTMPL[3], ...INTERIOR_TMPL];
+      const allTmplPts: Pt[] = [calibTMPL[0], calibTMPL[1], calibTMPL[2], calibTMPL[3], ...interiorTmpl];
       // Frame-to-frame dot translation (median nearest-neighbour displacement),
       // used to carry the hold through frames where the grid fit can't track.
       const dotDX = new Array(Nr).fill(0), dotDY = new Array(Nr).fill(0);
