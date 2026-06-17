@@ -1247,7 +1247,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "screen", type: "any", label: "Screen content (image or video)" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "fill", scale_x: 1, scale_y: 1, matte_choke: 0, feather: 0, instructions: "" },
+    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "fill", scale_x: 1, scale_y: 1, matte_choke: 0, feather: 0, track_offset_x: 0, track_offset_y: 0, track_rotate: 0, track_keys: "", instructions: "" },
     fields: [
       { name: "key_color", label: "Green key color", type: "text", placeholder: "#00FF00" },
       {
@@ -1276,6 +1276,10 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "scale_y", label: "Screen scale Y", type: "slider", min: 0.5, max: 2, step: 0.05, unit: "×", help: "Scale the replacement content vertically on the screen. 1 = auto-fit. Tweak and re-run the node." },
       { name: "matte_choke", label: "Matte edge", type: "slider", min: -8, max: 8, step: 1, unit: "px", help: "Choke/spread the keyed edge. + spreads the content to cover a green fringe/halo at the screen border; − chokes it in if content bleeds onto fingers/bezel. 0 = off. Tweak and re-run." },
       { name: "feather", label: "Edge softness", type: "slider", min: 0, max: 8, step: 1, unit: "px", help: "Feather the keyed edge: blends the content into the original over this many px so the boundary is soft instead of a hard line. 0 = hard edge. Try 1–3 for a natural screen edge. Tweak and re-run." },
+      { name: "track_offset_x", label: "Track offset X", type: "slider", min: -150, max: 150, step: 1, unit: "px", help: "Nudge the tracked screen LEFT/RIGHT on every frame. Use when the whole track sits a bit off horizontally. For a one-moment jerk use keyframes instead." },
+      { name: "track_offset_y", label: "Track offset Y", type: "slider", min: -150, max: 150, step: 1, unit: "px", help: "Nudge the tracked screen UP/DOWN on every frame." },
+      { name: "track_rotate", label: "Track rotation", type: "slider", min: -15, max: 15, step: 0.5, unit: "°", help: "Rotate the tracked screen about its centre on every frame." },
+      { name: "track_keys", label: "Tracking keyframes (advanced)", type: "text", placeholder: '[{"t":0.5,"dx":20,"dy":-10}]', help: "Per-moment correction, Mocha-style. JSON array of keyframes: t = 0..1 (position in the clip), dx/dy = px, rot = deg. Linearly interpolated and ADDED to the offsets above; frames away from a key stay as the auto-track, so fixing one jerk doesn't move the rest. Leave empty if unused. (A scrub-and-set UI is coming to the editor.)" },
     ],
     quickFields: ["fit", "key_similarity"],
     primaryField: "instructions",

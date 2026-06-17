@@ -713,6 +713,13 @@ export async function compositeGreenScreen(opts: {
                        // green fringe), - chokes (pulls content in). 0 = off.
   feather?: number;    // soft matte edge in px: blends content<->original over the
                        // edge instead of a hard cut. 0 = hard. Applied after choke.
+  trackOffsetX?: number; // manual tracking correction: global px offset of the
+  trackOffsetY?: number; // tracked screen quad (all frames).
+  trackRotate?: number;  // global rotation (deg) of the quad about its centre.
+  // Keyframed correction (Mocha-style). t in 0..1 (fraction of the clip). Linearly
+  // interpolated per frame and ADDED to the global offset; frames between keys with
+  // zero correction stay exactly as the auto-track. dx/dy px, rot deg.
+  trackKeys?: { t: number; dx?: number; dy?: number; rot?: number }[];
 }): Promise<Buffer> {
   const fit = opts.fit ?? "fill";
   // Clamp the on-screen scale to a sane range so a stray value can't invert/blow up.
@@ -721,6 +728,17 @@ export async function compositeGreenScreen(opts: {
   const scaleY = clampScale(opts.scaleY);
   const matteChoke = Math.max(-8, Math.min(8, Math.round(opts.matteChoke && isFinite(opts.matteChoke) ? opts.matteChoke : 0)));
   const feather = Math.max(0, Math.min(8, Math.round(opts.feather && isFinite(opts.feather) ? opts.feather : 0)));
+  const gOffX = isFinite(Number(opts.trackOffsetX)) ? Number(opts.trackOffsetX) : 0;
+  const gOffY = isFinite(Number(opts.trackOffsetY)) ? Number(opts.trackOffsetY) : 0;
+  const gRot = Math.max(-30, Math.min(30, isFinite(Number(opts.trackRotate)) ? Number(opts.trackRotate) : 0));
+  const trackKeys = (Array.isArray(opts.trackKeys) ? opts.trackKeys : [])
+    .map((kf) => ({
+      t: Math.max(0, Math.min(1, Number(kf?.t) || 0)),
+      dx: Number(kf?.dx) || 0,
+      dy: Number(kf?.dy) || 0,
+      rot: Number(kf?.rot) || 0,
+    }))
+    .sort((a, b) => a.t - b.t);
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
@@ -1206,6 +1224,34 @@ export async function compositeGreenScreen(opts: {
     ]);
     const encStdin = enc.proc.stdin!;
     encStdin.on("error", () => {}); // swallow EPIPE if the encoder exits early
+    // ── Manual tracking correction per frame: global offset/rotation + linearly
+    // interpolated keyframes (Mocha-style). A frame whose interpolated correction
+    // is zero stays exactly as the auto-track, so fixing one moment via keyframes
+    // does not disturb the rest. Applied to the tracked screen quad in the loop.
+    const corrX = new Float32Array(nFrames), corrY = new Float32Array(nFrames), corrR = new Float32Array(nFrames);
+    for (let k = 0; k < nFrames; k++) {
+      let dx = gOffX, dy = gOffY, rot = gRot;
+      if (trackKeys.length) {
+        const t = nFrames > 1 ? k / (nFrames - 1) : 0;
+        let kdx: number, kdy: number, krot: number;
+        const first = trackKeys[0], lastK = trackKeys[trackKeys.length - 1];
+        if (t <= first.t) { kdx = first.dx; kdy = first.dy; krot = first.rot; }
+        else if (t >= lastK.t) { kdx = lastK.dx; kdy = lastK.dy; krot = lastK.rot; }
+        else {
+          kdx = 0; kdy = 0; krot = 0;
+          for (let j = 0; j < trackKeys.length - 1; j++) {
+            const a = trackKeys[j], b = trackKeys[j + 1];
+            if (t >= a.t && t <= b.t) {
+              const f = (t - a.t) / ((b.t - a.t) || 1e-6);
+              kdx = a.dx + (b.dx - a.dx) * f; kdy = a.dy + (b.dy - a.dy) * f; krot = a.rot + (b.rot - a.rot) * f;
+              break;
+            }
+          }
+        }
+        dx += kdx; dy += kdy; rot += krot;
+      }
+      corrX[k] = dx; corrY[k] = dy; corrR[k] = rot;
+    }
     const reader2 = openFrameStream(srcPath, frameSize);
     for (let k = 0; k < nFrames; k++) {
       const data = await reader2.next();
@@ -1226,7 +1272,21 @@ export async function compositeGreenScreen(opts: {
       } else {
         cD = stillContent!.data; cW = stillContent!.w; cH = stillContent!.h; cCh = stillContent!.ch;
       }
-      const q = sm[k];
+      let q = sm[k];
+      // Apply the manual tracking correction (offset + rotation about the quad
+      // centre) for this frame, so the whole replacement region moves with it.
+      {
+        const cdx = corrX[k], cdy = corrY[k], crot = corrR[k];
+        if (cdx !== 0 || cdy !== 0 || crot !== 0) {
+          const qx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
+          const qy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
+          const ca = Math.cos(crot * Math.PI / 180), sa = Math.sin(crot * Math.PI / 180);
+          q = q.map(([px, py]) => {
+            const rx = px - qx, ry = py - qy;
+            return [qx + rx * ca - ry * sa + cdx, qy + rx * sa + ry * ca + cdy] as Pt;
+          });
+        }
+      }
       // Default "fill": corner-pin the whole content onto the screen quad. The
       // homography handles the phone's tilt, so content authored at the phone's
       // aspect (UI screenshots) lands fully visible and undistorted — no crop.

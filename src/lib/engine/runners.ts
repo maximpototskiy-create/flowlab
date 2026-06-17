@@ -956,6 +956,13 @@ export async function runNode(
       const scaleY = Number(config.scale_y);
       const matteChoke = Number(config.matte_choke);
       const feather = Number(config.feather);
+      const trackOffsetX = Number(config.track_offset_x);
+      const trackOffsetY = Number(config.track_offset_y);
+      const trackRotate = Number(config.track_rotate);
+      let trackKeys: { t: number; dx?: number; dy?: number; rot?: number }[] = [];
+      if (typeof config.track_keys === "string" && config.track_keys.trim()) {
+        try { const parsed = JSON.parse(config.track_keys); if (Array.isArray(parsed)) trackKeys = parsed; } catch { /* ignore malformed keyframe JSON */ }
+      }
       const screenIsVideo = /\.(mp4|mov|webm|m4v|avi|mkv)(\?|#|$)/i.test(screen);
 
       const [srcResp, contentResp] = await Promise.all([fetch(sourceVideo), fetch(screen)]);
@@ -973,6 +980,10 @@ export async function runNode(
           scaleY: isFinite(scaleY) && scaleY > 0 ? scaleY : 1,
           matteChoke: isFinite(matteChoke) ? matteChoke : 0,
           feather: isFinite(feather) ? feather : 0,
+          trackOffsetX: isFinite(trackOffsetX) ? trackOffsetX : 0,
+          trackOffsetY: isFinite(trackOffsetY) ? trackOffsetY : 0,
+          trackRotate: isFinite(trackRotate) ? trackRotate : 0,
+          trackKeys,
         });
       } catch (e) {
         throw new Error(`Composite failed (ffmpeg): ${e instanceof Error ? e.message : String(e)}`);
