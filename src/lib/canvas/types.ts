@@ -1241,7 +1241,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     name: "Screen Replace",
     category: "video",
     icon: "smartphone",
-    description: "Replace a GREEN-SCREEN phone/device screen in a video with a connected image or video. The green area is auto-keyed and tracked per frame (position, scale, tilt/perspective), so the insert follows the screen as the phone moves; finger occlusions are kept for free.",
+    description: "Replace a green-screen phone/device screen with a connected image or video. Auto-keyed and tracked per frame; fingers stay on top.",
     inputs: [
       { name: "source_video", type: "video", label: "Source video (green screen)" },
       { name: "screen", type: "any", label: "Screen content (image or video)" },
