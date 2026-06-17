@@ -318,6 +318,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [binCategory, setBinCategory] = useState("all");
   const [binSub, setBinSub] = useState("all");
   const [binSort, setBinSort] = useState<"newest" | "oldest" | "az" | "za" | "kind" | "duration">("newest");
+  const [binAspect, setBinAspect] = useState<string>("all");
   const [brandQ, setBrandQ] = useState("");
   const [brands, setBrands] = useState<{ value: string; label: string }[]>([]);
   const [projects, setProjects] = useState<{ value: string; label: string }[]>([]);
@@ -377,6 +378,26 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [thumbTick, setThumbTick] = useState(0); // bumps when a filmstrip/waveform finishes
   const [dims, setDims] = useState<Record<string, string>>({}); // url → "1080×1920" (auto-detected)
   const noteDims = (url: string, w: number, h: number) => { if (w && h) setDims((p) => (p[url] ? p : { ...p, [url]: `${w}×${h}` })); };
+  // Eagerly measure media dimensions for the asset bins so the aspect-ratio
+  // filter can bucket assets even before their thumbnail scrolls into view.
+  useEffect(() => {
+    const els: HTMLMediaElement[] = [];
+    for (const a of [...library, ...brandLib]) {
+      if (dims[a.url]) continue;
+      if (a.kind === "image") {
+        const img = new Image();
+        img.onload = () => noteDims(a.url, img.naturalWidth, img.naturalHeight);
+        img.src = a.url;
+      } else if (a.kind === "video") {
+        const v = document.createElement("video");
+        v.preload = "metadata"; v.muted = true;
+        v.onloadedmetadata = () => noteDims(a.url, v.videoWidth, v.videoHeight);
+        v.src = a.url; els.push(v);
+      }
+    }
+    return () => { els.forEach((e) => { e.onloadedmetadata = null; e.src = ""; }); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [library, brandLib]);
   const requestFilmstrip = (url: string) => { if (!filmstripCache.has(url) && !filmstripPending.has(url)) makeFilmstrip(url).then(() => setThumbTick((v) => v + 1)); };
   const requestWave = (url: string) => { if (!wavePeaksCache.has(url) && !wavePending.has(url)) makeWavePeaks(url).then(() => setThumbTick((v) => v + 1)); };
   void thumbTick;
@@ -419,13 +440,30 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       : a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label));
   };
   const extOf = (url: string) => { const m = url.split("?")[0].match(/\.([a-z0-9]{2,4})$/i); return m ? m[1].toUpperCase() : ""; };
-  const mediaBin = sortBin(library.filter((a) => binFilter === "all" || a.kind === binFilter));
+  // Aspect-ratio bucket from the measured pixel size (audio always passes).
+  const aspectBucket = (url: string): string | null => {
+    const d = dims[url]; if (!d) return null;
+    const m = d.match(/(\d+)×(\d+)/); if (!m) return null;
+    const w = +m[1], h = +m[2]; if (!w || !h) return null;
+    const r = w / h;
+    const near = (t: number) => Math.abs(r - t) / t < 0.06;
+    if (near(1)) return "1:1";
+    if (near(4 / 5)) return "4:5";
+    if (near(9 / 16)) return "9:16";
+    if (near(16 / 9)) return "16:9";
+    if (near(3 / 4)) return "3:4";
+    if (near(2 / 3)) return "2:3";
+    return r < 1 ? "Portrait" : "Landscape";
+  };
+  const matchAspect = (a: EditorAsset) => binAspect === "all" || a.kind === "audio" || aspectBucket(a.url) === binAspect;
+  const mediaBin = sortBin(library.filter((a) => (binFilter === "all" || a.kind === binFilter) && matchAspect(a)));
   const brandQl = brandQ.trim().toLowerCase();
   const brandBin = sortBin(brandLib.filter((a) =>
     (!brandQl || a.label.toLowerCase().includes(brandQl) || (a.subpath || "").toLowerCase().includes(brandQl)) &&
     (binFilter === "all" || a.kind === binFilter) &&
     (binCategory === "all" || a.category === binCategory) &&
-    (binSub === "all" || (a.subpath || "").split("/")[0] === binSub)));
+    (binSub === "all" || (a.subpath || "").split("/")[0] === binSub) &&
+    matchAspect(a)));
   const audioBin = sortBin([...library, ...brandLib].filter((a) => a.kind === "audio"));
   const libSubs = binCategory === "all" ? [] : Array.from(new Set(brandLib.filter((a) => a.category === binCategory && a.subpath).map((a) => (a.subpath as string).split("/")[0]))).sort();
   const libCats = Array.from(new Set(brandLib.map((a) => a.category).filter((c): c is string => !!c)));
@@ -1404,9 +1442,14 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
               {(["all", "video", "image", "audio"] as const).map((f) => (
                 <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
               ))}
-              <select value={binSort} onChange={(e) => setBinSort(e.target.value as typeof binSort)} className="ml-auto bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
-                <option value="newest">Newest</option><option value="oldest">Oldest</option><option value="az">Name A–Z</option><option value="za">Name Z–A</option><option value="kind">Type</option><option value="duration">Duration</option>
-              </select>
+              <div className="ml-auto flex items-center gap-1">
+                <select value={binAspect} onChange={(e) => setBinAspect(e.target.value)} title="Aspect ratio" className="bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
+                  <option value="all">ratio</option><option value="1:1">1:1</option><option value="4:5">4:5</option><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="3:4">3:4</option><option value="2:3">2:3</option><option value="Portrait">portrait</option><option value="Landscape">landscape</option>
+                </select>
+                <select value={binSort} onChange={(e) => setBinSort(e.target.value as typeof binSort)} className="bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
+                  <option value="newest">Newest</option><option value="oldest">Oldest</option><option value="az">Name A–Z</option><option value="za">Name Z–A</option><option value="kind">Type</option><option value="duration">Duration</option>
+                </select>
+              </div>
             </div>
           </div>
           {assetGrid(mediaBin)}
@@ -1455,9 +1498,14 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
               {(["all", "video", "image", "audio"] as const).map((f) => (
                 <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
               ))}
-              <select value={binSort} onChange={(e) => setBinSort(e.target.value as typeof binSort)} className="ml-auto bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
-                <option value="newest">Newest</option><option value="oldest">Oldest</option><option value="az">Name A–Z</option><option value="za">Name Z–A</option><option value="kind">Type</option><option value="duration">Duration</option>
-              </select>
+              <div className="ml-auto flex items-center gap-1">
+                <select value={binAspect} onChange={(e) => setBinAspect(e.target.value)} title="Aspect ratio" className="bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
+                  <option value="all">ratio</option><option value="1:1">1:1</option><option value="4:5">4:5</option><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="3:4">3:4</option><option value="2:3">2:3</option><option value="Portrait">portrait</option><option value="Landscape">landscape</option>
+                </select>
+                <select value={binSort} onChange={(e) => setBinSort(e.target.value as typeof binSort)} className="bg-bg-card border border-border rounded px-1 py-0.5 text-fg-muted outline-none">
+                  <option value="newest">Newest</option><option value="oldest">Oldest</option><option value="az">Name A–Z</option><option value="za">Name Z–A</option><option value="kind">Type</option><option value="duration">Duration</option>
+                </select>
+              </div>
             </div>
           </div>
           {assetGrid(brandBin)}
