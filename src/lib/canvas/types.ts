@@ -914,11 +914,11 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
   // the automatic ctx.brandUiScreenshots injection — gives users explicit
   // control over which screenshots flow into a specific generation.
   brandAssets: {
-    name: "Brand Assets",
+    name: "Asset Library",
     category: "image",
     icon: "package",
     description:
-      "Pull UI screenshots from this brand's Brand Kit. Select which ones to forward as references for the next node.",
+      "Pick assets from this brand's library to forward as references for the next node. Filter by category and aspect ratio.",
     inputs: [],
     outputs: [{ name: "images", type: "image" }],
     defaults: {

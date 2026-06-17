@@ -18,6 +18,23 @@ import { Check, Package, Music, Video as VideoIcon , Play, Pause} from "lucide-r
 
 type Asset = { url: string; kind: string; category: string; label: string | null };
 
+// Aspect-ratio bucket from a measured "W×H" string (matches the asset drawer,
+// the /assets page and the editor — identical buckets/tolerance everywhere).
+function bucketFromDim(d: string | undefined): string | null {
+  if (!d) return null;
+  const m = d.match(/(\d+)×(\d+)/); if (!m) return null;
+  const w = +m[1], h = +m[2]; if (!w || !h) return null;
+  const r = w / h;
+  const near = (t: number) => Math.abs(r - t) / t < 0.06;
+  if (near(1)) return "1:1";
+  if (near(4 / 5)) return "4:5";
+  if (near(9 / 16)) return "9:16";
+  if (near(16 / 9)) return "16:9";
+  if (near(3 / 4)) return "3:4";
+  if (near(2 / 3)) return "2:3";
+  return r < 1 ? "Portrait" : "Landscape";
+}
+
 const CAT_LABEL: Record<string, string> = {
   logo: "Logo",
   ui: "UI",
@@ -67,6 +84,9 @@ export default function BrandAssetsPicker({
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("all");
+  const [aspect, setAspect] = useState<string>("all");
+  const [dims, setDims] = useState<Record<string, string>>({});
+  const noteDims = (url: string, w: number, h: number) => { if (w && h) setDims((p) => (p[url] ? p : { ...p, [url]: `${w}×${h}` })); };
 
   useEffect(() => {
     if (!brandId) {
@@ -100,14 +120,37 @@ export default function BrandAssetsPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assets]);
 
+  // Eagerly measure dimensions so the aspect-ratio filter can bucket assets
+  // even before their thumbnail scrolls into view (videos load metadata only).
+  useEffect(() => {
+    const els: HTMLMediaElement[] = [];
+    for (const a of assets ?? []) {
+      if (dims[a.url]) continue;
+      if (a.kind === "image") {
+        const img = new Image();
+        img.onload = () => noteDims(a.url, img.naturalWidth, img.naturalHeight);
+        img.src = a.url;
+      } else if (a.kind === "video") {
+        const v = document.createElement("video");
+        v.preload = "metadata"; v.muted = true;
+        v.onloadedmetadata = () => noteDims(a.url, v.videoWidth, v.videoHeight);
+        v.src = a.url; els.push(v);
+      }
+    }
+    return () => { els.forEach((e) => { e.onloadedmetadata = null; e.src = ""; }); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets]);
+
   const categories = useMemo(() => {
     const set = new Set((assets ?? []).map((a) => a.category));
     return ["all", ...Array.from(set)];
   }, [assets]);
 
   const visible = useMemo(
-    () => (filter === "all" ? assets ?? [] : (assets ?? []).filter((a) => a.category === filter)),
-    [assets, filter],
+    () => (assets ?? []).filter((a) =>
+      (filter === "all" || a.category === filter) &&
+      (aspect === "all" || a.kind === "audio" || bucketFromDim(dims[a.url]) === aspect)),
+    [assets, filter, aspect, dims],
   );
 
   function toggle(u: string) {
@@ -125,7 +168,7 @@ export default function BrandAssetsPicker({
   if (assets === null) {
     return (
       <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle border border-border rounded-md">
-        Loading brand assets…
+        Loading assets…
       </div>
     );
   }
@@ -188,6 +231,27 @@ export default function BrandAssetsPicker({
         ))}
       </div>
 
+      <div className="flex items-center gap-1.5">
+        <span className="text-[9px] uppercase tracking-wider text-fg-subtle shrink-0">Ratio</span>
+        <select
+          value={aspect}
+          onChange={(e) => { e.stopPropagation(); setAspect(e.target.value); }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="flex-1 bg-bg border border-border rounded px-1 py-0.5 text-[10px] text-fg-muted outline-none nodrag"
+        >
+          <option value="all">All ratios</option>
+          <option value="1:1">1:1 · square</option>
+          <option value="4:5">4:5 · portrait</option>
+          <option value="9:16">9:16 · story</option>
+          <option value="16:9">16:9 · wide</option>
+          <option value="3:4">3:4</option>
+          <option value="2:3">2:3</option>
+          <option value="Portrait">Other portrait</option>
+          <option value="Landscape">Other landscape</option>
+        </select>
+      </div>
+
       <div className="flex items-center justify-between text-[10px] text-fg-muted">
         <span>{noneSelected ? `All ${allUrls.length} will be used` : `${selected.length} selected`}</span>
         <div className="flex gap-2">
@@ -237,11 +301,11 @@ export default function BrandAssetsPicker({
             >
               {a.kind === "image" && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={a.url} alt="" className="w-full h-full object-cover" loading="lazy" draggable={false} />
+                <img src={a.url} alt="" onLoad={(e) => noteDims(a.url, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className="w-full h-full object-cover" loading="lazy" draggable={false} />
               )}
               {a.kind === "video" && (
                 <div className="w-full h-full flex items-center justify-center bg-black">
-                  <video src={a.url} className="w-full h-full object-cover pointer-events-none" muted loop preload="metadata" />
+                  <video src={a.url} onLoadedMetadata={(e) => noteDims(a.url, e.currentTarget.videoWidth, e.currentTarget.videoHeight)} className="w-full h-full object-cover pointer-events-none" muted loop preload="metadata" />
                   <VideoIcon size={14} className="absolute text-white/80 pointer-events-none" />
                 </div>
               )}
@@ -259,6 +323,7 @@ export default function BrandAssetsPicker({
               <span className="absolute top-1 left-1 px-1 rounded bg-black/55 text-[7px] uppercase text-white/85">
                 {CAT_LABEL[a.category] ?? a.category}
               </span>
+              {dims[a.url] && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/55 text-[7px] text-white/75">{dims[a.url]}</span>}
               {isOn && (
                 <div className="absolute top-1 right-1 w-4 h-4 bg-brand rounded-full flex items-center justify-center">
                   <Check size={9} className="text-white" />
