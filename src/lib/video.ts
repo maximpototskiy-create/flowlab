@@ -711,6 +711,8 @@ export async function compositeGreenScreen(opts: {
   scaleY?: number; // >1 zooms content in/bigger, <1 smaller). Fine-tunes fit.
   matteChoke?: number; // morphological matte edge in px: + spreads (content covers
                        // green fringe), - chokes (pulls content in). 0 = off.
+  feather?: number;    // soft matte edge in px: blends content<->original over the
+                       // edge instead of a hard cut. 0 = hard. Applied after choke.
 }): Promise<Buffer> {
   const fit = opts.fit ?? "fill";
   // Clamp the on-screen scale to a sane range so a stray value can't invert/blow up.
@@ -718,6 +720,7 @@ export async function compositeGreenScreen(opts: {
   const scaleX = clampScale(opts.scaleX);
   const scaleY = clampScale(opts.scaleY);
   const matteChoke = Math.max(-8, Math.min(8, Math.round(opts.matteChoke && isFinite(opts.matteChoke) ? opts.matteChoke : 0)));
+  const feather = Math.max(0, Math.min(8, Math.round(opts.feather && isFinite(opts.feather) ? opts.feather : 0)));
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
@@ -1333,10 +1336,38 @@ export async function compositeGreenScreen(opts: {
         }
         matte = m2;
       }
+      // Feather: box-blur the (binary) matte into a 0..255 alpha so the content↔
+      // original boundary ramps over ~2*feather px instead of a hard 1px cut.
+      // feather=0 → hard matte. Separable: horizontal row-sum, then vertical sum.
+      let alpha: Uint8Array;
+      if (feather > 0) {
+        const F = feather, area = (2 * F + 1) * (2 * F + 1);
+        const rowSum = new Uint16Array(bw * bh);
+        for (let y = 0; y < bh; y++) {
+          const mr = y * bw;
+          for (let x = 0; x < bw; x++) {
+            let s = 0; const lo = Math.max(0, x - F), hi = Math.min(bw - 1, x + F);
+            for (let xx = lo; xx <= hi; xx++) s += matte[mr + xx];
+            rowSum[mr + x] = s;
+          }
+        }
+        alpha = new Uint8Array(bw * bh);
+        for (let x = 0; x < bw; x++) {
+          for (let y = 0; y < bh; y++) {
+            let s = 0; const lo = Math.max(0, y - F), hi = Math.min(bh - 1, y + F);
+            for (let yy = lo; yy <= hi; yy++) s += rowSum[yy * bw + x];
+            alpha[y * bw + x] = Math.round((s / area) * 255);
+          }
+        }
+      } else {
+        alpha = new Uint8Array(bw * bh);
+        for (let p = 0; p < alpha.length; p++) alpha[p] = matte[p] ? 255 : 0;
+      }
       for (let y = y0; y <= y1; y++) {
         const mr = (y - y0) * bw;
         for (let x = x0; x <= x1; x++) {
-          if (!matte[mr + (x - x0)]) continue;
+          const af8 = alpha[mr + (x - x0)];
+          if (af8 === 0) continue;
           const i = (y * W + x) * ch;
           let a0 = 0, a1 = 0, a2 = 0;
           for (let sy = 0; sy < ss; sy++) {
@@ -1356,9 +1387,15 @@ export async function compositeGreenScreen(opts: {
               a2 += cD[o00 + 2] * w00 + cD[o10 + 2] * w10 + cD[o01 + 2] * w01 + cD[o11 + 2] * w11;
             }
           }
-          out[i] = Math.round(a0 * norm);
-          out[i + 1] = Math.round(a1 * norm);
-          out[i + 2] = Math.round(a2 * norm);
+          const cr = a0 * norm, cg = a1 * norm, cb = a2 * norm;
+          if (af8 >= 255) {
+            out[i] = Math.round(cr); out[i + 1] = Math.round(cg); out[i + 2] = Math.round(cb);
+          } else {
+            const fa = af8 / 255, fi = 1 - fa;
+            out[i] = Math.round(cr * fa + data[i] * fi);
+            out[i + 1] = Math.round(cg * fa + data[i + 1] * fi);
+            out[i + 2] = Math.round(cb * fa + data[i + 2] * fi);
+          }
         }
       }
       // Push the composited frame straight to the encoder as raw RGB — no PNG

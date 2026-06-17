@@ -1247,7 +1247,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "screen", type: "any", label: "Screen content (image or video)" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "fill", scale_x: 1, scale_y: 1, matte_choke: 0, instructions: "" },
+    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "fill", scale_x: 1, scale_y: 1, matte_choke: 0, feather: 0, instructions: "" },
     fields: [
       { name: "key_color", label: "Green key color", type: "text", placeholder: "#00FF00" },
       {
@@ -1275,6 +1275,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "scale_x", label: "Screen scale X", type: "slider", min: 0.5, max: 2, step: 0.05, unit: "×", help: "Scale the replacement content horizontally on the screen. 1 = auto-fit; >1 zooms in (crops edges), <1 shrinks. Tweak and re-run the node." },
       { name: "scale_y", label: "Screen scale Y", type: "slider", min: 0.5, max: 2, step: 0.05, unit: "×", help: "Scale the replacement content vertically on the screen. 1 = auto-fit. Tweak and re-run the node." },
       { name: "matte_choke", label: "Matte edge", type: "slider", min: -8, max: 8, step: 1, unit: "px", help: "Choke/spread the keyed edge. + spreads the content to cover a green fringe/halo at the screen border; − chokes it in if content bleeds onto fingers/bezel. 0 = off. Tweak and re-run." },
+      { name: "feather", label: "Edge softness", type: "slider", min: 0, max: 8, step: 1, unit: "px", help: "Feather the keyed edge: blends the content into the original over this many px so the boundary is soft instead of a hard line. 0 = hard edge. Try 1–3 for a natural screen edge. Tweak and re-run." },
     ],
     quickFields: ["fit", "key_similarity"],
     primaryField: "instructions",
