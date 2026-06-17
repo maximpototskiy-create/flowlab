@@ -80,15 +80,17 @@ export default function Lightbox({
       className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center p-2"
       onClick={onClose}
     >
-      {/* Top gradient scrim — keeps the controls legible over any media without
-          looking like they float on top of the content. */}
-      <div className="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-black/70 to-transparent z-10 pointer-events-none" />
-      {/* Top-right controls: fullscreen · download · close */}
-      <div className="absolute top-3 right-3 flex items-center gap-2 z-20">
+      {/* Controls — one compact rounded toolbar at the top-right. It carries its
+          own solid contrast, so it reads cleanly over media of ANY size/shape
+          (no full-width gradient band stretching across the empty letterbox). */}
+      <div
+        className="absolute top-3 right-3 flex items-center gap-0.5 bg-black/55 backdrop-blur rounded-full p-1 z-20"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); goFullscreen(); }}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-white text-[12px] backdrop-blur"
+          onClick={goFullscreen}
+          className="flex items-center gap-1.5 pl-3 pr-3.5 py-1.5 rounded-full hover:bg-white/15 text-white text-[12px]"
           title="True fullscreen"
         >
           <Maximize2 size={14} />
@@ -99,8 +101,7 @@ export default function Lightbox({
           download={filename}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-white text-[12px] backdrop-blur"
+          className="flex items-center gap-1.5 pl-3 pr-3.5 py-1.5 rounded-full hover:bg-white/15 text-white text-[12px]"
           title="Download"
         >
           <Download size={14} />
@@ -109,7 +110,7 @@ export default function Lightbox({
         <button
           type="button"
           onClick={onClose}
-          className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center backdrop-blur"
+          className="w-8 h-8 rounded-full hover:bg-white/15 text-white flex items-center justify-center"
           title="Close (Esc)"
         >
           <X size={18} />
