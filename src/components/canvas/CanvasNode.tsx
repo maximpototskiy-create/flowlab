@@ -40,6 +40,7 @@ function CanvasNodeImpl({
   node,
   edges,
   resolvedInputs,
+  sourceVideoUrl,
   isSelected,
   isRunning,
   onPointerDown,
@@ -65,6 +66,7 @@ function CanvasNodeImpl({
    * so users can see live previews of upstream-generated prompts in the input
    * field before clicking Run. Image/video URLs are NOT included here. */
   resolvedInputs: Record<string, string>;
+  sourceVideoUrl?: string;
   isSelected: boolean;
   isRunning: boolean;
   onPointerDown: (e: React.PointerEvent) => void;
@@ -653,7 +655,7 @@ function CanvasNodeImpl({
             button — the cause of the "image doubled" UX bug. Skip it for
             those node types; the upload preview IS the output preview. */}
         {/* Screen Replace: open the interactive track corrector (drag → keyframes). */}
-        {node.type === "screenReplace" && resolvedInputs["source_video"] && (
+        {node.type === "screenReplace" && sourceVideoUrl && (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); setTrackOpen(true); }}
@@ -1025,9 +1027,9 @@ function CanvasNodeImpl({
       {/* Screen Replace: interactive track corrector. Renders fixed (escapes the
           canvas transform). Source = the connected source_video; saves keyframes
           back into config.track_keys, consumed by the compositor on the next run. */}
-      {trackOpen && node.type === "screenReplace" && resolvedInputs["source_video"] && (
+      {trackOpen && node.type === "screenReplace" && sourceVideoUrl && (
         <TrackEditor
-          source={resolvedInputs["source_video"]}
+          source={sourceVideoUrl}
           value={parseTrackKeys(node.config.track_keys)}
           onSave={(keys) => onConfigChange("track_keys", JSON.stringify(keys))}
           onClose={() => setTrackOpen(false)}

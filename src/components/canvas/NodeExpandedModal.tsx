@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Play, Expand } from "lucide-react";
+import { X, Play, Expand, Move } from "lucide-react";
 import { NODE_TYPES, type FieldDef, type GraphNode } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import Lightbox from "./Lightbox";
 import SceneBuilder, { type Scene } from "./SceneBuilder";
 import VideoGenControls from "./VideoGenControls";
+import TrackEditor, { type TrackKey } from "./TrackEditor";
 
 export default function NodeExpandedModal({
   node,
@@ -15,14 +16,21 @@ export default function NodeExpandedModal({
   onClose,
   onConfigChange,
   onRun,
+  sourceVideoUrl,
 }: {
   node: GraphNode;
   isRunning: boolean;
   onClose: () => void;
   onConfigChange: (key: string, value: unknown) => void;
   onRun: () => void;
+  sourceVideoUrl?: string;
 }) {
   const [mounted, setMounted] = useState(false);
+  const [trackOpen, setTrackOpen] = useState(false);
+  const parseTrackKeys = (v: unknown): TrackKey[] => {
+    if (typeof v !== "string" || !v.trim()) return [];
+    try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch { return []; }
+  };
   useEffect(() => setMounted(true), []);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -160,6 +168,18 @@ export default function NodeExpandedModal({
         <div className="w-full md:w-72 bg-bg-subtle p-5 overflow-y-auto flex flex-col">
           <h3 className="text-[13px] font-medium text-fg mb-4">Settings</h3>
 
+          {node.type === "screenReplace" && (
+            <button
+              type="button"
+              onClick={() => setTrackOpen(true)}
+              disabled={!sourceVideoUrl}
+              className="mb-4 inline-flex items-center justify-center gap-1.5 w-full px-3 py-2 rounded-md bg-brand text-white hover:bg-brand/90 text-[12px] font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              title={sourceVideoUrl ? "Drag the screen to fix the track, set keyframes" : "Connect a source video first"}
+            >
+              <Move size={14} /> Adjust track visually
+            </button>
+          )}
+
           <div className="flex-1 space-y-4">
             {node.type === "videoGen" ? (
               <>
@@ -201,7 +221,20 @@ export default function NodeExpandedModal({
     </div>
   );
 
-  return createPortal(content, document.body);
+  return createPortal(
+    <>
+      {content}
+      {trackOpen && node.type === "screenReplace" && sourceVideoUrl && (
+        <TrackEditor
+          source={sourceVideoUrl}
+          value={parseTrackKeys(node.config.track_keys)}
+          onSave={(keys) => onConfigChange("track_keys", JSON.stringify(keys))}
+          onClose={() => setTrackOpen(false)}
+        />
+      )}
+    </>,
+    document.body,
+  );
 }
 
 const CAT_COLORS: Record<string, string> = {

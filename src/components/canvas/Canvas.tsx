@@ -1955,6 +1955,16 @@ export default function Canvas({
                     : val;
                 }
               }
+              // Resolve the connected source_video URL (for the Screen Replace
+              // track editor). resolvedInputs above deliberately drops URLs, so
+              // we resolve the media input separately here.
+              let screenSourceUrl = "";
+              for (const edge of graph.edges) {
+                if (edge.to.nodeId !== node.id || edge.to.port !== "source_video") continue;
+                const src = graph.nodes.find((n) => n.id === edge.from.nodeId);
+                const v = src?.outputs ? (src.outputs as Record<string, unknown>)[edge.from.port] : undefined;
+                if (typeof v === "string" && v) { screenSourceUrl = v; break; }
+              }
               // Composer: resolve connected upstream outputs into an ordered track list
               let composerTracks: { kind: string; value: string; label: string }[] | undefined;
               if (node.type === "composer") {
@@ -2077,6 +2087,7 @@ export default function Canvas({
                 node={node}
                 edges={graph.edges}
                 resolvedInputs={resolvedInputs}
+                sourceVideoUrl={screenSourceUrl}
                 isSelected={selectedIds.has(node.id)}
                 isRunning={isRunning}
                 onPointerDown={(e) => startNodeDrag(node.id, e)}
@@ -2327,6 +2338,15 @@ export default function Canvas({
         <NodeExpandedModal
           node={expandedNode}
           isRunning={isRunning}
+          sourceVideoUrl={(() => {
+            for (const edge of graph.edges) {
+              if (edge.to.nodeId !== expandedNode.id || edge.to.port !== "source_video") continue;
+              const src = graph.nodes.find((n) => n.id === edge.from.nodeId);
+              const v = src?.outputs ? (src.outputs as Record<string, unknown>)[edge.from.port] : undefined;
+              if (typeof v === "string" && v) return v;
+            }
+            return "";
+          })()}
           onClose={() => setExpandedNodeId(null)}
           onConfigChange={(k, v) => updateNodeConfig(expandedNode.id, k, v)}
           onRun={() => {
