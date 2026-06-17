@@ -970,6 +970,7 @@ export async function runNode(
       if (!contentResp.ok) throw new Error(`Could not fetch the screen content (${contentResp.status})`);
       const srcBuf = Buffer.from(await srcResp.arrayBuffer());
       const contentBuf = Buffer.from(await contentResp.arrayBuffer());
+      const trackOut: { fps?: number; w?: number; h?: number; quads?: number[][][] } = {};
       let outBuf: Buffer;
       try {
         outBuf = await compositeGreenScreen({
@@ -984,6 +985,7 @@ export async function runNode(
           trackOffsetY: isFinite(trackOffsetY) ? trackOffsetY : 0,
           trackRotate: isFinite(trackRotate) ? trackRotate : 0,
           trackKeys,
+          captureTrack: trackOut,
         });
       } catch (e) {
         throw new Error(`Composite failed (ffmpeg): ${e instanceof Error ? e.message : String(e)}`);
@@ -994,8 +996,21 @@ export async function runNode(
       });
       const { cdnUrl } = await uploadBytes(outBuf, outPath, "video/mp4");
       if (!cdnUrl) throw new Error("Failed to upload the composited video");
+      // Cache the auto-track (computed for free during this render) so the visual
+      // track editor opens instantly next time instead of recomputing it.
+      let trackUrl = "";
+      if (trackOut.quads && trackOut.quads.length) {
+        try {
+          const trackPath = buildStoragePath({
+            brandId: ctx.brandId, projectId: ctx.projectId, workflowId: ctx.workflowId,
+            runStepId: ctx.runStepId, prefix: "screen-track", ext: "json",
+          });
+          const up = await uploadBytes(Buffer.from(JSON.stringify(trackOut)), trackPath, "application/json");
+          trackUrl = up.cdnUrl || "";
+        } catch { /* non-fatal: editor falls back to recompute */ }
+      }
       console.log("[screenReplace] composite done", outPath);
-      return { outputs: { video: cdnUrl }, costUsd: 0, durationMs: Date.now() - t0 };
+      return { outputs: { video: cdnUrl, ...(trackUrl ? { track_url: trackUrl } : {}) }, costUsd: 0, durationMs: Date.now() - t0 };
     }
 
     case "heygenVideo": {

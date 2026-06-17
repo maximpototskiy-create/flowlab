@@ -2088,6 +2088,7 @@ export default function Canvas({
                 edges={graph.edges}
                 resolvedInputs={resolvedInputs}
                 sourceVideoUrl={screenSourceUrl}
+                cachedTrackUrl={(node.outputs?.track_url as string) || undefined}
                 isSelected={selectedIds.has(node.id)}
                 isRunning={isRunning}
                 onPointerDown={(e) => startNodeDrag(node.id, e)}
@@ -2347,6 +2348,7 @@ export default function Canvas({
             }
             return "";
           })()}
+          cachedTrackUrl={(expandedNode.outputs?.track_url as string) || undefined}
           onClose={() => setExpandedNodeId(null)}
           onConfigChange={(k, v) => updateNodeConfig(expandedNode.id, k, v)}
           onRun={() => {

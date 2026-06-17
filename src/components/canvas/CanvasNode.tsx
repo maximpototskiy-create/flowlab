@@ -41,6 +41,7 @@ function CanvasNodeImpl({
   edges,
   resolvedInputs,
   sourceVideoUrl,
+  cachedTrackUrl,
   isSelected,
   isRunning,
   onPointerDown,
@@ -67,6 +68,7 @@ function CanvasNodeImpl({
    * field before clicking Run. Image/video URLs are NOT included here. */
   resolvedInputs: Record<string, string>;
   sourceVideoUrl?: string;
+  cachedTrackUrl?: string;
   isSelected: boolean;
   isRunning: boolean;
   onPointerDown: (e: React.PointerEvent) => void;
@@ -1030,6 +1032,7 @@ function CanvasNodeImpl({
       {trackOpen && node.type === "screenReplace" && sourceVideoUrl && (
         <TrackEditor
           source={sourceVideoUrl}
+          cachedTrackUrl={cachedTrackUrl}
           value={parseTrackKeys(node.config.track_keys)}
           onSave={(keys) => onConfigChange("track_keys", JSON.stringify(keys))}
           onClose={() => setTrackOpen(false)}

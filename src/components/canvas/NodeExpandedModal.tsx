@@ -17,6 +17,7 @@ export default function NodeExpandedModal({
   onConfigChange,
   onRun,
   sourceVideoUrl,
+  cachedTrackUrl,
 }: {
   node: GraphNode;
   isRunning: boolean;
@@ -24,6 +25,7 @@ export default function NodeExpandedModal({
   onConfigChange: (key: string, value: unknown) => void;
   onRun: () => void;
   sourceVideoUrl?: string;
+  cachedTrackUrl?: string;
 }) {
   const [mounted, setMounted] = useState(false);
   const [trackOpen, setTrackOpen] = useState(false);
@@ -227,6 +229,7 @@ export default function NodeExpandedModal({
       {trackOpen && node.type === "screenReplace" && sourceVideoUrl && (
         <TrackEditor
           source={sourceVideoUrl}
+          cachedTrackUrl={cachedTrackUrl}
           value={parseTrackKeys(node.config.track_keys)}
           onSave={(keys) => onConfigChange("track_keys", JSON.stringify(keys))}
           onClose={() => setTrackOpen(false)}

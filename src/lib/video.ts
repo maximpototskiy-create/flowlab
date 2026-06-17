@@ -694,6 +694,31 @@ const median = (arr: number[]): number => {
   return s[(s.length / 2) | 0];
 };
 
+// Per-corner keyframe offsets at normalized time t (0..1), linearly interpolated.
+// A key carries either per-corner offsets `c` = [[dx,dy] ×4], or a uniform dx/dy
+// (applied to all four corners). Returns [[dx,dy] ×4]. Empty keys → all zero.
+type TrackKeyN = { t: number; dx: number; dy: number; rot: number; c?: number[][] };
+function cornersOfKey(k: TrackKeyN): number[][] {
+  if (k.c && k.c.length === 4) return k.c;
+  const u = [k.dx, k.dy];
+  return [u, u, u, u];
+}
+function interpCornerOffsets(keys: TrackKeyN[], t: number): number[][] {
+  if (!keys.length) return [[0, 0], [0, 0], [0, 0], [0, 0]];
+  if (t <= keys[0].t) return cornersOfKey(keys[0]);
+  const last = keys[keys.length - 1];
+  if (t >= last.t) return cornersOfKey(last);
+  for (let i = 0; i < keys.length - 1; i++) {
+    const a = keys[i], b = keys[i + 1];
+    if (t >= a.t && t <= b.t) {
+      const f = (t - a.t) / ((b.t - a.t) || 1e-6);
+      const ca = cornersOfKey(a), cb = cornersOfKey(b);
+      return [0, 1, 2, 3].map((j) => [ca[j][0] + (cb[j][0] - ca[j][0]) * f, ca[j][1] + (cb[j][1] - ca[j][1]) * f]);
+    }
+  }
+  return [[0, 0], [0, 0], [0, 0], [0, 0]];
+}
+
 // Per-frame PLANAR-TRACKED chroma-key composite. The green screen's 4 corners
 // are detected each frame and the inserted content (image OR video) is
 // perspective-warped (homography + bilinear) onto that quad, so it follows the
@@ -718,8 +743,9 @@ export async function compositeGreenScreen(opts: {
   trackRotate?: number;  // global rotation (deg) of the quad about its centre.
   // Keyframed correction (Mocha-style). t in 0..1 (fraction of the clip). Linearly
   // interpolated per frame and ADDED to the global offset; frames between keys with
-  // zero correction stay exactly as the auto-track. dx/dy px, rot deg.
-  trackKeys?: { t: number; dx?: number; dy?: number; rot?: number }[];
+  // zero correction stay exactly as the auto-track. Either a uniform dx/dy/rot, OR
+  // per-corner offsets `c` = [[dx,dy] ×4] (corner-pin) for shape/perspective fixes.
+  trackKeys?: { t: number; dx?: number; dy?: number; rot?: number; c?: number[][] }[];
   // Optional out-param: if provided, it's filled with the per-frame auto-tracked
   // screen quads (BEFORE manual correction) + fps/dims. Lets the editor draw the
   // track for interactive keyframing. Does not affect the rendered output.
@@ -741,6 +767,9 @@ export async function compositeGreenScreen(opts: {
       dx: Number(kf?.dx) || 0,
       dy: Number(kf?.dy) || 0,
       rot: Number(kf?.rot) || 0,
+      c: Array.isArray(kf?.c) && kf.c.length === 4
+        ? kf.c.map((p) => [Number((p as number[])?.[0]) || 0, Number((p as number[])?.[1]) || 0])
+        : undefined,
     }))
     .sort((a, b) => a.t - b.t);
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
@@ -1235,34 +1264,9 @@ export async function compositeGreenScreen(opts: {
     ]);
     const encStdin = enc.proc.stdin!;
     encStdin.on("error", () => {}); // swallow EPIPE if the encoder exits early
-    // ── Manual tracking correction per frame: global offset/rotation + linearly
-    // interpolated keyframes (Mocha-style). A frame whose interpolated correction
-    // is zero stays exactly as the auto-track, so fixing one moment via keyframes
-    // does not disturb the rest. Applied to the tracked screen quad in the loop.
-    const corrX = new Float32Array(nFrames), corrY = new Float32Array(nFrames), corrR = new Float32Array(nFrames);
-    for (let k = 0; k < nFrames; k++) {
-      let dx = gOffX, dy = gOffY, rot = gRot;
-      if (trackKeys.length) {
-        const t = nFrames > 1 ? k / (nFrames - 1) : 0;
-        let kdx: number, kdy: number, krot: number;
-        const first = trackKeys[0], lastK = trackKeys[trackKeys.length - 1];
-        if (t <= first.t) { kdx = first.dx; kdy = first.dy; krot = first.rot; }
-        else if (t >= lastK.t) { kdx = lastK.dx; kdy = lastK.dy; krot = lastK.rot; }
-        else {
-          kdx = 0; kdy = 0; krot = 0;
-          for (let j = 0; j < trackKeys.length - 1; j++) {
-            const a = trackKeys[j], b = trackKeys[j + 1];
-            if (t >= a.t && t <= b.t) {
-              const f = (t - a.t) / ((b.t - a.t) || 1e-6);
-              kdx = a.dx + (b.dx - a.dx) * f; kdy = a.dy + (b.dy - a.dy) * f; krot = a.rot + (b.rot - a.rot) * f;
-              break;
-            }
-          }
-        }
-        dx += kdx; dy += kdy; rot += krot;
-      }
-      corrX[k] = dx; corrY[k] = dy; corrR[k] = rot;
-    }
+    // Manual tracking correction is applied per frame in the loop below: a constant
+    // global offset/rotation (sliders) plus per-corner keyframe offsets (corner-pin),
+    // so fixing one moment via keyframes leaves the rest as the auto-track.
     const reader2 = openFrameStream(srcPath, frameSize);
     for (let k = 0; k < nFrames; k++) {
       const data = await reader2.next();
@@ -1284,19 +1288,21 @@ export async function compositeGreenScreen(opts: {
         cD = stillContent!.data; cW = stillContent!.w; cH = stillContent!.h; cCh = stillContent!.ch;
       }
       let q = sm[k];
-      // Apply the manual tracking correction (offset + rotation about the quad
-      // centre) for this frame, so the whole replacement region moves with it.
-      {
-        const cdx = corrX[k], cdy = corrY[k], crot = corrR[k];
-        if (cdx !== 0 || cdy !== 0 || crot !== 0) {
-          const qx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
-          const qy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
-          const ca = Math.cos(crot * Math.PI / 180), sa = Math.sin(crot * Math.PI / 180);
-          q = q.map(([px, py]) => {
-            const rx = px - qx, ry = py - qy;
-            return [qx + rx * ca - ry * sa + cdx, qy + rx * sa + ry * ca + cdy] as Pt;
-          });
-        }
+      // Manual tracking correction: constant global offset + rotation (sliders),
+      // then per-corner keyframe offsets (corner-pin), interpolated for this frame.
+      if (gOffX !== 0 || gOffY !== 0 || gRot !== 0) {
+        const qx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
+        const qy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
+        const ca = Math.cos(gRot * Math.PI / 180), sa = Math.sin(gRot * Math.PI / 180);
+        q = q.map(([px, py]) => {
+          const rx = px - qx, ry = py - qy;
+          return [qx + rx * ca - ry * sa + gOffX, qy + rx * sa + ry * ca + gOffY] as Pt;
+        });
+      }
+      if (trackKeys.length) {
+        const tt = nFrames > 1 ? k / (nFrames - 1) : 0;
+        const co = interpCornerOffsets(trackKeys, tt);
+        q = q.map((p, ci) => [p[0] + co[ci][0], p[1] + co[ci][1]] as Pt);
       }
       // Default "fill": corner-pin the whole content onto the screen quad. The
       // homography handles the phone's tilt, so content authored at the phone's
