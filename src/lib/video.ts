@@ -709,12 +709,15 @@ export async function compositeGreenScreen(opts: {
   fit?: "fill" | "cover"; // how content maps onto the screen quad
   scaleX?: number; // per-axis scale of the content ON the screen (1 = auto-fit;
   scaleY?: number; // >1 zooms content in/bigger, <1 smaller). Fine-tunes fit.
+  matteChoke?: number; // morphological matte edge in px: + spreads (content covers
+                       // green fringe), - chokes (pulls content in). 0 = off.
 }): Promise<Buffer> {
   const fit = opts.fit ?? "fill";
   // Clamp the on-screen scale to a sane range so a stray value can't invert/blow up.
   const clampScale = (s: number | undefined) => Math.max(0.25, Math.min(4, s && isFinite(s) ? s : 1));
   const scaleX = clampScale(opts.scaleX);
   const scaleY = clampScale(opts.scaleY);
+  const matteChoke = Math.max(-8, Math.min(8, Math.round(opts.matteChoke && isFinite(opts.matteChoke) ? opts.matteChoke : 0)));
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
@@ -1290,13 +1293,51 @@ export async function compositeGreenScreen(opts: {
       const mgx = Math.max(12, (bx1 - bx0) * 0.08), mgy = Math.max(12, (by1 - by0) * 0.08);
       const x0 = Math.max(0, Math.floor(bx0 - mgx)), y0 = Math.max(0, Math.floor(by0 - mgy));
       const x1 = Math.min(W - 1, Math.ceil(bx1 + mgx)), y1 = Math.min(H - 1, Math.ceil(by1 + mgy));
+      // ── Matte: build the green mask over the bbox, optionally choke/spread it,
+      // then composite content only where the (morphed) matte is set. Non-matte
+      // pixels keep the original frame (out was seeded from data).
+      const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+      let matte = new Uint8Array(bw * bh);
       for (let y = y0; y <= y1; y++) {
+        const mr = (y - y0) * bw;
         for (let x = x0; x <= x1; x++) {
           const i = (y * W + x) * ch;
           const r = data[i], g = data[i + 1], b = data[i + 2];
           const bright = g > 80 && g > r * 1.4 && g > b * 1.4;
           const greenish = g > 45 && g > r * 1.25 && g > b * 1.25;
-          if (!bright && !greenish) continue;
+          if (bright || greenish) matte[mr + (x - x0)] = 1;
+        }
+      }
+      if (matteChoke !== 0) {
+        // Separable box erode/dilate by |matteChoke| px. +spread = dilate (OR),
+        // -choke = erode (AND). Square structuring element (X pass then Y pass).
+        const N = Math.abs(matteChoke), grow = matteChoke > 0;
+        const tmp = new Uint8Array(bw * bh);
+        for (let y = 0; y < bh; y++) {
+          const mr = y * bw;
+          for (let x = 0; x < bw; x++) {
+            let acc = grow ? 0 : 1;
+            const lo = Math.max(0, x - N), hi = Math.min(bw - 1, x + N);
+            for (let xx = lo; xx <= hi; xx++) { const v = matte[mr + xx]; acc = grow ? (acc | v) : (acc & v); }
+            tmp[mr + x] = acc;
+          }
+        }
+        const m2 = new Uint8Array(bw * bh);
+        for (let x = 0; x < bw; x++) {
+          for (let y = 0; y < bh; y++) {
+            let acc = grow ? 0 : 1;
+            const lo = Math.max(0, y - N), hi = Math.min(bh - 1, y + N);
+            for (let yy = lo; yy <= hi; yy++) { const v = tmp[yy * bw + x]; acc = grow ? (acc | v) : (acc & v); }
+            m2[y * bw + x] = acc;
+          }
+        }
+        matte = m2;
+      }
+      for (let y = y0; y <= y1; y++) {
+        const mr = (y - y0) * bw;
+        for (let x = x0; x <= x1; x++) {
+          if (!matte[mr + (x - x0)]) continue;
+          const i = (y * W + x) * ch;
           let a0 = 0, a1 = 0, a2 = 0;
           for (let sy = 0; sy < ss; sy++) {
             for (let sx = 0; sx < ss; sx++) {

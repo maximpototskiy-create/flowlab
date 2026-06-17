@@ -954,6 +954,7 @@ export async function runNode(
       const similarity = Number(config.key_similarity) || 0.3;
       const scaleX = Number(config.scale_x);
       const scaleY = Number(config.scale_y);
+      const matteChoke = Number(config.matte_choke);
       const screenIsVideo = /\.(mp4|mov|webm|m4v|avi|mkv)(\?|#|$)/i.test(screen);
 
       const [srcResp, contentResp] = await Promise.all([fetch(sourceVideo), fetch(screen)]);
@@ -969,6 +970,7 @@ export async function runNode(
           fit: String(config.fit ?? "fill") === "cover" ? "cover" : "fill",
           scaleX: isFinite(scaleX) && scaleX > 0 ? scaleX : 1,
           scaleY: isFinite(scaleY) && scaleY > 0 ? scaleY : 1,
+          matteChoke: isFinite(matteChoke) ? matteChoke : 0,
         });
       } catch (e) {
         throw new Error(`Composite failed (ffmpeg): ${e instanceof Error ? e.message : String(e)}`);
