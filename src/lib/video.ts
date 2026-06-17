@@ -907,28 +907,11 @@ export async function compositeGreenScreen(opts: {
       }
       // Don't reject every frame (e.g. truly erratic clip) — only patch if most
       // frames are clean.
-      // Residual-translation refinement for the HEAVY (occluded / transition)
-      // frames. The existing hold interpolates the corners between the clean
-      // anchors and nudges them by the frame-to-frame dot translation; it tracks
-      // the phone closely but still lags its small in-plane drift through a tap
-      // by a few px, so the inserted UI swims slightly against the screen.
-      //
-      // We refine — never replace — that pose: for each patched frame we PREDICT
-      // every template marker from the CURRENT held pose (whose rotation/scale
-      // are already correct) and match it to the nearest detected dot. The
-      // MEDIAN predicted→actual offset is the small residual translation the hold
-      // missed. Only this 2-D translation is applied — rotation/scale are never
-      // refit (doing that on a few partly-covered markers is what made an earlier
-      // attempt twitch). The residual is gap-filled where the finger covers the
-      // markers, lightly smoothed and hard-clamped, so it can only tighten the
-      // hold gently, never jump.
-      const projPt = (H: number[], p: Pt): Pt => {
-        const w = H[6] * p[0] + H[7] * p[1] + H[8];
-        return [(H[0] * p[0] + H[1] * p[1] + H[2]) / w, (H[3] * p[0] + H[4] * p[1] + H[5]) / w];
-      };
-      const allTmplPts: Pt[] = [calibTMPL[0], calibTMPL[1], calibTMPL[2], calibTMPL[3], ...INTERIOR_TMPL];
-      // Frame-to-frame dot translation (median nearest-neighbour displacement),
-      // used to carry the hold through frames where the grid fit can't track.
+      // Per-frame translation from the marker dots (robust to partial
+      // occlusion): match each visible dot to the nearest dot in the previous
+      // frame and take the MEDIAN displacement — recovers the phone's movement
+      // even while a hand covers part of the screen. Used only for the HEAVY
+      // frames the precise grid fit can't track.
       const dotDX = new Array(Nr).fill(0), dotDY = new Array(Nr).fill(0);
       for (let i = 1; i < Nr; i++) {
         const cur = allBlobs[i], prev = allBlobs[i - 1];
@@ -949,81 +932,17 @@ export async function compositeGreenScreen(opts: {
           const a = i - 1;            // last clean frame
           let b = i; while (b < Nr && !ok[b]) b++;  // next clean frame (or Nr)
           const haveA = a >= 0, haveB = b < Nr;
-          const span = b - a;
-          const cN = b - i;
-          // Baseline hold per patched frame — IDENTICAL to the previous behaviour
-          // (anchor + accumulated dot translation, blended toward the next clean
-          // frame). The residual refinement below is layered on top of this, so
-          // we never lose the tracking the hold already provides.
-          const baseQ: Pt[][] = [];
-          let accX = 0, accY = 0;
+          let accX = 0, accY = 0;     // accumulated dot translation since `a`
           for (let k = i; k < b; k++) {
             accX += dotDX[k]; accY += dotDY[k];
+            const span = b - a;
             const t = span > 0 ? (k - a) / span : 0;
-            const q: Pt[] = [];
             for (let c = 0; c < 4; c++) {
               let x = haveA ? raw[a]![c][0] + accX : raw[b]![c][0];
               let y = haveA ? raw[a]![c][1] + accY : raw[b]![c][1];
               if (haveA && haveB) { x = x * (1 - t) + raw[b]![c][0] * t; y = y * (1 - t) + raw[b]![c][1] * t; }
-              q.push([x, y]);
+              raw[k]![c] = [x, y];
             }
-            baseQ.push(q);
-          }
-          // Residual translation per frame from held-pose-seeded marker matching.
-          // NaN = no reliable reading (markers covered) — interpolated below.
-          const obsX = new Array(cN).fill(NaN), obsY = new Array(cN).fill(NaN);
-          for (let k = i; k < b; k++) {
-            const bq = baseQ[k - i];
-            const blobs = allBlobs[k];
-            if (!blobs || blobs.length < 2) continue;
-            const scale = (Math.hypot(bq[1][0] - bq[0][0], bq[1][1] - bq[0][1]) +
-                           Math.hypot(bq[3][0] - bq[0][0], bq[3][1] - bq[0][1])) / 2 || 1;
-            const Hk = solveHomography(TMPL_CORNERS, bq as [Pt, Pt, Pt, Pt]);
-            const rad = 0.06 * scale;
-            const dxs: number[] = [], dys: number[] = [];
-            for (const tp of allTmplPts) {
-              const pp = projPt(Hk, tp);
-              let bd = rad, bx = 0, by = 0, hit = false;
-              for (const bl of blobs) {
-                const dd = Math.hypot(bl[0] - pp[0], bl[1] - pp[1]);
-                if (dd < bd) { bd = dd; bx = bl[0]; by = bl[1]; hit = true; }
-              }
-              if (hit) { dxs.push(bx - pp[0]); dys.push(by - pp[1]); }
-            }
-            if (dxs.length >= 2) { obsX[k - i] = median(dxs); obsY[k - i] = median(dys); }
-          }
-          // Anchor the refinement at 0 on the clean ends and fill gaps by linear
-          // interpolation between the frames that DID get a reading.
-          const idxK: number[] = [-1], valX: number[] = [0], valY: number[] = [0];
-          for (let k = 0; k < cN; k++) if (!Number.isNaN(obsX[k])) { idxK.push(k); valX.push(obsX[k]); valY.push(obsY[k]); }
-          idxK.push(cN); valX.push(0); valY.push(0);
-          const lerp = (vals: number[], idx: number): number => {
-            if (idx <= idxK[0]) return vals[0];
-            for (let s = 1; s < idxK.length; s++) {
-              if (idx <= idxK[s]) {
-                const t = (idx - idxK[s - 1]) / Math.max(1, idxK[s] - idxK[s - 1]);
-                return vals[s - 1] * (1 - t) + vals[s] * t;
-              }
-            }
-            return vals[vals.length - 1];
-          };
-          const fillX = new Array(cN), fillY = new Array(cN);
-          for (let k = 0; k < cN; k++) { fillX[k] = lerp(valX, k); fillY[k] = lerp(valY, k); }
-          // Light ±6 moving-average smoothing and a hard clamp (~8% of the screen
-          // width) so the refinement stays gentle and strictly bounded.
-          const anchorQ = raw[haveA ? a : b]!;
-          const CAP = 0.08 * (Math.hypot(anchorQ[1][0] - anchorQ[0][0], anchorQ[1][1] - anchorQ[0][1]) || 1);
-          const smooth = (arr: number[], k: number): number => {
-            let s = 0, c = 0;
-            for (let j = Math.max(0, k - 6); j <= Math.min(cN - 1, k + 6); j++) { s += arr[j]; c++; }
-            return c ? s / c : 0;
-          };
-          for (let k = i; k < b; k++) {
-            let dx = smooth(fillX, k - i), dy = smooth(fillY, k - i);
-            dx = Math.max(-CAP, Math.min(CAP, dx));
-            dy = Math.max(-CAP, Math.min(CAP, dy));
-            const bq = baseQ[k - i];
-            for (let c = 0; c < 4; c++) raw[k]![c] = [bq[c][0] + dx, bq[c][1] + dy];
           }
           i = b;
         }
