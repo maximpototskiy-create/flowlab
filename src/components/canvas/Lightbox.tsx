@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { X, Download, ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { X, Download, ChevronLeft, ChevronRight, Maximize2 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lightbox — fullscreen viewer for an image or video URL. Triggered by
@@ -50,6 +50,19 @@ export default function Lightbox({
     };
   }, [onClose, onPrev, onNext]);
 
+  // Ref to the media element so the "true fullscreen" button can request the
+  // browser Fullscreen API on it. Works for BOTH <img> and <video> — gives the
+  // image the same edge-to-edge fullscreen a video gets from its native control.
+  const mediaRef = useRef<HTMLElement | null>(null);
+  const goFullscreen = () => {
+    const el = mediaRef.current as (HTMLElement & { webkitRequestFullscreen?: () => void }) | null;
+    if (!el) return;
+    try {
+      if (el.requestFullscreen) void el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    } catch { /* ignore */ }
+  };
+
   // Generate a sensible download filename from the URL path.
   const filename = (() => {
     try {
@@ -64,11 +77,23 @@ export default function Lightbox({
 
   return (
     <div
-      className="fixed inset-0 z-[9999] bg-black/85 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center p-2"
       onClick={onClose}
     >
-      {/* Top-right controls */}
-      <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+      {/* Top gradient scrim — keeps the controls legible over any media without
+          looking like they float on top of the content. */}
+      <div className="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-black/70 to-transparent z-10 pointer-events-none" />
+      {/* Top-right controls: fullscreen · download · close */}
+      <div className="absolute top-3 right-3 flex items-center gap-2 z-20">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); goFullscreen(); }}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-white text-[12px] backdrop-blur"
+          title="True fullscreen"
+        >
+          <Maximize2 size={14} />
+          <span className="hidden sm:inline">Fullscreen</span>
+        </button>
         <a
           href={src}
           download={filename}
@@ -93,22 +118,24 @@ export default function Lightbox({
 
       {/* Media container — stopPropagation so clicking the media doesn't close */}
       <div
-        className="max-w-[95vw] max-h-[95vh] flex items-center justify-center"
+        className="max-w-[98vw] max-h-[97vh] flex items-center justify-center"
         onClick={(e) => e.stopPropagation()}
       >
         {kind === "image" ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
+            ref={(el) => { mediaRef.current = el; }}
             src={src}
             alt=""
-            className="max-w-full max-h-[95vh] object-contain rounded"
+            className="max-w-full max-h-[97vh] object-contain rounded"
           />
         ) : (
           <video
+            ref={(el) => { mediaRef.current = el; }}
             src={src}
             controls
             autoPlay
-            className="max-w-full max-h-[95vh] rounded"
+            className="max-w-full max-h-[97vh] object-contain rounded"
           />
         )}
       </div>

@@ -346,12 +346,12 @@ function BigPreview({
           .map((v) => ({ value: v as string }));
   if (list.length === 0) return null;
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className={`grid ${list.length === 1 ? "grid-cols-1" : "grid-cols-2"} gap-2`}>
       {list.map((r, i) => (
         <div key={i} className="rounded-md bg-bg-card border border-border overflow-hidden relative group/cell">
           {isVideo(r.value) ? (
             <>
-              <video src={r.value} controls className="w-full" />
+              <video src={r.value} controls className="w-full max-h-[80vh] object-contain bg-black" />
               <button
                 type="button"
                 onClick={() => setLightbox({ src: r.value, kind: "video" })}
@@ -371,7 +371,7 @@ function BigPreview({
               title="Click to view fullscreen"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={r.value} alt="" className="w-full" />
+              <img src={r.value} alt="" className="w-full max-h-[80vh] object-contain" />
             </button>
           ) : (
             <div className="relative group/expandedtext">
