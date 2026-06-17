@@ -952,6 +952,8 @@ export async function runNode(
       if (!screen) throw new Error("Connect the screen content (image or video) to the Screen content port");
       const keyColor = String(config.key_color || "#00FF00").trim();
       const similarity = Number(config.key_similarity) || 0.3;
+      const scaleX = Number(config.scale_x);
+      const scaleY = Number(config.scale_y);
       const screenIsVideo = /\.(mp4|mov|webm|m4v|avi|mkv)(\?|#|$)/i.test(screen);
 
       const [srcResp, contentResp] = await Promise.all([fetch(sourceVideo), fetch(screen)]);
@@ -965,6 +967,8 @@ export async function runNode(
           source: srcBuf, content: contentBuf, contentIsVideo: screenIsVideo,
           keyColorHex: keyColor, similarity,
           fit: String(config.fit ?? "fill") === "cover" ? "cover" : "fill",
+          scaleX: isFinite(scaleX) && scaleX > 0 ? scaleX : 1,
+          scaleY: isFinite(scaleY) && scaleY > 0 ? scaleY : 1,
         });
       } catch (e) {
         throw new Error(`Composite failed (ffmpeg): ${e instanceof Error ? e.message : String(e)}`);

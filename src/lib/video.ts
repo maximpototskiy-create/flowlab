@@ -707,8 +707,14 @@ export async function compositeGreenScreen(opts: {
   keyColorHex?: string; // kept for API symmetry; detection is generic-green
   similarity?: number;
   fit?: "fill" | "cover"; // how content maps onto the screen quad
+  scaleX?: number; // per-axis scale of the content ON the screen (1 = auto-fit;
+  scaleY?: number; // >1 zooms content in/bigger, <1 smaller). Fine-tunes fit.
 }): Promise<Buffer> {
   const fit = opts.fit ?? "fill";
+  // Clamp the on-screen scale to a sane range so a stray value can't invert/blow up.
+  const clampScale = (s: number | undefined) => Math.max(0.25, Math.min(4, s && isFinite(s) ? s : 1));
+  const scaleX = clampScale(opts.scaleX);
+  const scaleY = clampScale(opts.scaleY);
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
@@ -1231,6 +1237,16 @@ export async function compositeGreenScreen(opts: {
         else ch2 = cW / PHONE_ASPECT; // too tall → crop top/bottom
         const ox = (cW - cw2) / 2, oy = (cH - ch2) / 2;
         dst = [[ox, oy], [ox + cw2 - 1, oy], [ox + cw2 - 1, oy + ch2 - 1], [ox, oy + ch2 - 1]];
+      }
+      // Per-axis on-screen scale: shrink/grow the CONTENT region the screen quad
+      // maps to, around its centre. scale>1 → screen samples a smaller central
+      // slice → content looks bigger (zoom in, edges cropped). scale<1 → screen
+      // samples beyond the content → content looks smaller (edges clamp/smear).
+      // Single knob to fine-tune fit without touching the warp loop below.
+      if (scaleX !== 1 || scaleY !== 1) {
+        const dcx = (dst[0][0] + dst[2][0]) / 2, dcy = (dst[0][1] + dst[2][1]) / 2;
+        const hw = (dst[2][0] - dst[0][0]) / 2 / scaleX, hh = (dst[2][1] - dst[0][1]) / 2 / scaleY;
+        dst = [[dcx - hw, dcy - hh], [dcx + hw, dcy - hh], [dcx + hw, dcy + hh], [dcx - hw, dcy + hh]];
       }
       const Hm = solveHomography(q, dst);
       // Anti-aliased downscale: the content (full UI res) is squeezed into a

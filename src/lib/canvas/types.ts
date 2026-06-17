@@ -1247,7 +1247,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "screen", type: "any", label: "Screen content (image or video)" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "fill", instructions: "" },
+    defaults: { method: "composite", key_color: "#00FF00", key_similarity: "0.30", fit: "fill", scale_x: 1, scale_y: 1, instructions: "" },
     fields: [
       { name: "key_color", label: "Green key color", type: "text", placeholder: "#00FF00" },
       {
@@ -1272,6 +1272,8 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "0.45", label: "Loose (uneven / spill)" },
         ],
       },
+      { name: "scale_x", label: "Screen scale X", type: "slider", min: 0.5, max: 2, step: 0.05, unit: "×", help: "Scale the replacement content horizontally on the screen. 1 = auto-fit; >1 zooms in (crops edges), <1 shrinks. Tweak and re-run the node." },
+      { name: "scale_y", label: "Screen scale Y", type: "slider", min: 0.5, max: 2, step: 0.05, unit: "×", help: "Scale the replacement content vertically on the screen. 1 = auto-fit. Tweak and re-run the node." },
     ],
     quickFields: ["fit", "key_similarity"],
     primaryField: "instructions",
