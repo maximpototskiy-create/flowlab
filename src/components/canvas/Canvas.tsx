@@ -21,6 +21,7 @@ import NodeExpandedModal from "./NodeExpandedModal";
 import CanvasToolbar from "./CanvasToolbar";
 import WorkflowBuilderPanel from "./WorkflowBuilderPanel";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
+import ActiveRunsBar from "./ActiveRunsBar";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { autoLayout } from "@/lib/canvas/autoLayout";
@@ -1845,6 +1846,9 @@ export default function Canvas({
         >
           {/* Background hit area for selection-clear */}
           <div className="canvas-bg-hit absolute inset-0" />
+
+          {/* Active runs — prominent strip at the top with per-run + global stop */}
+          <ActiveRunsBar runs={runs} onStop={stopRun} onStopAll={stopAllRuns} />
 
           <div
             className="absolute"
