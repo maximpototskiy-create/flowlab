@@ -346,12 +346,12 @@ function BigPreview({
           .map((v) => ({ value: v as string }));
   if (list.length === 0) return null;
   return (
-    <div className={`grid ${list.length === 1 ? "grid-cols-1" : "grid-cols-2"} gap-2`}>
+    <div className={`grid ${list.length === 1 ? "grid-cols-1 justify-items-center" : "grid-cols-2"} gap-2`}>
       {list.map((r, i) => (
-        <div key={i} className="rounded-md bg-bg-card border border-border overflow-hidden relative group/cell">
+        <div key={i} className={`rounded-md bg-bg-card border border-border overflow-hidden relative group/cell ${list.length === 1 ? "w-fit max-w-full" : ""}`}>
           {isVideo(r.value) ? (
             <>
-              <video src={r.value} controls className="w-full max-h-[80vh] object-contain bg-black" />
+              <video src={r.value} controls className={`${list.length === 1 ? "max-w-full" : "w-full"} max-h-[80vh] object-contain block`} />
               <button
                 type="button"
                 onClick={() => setLightbox({ src: r.value, kind: "video" })}
@@ -367,11 +367,11 @@ function BigPreview({
             <button
               type="button"
               onClick={() => setLightbox({ src: r.value, kind: "image" })}
-              className="block w-full cursor-zoom-in"
+              className={`block ${list.length === 1 ? "w-fit max-w-full" : "w-full"} cursor-zoom-in`}
               title="Click to view fullscreen"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={r.value} alt="" className="w-full max-h-[80vh] object-contain" />
+              <img src={r.value} alt="" className={`${list.length === 1 ? "max-w-full" : "w-full"} max-h-[80vh] object-contain block`} />
             </button>
           ) : (
             <div className="relative group/expandedtext">
