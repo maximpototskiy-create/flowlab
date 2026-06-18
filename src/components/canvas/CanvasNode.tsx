@@ -1204,6 +1204,29 @@ function QuickField({
    *  and inherits it from the start image). */
   disabledReason?: string;
 }) {
+  if (field.type === "slider") {
+    const num = Number(value ?? field.min);
+    return (
+      <div
+        className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-bg-subtle text-[10px] text-fg-muted"
+        onMouseDown={(e) => e.stopPropagation()}
+        title={field.help ?? field.label}
+      >
+        <span className="truncate max-w-[78px]">{field.label}</span>
+        <input
+          type="range"
+          min={field.min}
+          max={field.max}
+          step={field.step}
+          value={num}
+          onChange={(e) => onChange(Number(e.target.value))}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="w-16 accent-brand cursor-pointer"
+        />
+        <span className="tabular-nums text-fg whitespace-nowrap">{num}{field.unit ?? ""}</span>
+      </div>
+    );
+  }
   if (field.type !== "select") return null;
   const disabled = Boolean(disabledReason);
   return (
@@ -1253,7 +1276,9 @@ function OutputPreview({
   /** Inline-expanded node — render a taller preview. */
   expanded?: boolean;
 }) {
-  const list = results && results.length > 0 ? results : Object.entries(outputs).filter(([k, v]) => typeof v === "string" && k !== "track_url" && !k.startsWith("_")).map(([, v]) => ({ value: v as string }));
+  const hiddenUrl = typeof outputs.track_url === "string" ? outputs.track_url : null;
+  const cleanResults = results ? results.filter((r) => typeof r.value === "string" && r.value !== hiddenUrl && !r.value.includes("screen-track")) : [];
+  const list = cleanResults.length > 0 ? cleanResults : Object.entries(outputs).filter(([k, v]) => typeof v === "string" && k !== "track_url" && !k.startsWith("_")).map(([, v]) => ({ value: v as string }));
   if (list.length === 0) return null;
   const current = list[Math.min(selectedIdx, list.length - 1)];
   const url = current.value;

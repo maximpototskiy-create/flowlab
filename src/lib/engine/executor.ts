@@ -298,6 +298,10 @@ async function executeOne(
     } else {
       // Single-output node — fall back to result.outputs.
       for (const [port, value] of Object.entries(result.outputs)) {
+        // Skip internal/non-media outputs (e.g. the cached track JSON URL) —
+        // they must not become Asset rows, or the client turns a single-video
+        // node into a 2-result preview.
+        if (port === "track_url" || port.startsWith("_")) continue;
         if (typeof value === "string" && value.startsWith("http")) {
           const kind = inferKindFromUrl(value, port, node.type);
           await prisma.asset.create({

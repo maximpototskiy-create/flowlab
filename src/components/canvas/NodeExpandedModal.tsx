@@ -375,9 +375,11 @@ function BigPreview({
   results?: { value: string; mime?: string }[];
 }) {
   const [lightbox, setLightbox] = useState<{ src: string; kind: "image" | "video" } | null>(null);
+  const hiddenUrl = typeof outputs.track_url === "string" ? outputs.track_url : null;
+  const cleanResults = results ? results.filter((r) => typeof r.value === "string" && r.value !== hiddenUrl && !r.value.includes("screen-track")) : [];
   const list =
-    results && results.length > 0
-      ? results
+    cleanResults.length > 0
+      ? cleanResults
       : Object.entries(outputs)
           .filter(([k, v]) => typeof v === "string" && k !== "track_url" && !k.startsWith("_"))
           .map(([, v]) => ({ value: v as string }));
