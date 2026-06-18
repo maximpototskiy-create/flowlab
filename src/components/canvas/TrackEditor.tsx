@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Loader2, Trash2, Plus, RotateCcw, Maximize2, Minimize2, Play, Pause, Copy, Clipboard, ZoomIn, ZoomOut, Search } from "lucide-react";
+import { X, Loader2, Trash2, Plus, RotateCcw, Maximize2, Minimize2, Play, Pause, Copy, Clipboard, ZoomIn, ZoomOut, Search, Info } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TrackEditor — interactive, Mocha-style correction of the auto screen-track.
@@ -87,6 +87,24 @@ function quadCenter(q: number[][]): Pt {
   return [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4];
 }
 
+const MODES: { id: TrackMode; label: string; info: string }[] = [
+  {
+    id: "anchor",
+    label: "Auto-track + fix",
+    info: "The auto-track follows the phone everywhere — just press play and watch. Each key nudges it back into place at that moment, blended smoothly and fading out between keys. Best when the track mostly works but slips here and there. Tip: drop a neutral Key (0) just before and after a slip to keep the fix local.",
+  },
+  {
+    id: "region",
+    label: "Fix one section",
+    info: "The auto-track runs everywhere, but between your first and last key the screen follows your keys exactly (the jittery track between them is ignored); outside that range it is the plain auto-track. Best to replace one bad stretch.",
+  },
+  {
+    id: "keys",
+    label: "Manual keyframes",
+    info: "No auto-track at all — the screen follows only your keys, as a smooth path across the whole clip; before the first / after the last key it holds that key. Best when the auto-track is useless and you key the path by hand.",
+  },
+];
+
 export default function TrackEditor({
   source,
   value,
@@ -115,7 +133,7 @@ export default function TrackEditor({
   const [zoom, setZoom] = useState(1);
   const [vzoom, setVzoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [mode, setMode] = useState<TrackMode>(initialMode === "keys" || initialMode === "anchor" ? initialMode : "region");
+  const [mode, setMode] = useState<TrackMode>(initialMode === "keys" || initialMode === "region" ? initialMode : "anchor");
   const [clip, setClip] = useState<number[][] | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -370,19 +388,18 @@ export default function TrackEditor({
 
             {/* controls */}
             <div className="w-full md:w-64 border-t md:border-t-0 md:border-l border-border p-3 overflow-y-auto shrink-0 space-y-2.5">
-              <div className="space-y-1">
-                <div className="text-[9px] text-fg-subtle uppercase tracking-wide">Interpolation</div>
-                <div className="grid grid-cols-3 gap-1">
-                  {(["region", "keys", "anchor"] as TrackMode[]).map((m) => (
-                    <button key={m} type="button" onClick={() => setMode(m)} className={`px-1 py-1 rounded text-[10px] border ${mode === m ? "border-brand bg-brand/10 text-fg" : "border-border text-fg-muted hover:text-fg"}`}>
-                      {m === "region" ? "Track+fix" : m === "keys" ? "Keyframes" : "Anchor"}
-                    </button>
+              <div className="space-y-1.5">
+                <div className="text-[9px] text-fg-subtle uppercase tracking-wide">Tracking mode</div>
+                <div className="space-y-1">
+                  {MODES.map((m) => (
+                    <div key={m.id} className={`flex items-center justify-between gap-1 pl-2 pr-1.5 py-1.5 rounded border ${mode === m.id ? "border-brand bg-brand/10" : "border-border"}`}>
+                      <button type="button" onClick={() => setMode(m.id)} className={`text-[11px] text-left flex-1 ${mode === m.id ? "text-fg font-medium" : "text-fg-muted hover:text-fg"}`}>{m.label}</button>
+                      <span className="group relative inline-flex shrink-0">
+                        <Info size={13} className="text-fg-subtle hover:text-fg cursor-help" />
+                        <span className="hidden group-hover:block absolute right-full mr-2 top-1/2 -translate-y-1/2 z-[60] w-60 p-2 rounded-md bg-bg-card border border-border shadow-panel text-[10px] text-fg-muted leading-snug normal-case pointer-events-none">{m.info}</span>
+                      </span>
+                    </div>
                   ))}
-                </div>
-                <div className="text-[10px] text-fg-subtle leading-snug">
-                  {mode === "region" && "Keys fix only their span; plain auto-track elsewhere. Best for a glitchy stretch."}
-                  {mode === "keys" && "Screen follows your keys across the whole clip; auto-track ignored. Best when the track is bad throughout — key the path."}
-                  {mode === "anchor" && "Screen follows the auto-track everywhere; keys add a smooth offset. Best to nudge/anchor a drifting track."}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-1.5 border-t border-border pt-2.5">

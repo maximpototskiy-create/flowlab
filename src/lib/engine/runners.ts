@@ -985,7 +985,7 @@ export async function runNode(
           trackOffsetY: isFinite(trackOffsetY) ? trackOffsetY : 0,
           trackRotate: isFinite(trackRotate) ? trackRotate : 0,
           trackKeys,
-          trackMode: (config.track_mode === "keys" || config.track_mode === "anchor") ? config.track_mode : "region",
+          trackMode: (config.track_mode === "keys" || config.track_mode === "region") ? config.track_mode : "anchor",
           captureTrack: trackOut,
         });
       } catch (e) {

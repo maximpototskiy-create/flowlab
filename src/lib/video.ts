@@ -817,7 +817,7 @@ export async function compositeGreenScreen(opts: {
         : undefined,
     }))
     .sort((a, b) => a.t - b.t);
-  const trackMode: TrackMode = opts.trackMode === "keys" || opts.trackMode === "anchor" ? opts.trackMode : "region";
+  const trackMode: TrackMode = opts.trackMode === "keys" || opts.trackMode === "region" ? opts.trackMode : "anchor";
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
