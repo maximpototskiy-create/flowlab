@@ -134,6 +134,7 @@ export default function TrackEditor({
   const [vzoom, setVzoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [mode, setMode] = useState<TrackMode>(initialMode === "keys" || initialMode === "region" ? initialMode : "anchor");
+  const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const [clip, setClip] = useState<number[][] | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -174,9 +175,10 @@ export default function TrackEditor({
 
   const nFrames = track ? track.quads.length : 0;
   const frame = nFrames ? Math.max(0, Math.min(nFrames - 1, Math.round(t * (nFrames - 1)))) : 0;
+  const kf = (tv: number) => (nFrames > 1 ? Math.round(tv * (nFrames - 1)) : -2);
   const autoQuad = track ? track.quads[frame] : null;
   const correctedQuad = track && autoQuad ? correctedQuadAt(track.quads, keys, frame, mode) : null;
-  const keyHere = keys.find((k) => Math.abs(k.t - t) < 0.012);
+  const keyHere = keys.find((k) => kf(k.t) === frame);
   const vCenter = correctedQuad ? quadCenter(correctedQuad) : null;
 
   const stopPlay = useCallback(() => {
@@ -230,12 +232,16 @@ export default function TrackEditor({
   }, [keys, t, track, mode]);
 
   const upsertKeyC = useCallback((tt: number, c: number[][]) => {
+    const N = track ? track.quads.length : 0;
     setKeys((prev) => {
-      const idx = prev.findIndex((k) => Math.abs(k.t - tt) < 0.012);
-      const nk: TrackKey = { t: Math.round(tt * 1000) / 1000, c: c.map((o) => [Math.round(o[0]), Math.round(o[1])]) };
+      const frameOf = (t: number) => Math.round(t * (N - 1));
+      const tf = frameOf(tt);
+      // Merge only when the SAME frame; neighbouring frames stay separate keys.
+      const idx = N > 1 ? prev.findIndex((k) => frameOf(k.t) === tf) : prev.findIndex((k) => Math.abs(k.t - tt) < 1e-4);
+      const nk: TrackKey = { t: Math.round(tt * 100000) / 100000, c: c.map((o) => [Math.round(o[0]), Math.round(o[1])]) };
       return (idx >= 0 ? prev.map((k, i) => (i === idx ? nk : k)) : [...prev, nk]).sort((a, b) => a.t - b.t);
     });
-  }, []);
+  }, [track]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button === 1 && vzoom > 1) {
@@ -285,7 +291,7 @@ export default function TrackEditor({
   };
 
   const addZeroKey = () => upsertKeyC(t, ZERO());
-  const deleteKeyHere = () => setKeys((prev) => prev.filter((k) => Math.abs(k.t - t) >= 0.012));
+  const deleteKeyHere = () => setKeys((prev) => prev.filter((k) => kf(k.t) !== frame));
   const resetAll = () => setKeys([]);
   const copyKey = () => { if (keyHere) setClip(keyHere.c.map((o) => [o[0], o[1]])); };
   const pasteKey = () => { if (clip) upsertKeyC(t, clip); };
@@ -298,6 +304,14 @@ export default function TrackEditor({
   if (!mounted) return null;
   return createPortal(
     <div className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3" onClick={onClose}>
+      {tip && (
+        <div
+          className="fixed z-[10000] w-64 p-2.5 rounded-md bg-bg-card border border-border shadow-panel text-[11px] text-fg-muted leading-snug pointer-events-none"
+          style={{ right: `calc(100vw - ${tip.x}px + 8px)`, top: tip.y, transform: "translateY(-50%)" }}
+        >
+          {tip.text}
+        </div>
+      )}
       <div
         className={`bg-bg-card border border-border rounded-xl flex flex-col overflow-hidden shadow-panel ${big ? "w-[98vw] h-[97vh] max-w-none" : "w-full max-w-[880px] h-[90vh]"}`}
         onClick={(e) => e.stopPropagation()}
@@ -375,7 +389,7 @@ export default function TrackEditor({
                     <div className="relative h-3">
                       {keys.map((k, i) => (
                         <button key={i} type="button" title={`keyframe @ ${(k.t * 100).toFixed(1)}%`} onClick={() => seek(k.t)}
-                          className={`absolute -translate-x-1/2 w-2.5 h-2.5 rounded-sm border hover:scale-125 transition ${keyHere && Math.abs(keyHere.t - k.t) < 0.012 ? "bg-cyan-300 border-cyan-500" : "bg-amber-400 border-amber-600"}`} style={{ left: `${k.t * 100}%`, top: 0 }} />
+                          className={`absolute -translate-x-1/2 w-2.5 h-2.5 rounded-sm border hover:scale-125 transition ${keyHere && kf(keyHere.t) === kf(k.t) ? "bg-cyan-300 border-cyan-500" : "bg-amber-400 border-amber-600"}`} style={{ left: `${k.t * 100}%`, top: 0 }} />
                       ))}
                     </div>
                   </div>
@@ -394,10 +408,12 @@ export default function TrackEditor({
                   {MODES.map((m) => (
                     <div key={m.id} className={`flex items-center justify-between gap-1 pl-2 pr-1.5 py-1.5 rounded border ${mode === m.id ? "border-brand bg-brand/10" : "border-border"}`}>
                       <button type="button" onClick={() => setMode(m.id)} className={`text-[11px] text-left flex-1 ${mode === m.id ? "text-fg font-medium" : "text-fg-muted hover:text-fg"}`}>{m.label}</button>
-                      <span className="group relative inline-flex shrink-0">
-                        <Info size={13} className="text-fg-subtle hover:text-fg cursor-help" />
-                        <span className="hidden group-hover:block absolute right-full mr-2 top-1/2 -translate-y-1/2 z-[60] w-60 p-2 rounded-md bg-bg-card border border-border shadow-panel text-[10px] text-fg-muted leading-snug normal-case pointer-events-none">{m.info}</span>
-                      </span>
+                      <Info
+                        size={14}
+                        className="text-fg-subtle hover:text-fg cursor-help shrink-0"
+                        onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setTip({ text: m.info, x: r.left, y: r.top + r.height / 2 }); }}
+                        onMouseLeave={() => setTip(null)}
+                      />
                     </div>
                   ))}
                 </div>
