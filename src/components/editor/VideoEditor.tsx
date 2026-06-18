@@ -9,6 +9,7 @@ import {
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
   Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw,
 } from "lucide-react";
+import TrackEditor from "@/components/canvas/TrackEditor";
 
 export type EditorAsset = {
   id: string;
@@ -256,6 +257,8 @@ function groupWords(words: Word[], mode: SplitMode): { text: string; start: numb
   push(buf);
   return out;
 }
+type SRTrackKey = { t: number; c: number[][] };
+type SRTrackMode = "region" | "keys" | "anchor";
 type EditClip = {
   id: string;
   layer: string;
@@ -284,6 +287,13 @@ type EditClip = {
   keyTol?: number;   // 0..1
   tstyle?: TextStyle;
   words?: CapWord[];
+  // Server-rendered screen replace (node-quality): green source + content + track.
+  sr?: {
+    green: string; content?: string; contentVideo?: boolean;
+    key?: string; sim?: number; fit?: "fill" | "cover";
+    matte?: number; feather?: number; scaleX?: number; scaleY?: number;
+    keys?: SRTrackKey[]; mode?: SRTrackMode;
+  };
 };
 
 const RESOLUTIONS = [
@@ -323,6 +333,9 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
   const [clips, setClips] = useState<EditClip[]>([]);
+  const [trackOpen, setTrackOpen] = useState(false);
+  const [srBusy, setSrBusy] = useState(false);
+  const [srErr, setSrErr] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selected = selectedIds.length ? selectedIds[selectedIds.length - 1] : null;
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -854,6 +867,33 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     const ids = selectedRef.current.includes(id) && selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([id]);
     setClips((p) => p.map((c) => (ids.has(c.id) ? { ...c, ...patch } : c)));
   };
+
+  // Server-render the screen replace for the selected clip (same compositor as
+  // the Screen Replace node). On success the clip's url becomes the composite.
+  const renderSR = async () => {
+    const c = clipsRef.current.find((x) => x.id === selectedRef.current[selectedRef.current.length - 1]);
+    if (!c?.sr?.green || !c.sr.content) return;
+    setSrBusy(true); setSrErr(null);
+    try {
+      const r = await fetch("/api/screen-replace/render", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: c.sr.green, content: c.sr.content, contentIsVideo: !!c.sr.contentVideo,
+          keyColorHex: c.sr.key || "#00FF00", similarity: c.sr.sim ?? 0.3, fit: c.sr.fit || "fill",
+          scaleX: c.sr.scaleX ?? 1, scaleY: c.sr.scaleY ?? 1, matteChoke: c.sr.matte ?? 0, feather: c.sr.feather ?? 0,
+          trackKeys: c.sr.keys || [], trackMode: c.sr.mode || "anchor",
+          projectId, workflowId,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.url) throw new Error(j.error || "Render failed");
+      updateSel(c.id, { url: j.url, keyColor: undefined, keyTol: undefined });
+    } catch (e) {
+      setSrErr(e instanceof Error ? e.message : "Render failed");
+    } finally {
+      setSrBusy(false);
+    }
+  };
   const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelectedIds((s) => s.filter((x) => x !== id)); }, []);
   const removeMany = useCallback((ids: string[]) => { const set = new Set(ids); setClips((p) => p.filter((c) => !set.has(c.id))); setSelectedIds([]); }, []);
   // razor: split clips at the playhead (selected ones, or every clip under the playhead)
@@ -1065,7 +1105,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -1090,7 +1130,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -2107,6 +2147,49 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                   <div className="text-[10px] text-fg-subtle">Transparent PNG and alpha WebM work as-is. For footage on a solid color use chroma key; for glows/fireworks on black use Screen.</div>
                 </div>
               )}
+              {sel.kind === "video" && (
+                <div className="space-y-1.5 border-t border-border pt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-fg-muted font-medium">Screen replace</span>
+                    {!sel.sr ? (
+                      <button type="button" onClick={() => updateSel(sel.id, { sr: { green: sel.url || "", key: "#00FF00", sim: 0.3, fit: "fill" } })} className="px-2 py-0.5 rounded border border-border text-[10px] text-fg-muted hover:text-fg">Enable</button>
+                    ) : (
+                      <button type="button" onClick={() => updateSel(sel.id, { sr: undefined })} className="px-2 py-0.5 rounded border border-border text-[10px] text-fg-muted hover:text-fg">Off</button>
+                    )}
+                  </div>
+                  {sel.sr && (
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] text-fg-subtle leading-snug">Replace this green-screen phone screen with content. Rendered on the server — node-quality keying, despill, matte and corner-pin tracking.</div>
+                      <label className="flex items-center gap-1.5 text-fg-muted">content
+                        <select value={sel.sr.content ?? ""} onChange={(e) => { const a = library.find((x) => x.url === e.target.value); updateSel(sel.id, { sr: { ...sel.sr!, content: a?.url, contentVideo: a?.kind === "video" } }); }} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none text-[11px]">
+                          <option value="">Pick from media…</option>
+                          {library.filter((a) => a.kind === "image" || a.kind === "video").map((a) => (<option key={a.id} value={a.url}>{a.label}</option>))}
+                        </select>
+                      </label>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <label className="flex items-center gap-1 text-fg-muted">fit
+                          <select value={sel.sr.fit ?? "fill"} onChange={(e) => updateSel(sel.id, { sr: { ...sel.sr!, fit: e.target.value as "fill" | "cover" } })} className="flex-1 bg-bg-card border border-border rounded px-1 py-1 text-fg outline-none">
+                            <option value="fill">Fill</option><option value="cover">Cover</option>
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-1 text-fg-muted">key
+                          <select value={String(sel.sr.sim ?? 0.3)} onChange={(e) => updateSel(sel.id, { sr: { ...sel.sr!, sim: Number(e.target.value) } })} className="flex-1 bg-bg-card border border-border rounded px-1 py-1 text-fg outline-none">
+                            <option value="0.2">Tight</option><option value="0.3">Normal</option><option value="0.45">Loose</option>
+                          </select>
+                        </label>
+                      </div>
+                      <label className="flex items-center gap-2 text-fg-muted">matte<input type="range" min={-8} max={8} step={1} value={sel.sr.matte ?? 0} onChange={(e) => updateSel(sel.id, { sr: { ...sel.sr!, matte: Number(e.target.value) } })} className="flex-1" /><span className="w-9 text-right tabular-nums">{sel.sr.matte ?? 0}px</span></label>
+                      <label className="flex items-center gap-2 text-fg-muted">soften<input type="range" min={0} max={8} step={1} value={sel.sr.feather ?? 0} onChange={(e) => updateSel(sel.id, { sr: { ...sel.sr!, feather: Number(e.target.value) } })} className="flex-1" /><span className="w-9 text-right tabular-nums">{sel.sr.feather ?? 0}px</span></label>
+                      <div className="flex gap-1.5">
+                        <button type="button" onClick={() => setTrackOpen(true)} className="flex-1 px-2 py-1.5 rounded-md border border-border text-[11px] text-fg-muted hover:text-fg inline-flex items-center justify-center gap-1.5"><SlidersHorizontal size={13} /> Adjust track</button>
+                        <button type="button" onClick={renderSR} disabled={srBusy || !sel.sr.content} className="flex-1 px-2 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium disabled:opacity-50 inline-flex items-center justify-center gap-1.5">{srBusy ? (<><Loader2 size={13} className="animate-spin" /> Rendering…</>) : (<><Wand2 size={13} /> Render</>)}</button>
+                      </div>
+                      {srErr && <div className="text-[10px] text-red-400">{srErr}</div>}
+                      <div className="text-[10px] text-fg-subtle leading-snug">After Render the clip plays the finished composite. Tweak the track / params and Render again to update.</div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {(sel.kind === "video" || sel.kind === "audio") && (
                 <div className="space-y-1.5">
@@ -2167,6 +2250,15 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       })()}
       {marquee && marquee.w > 1 && marquee.h > 1 && (
         <div className="fixed z-50 border border-brand bg-brand/15 pointer-events-none" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
+      )}
+      {trackOpen && sel && sel.sr?.green && (
+        <TrackEditor
+          source={sel.sr.green}
+          value={sel.sr.keys ?? []}
+          initialMode={sel.sr.mode}
+          onSave={(keys, mode) => updateSel(sel.id, { sr: { ...sel.sr!, keys, mode } })}
+          onClose={() => setTrackOpen(false)}
+        />
       )}
     </div>
   );
