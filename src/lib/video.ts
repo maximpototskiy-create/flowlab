@@ -694,35 +694,44 @@ const median = (arr: number[]): number => {
   return s[(s.length / 2) | 0];
 };
 
-// Per-corner keyframe offsets at normalized time t (0..1), smoothly interpolated
-// with a TIME-AWARE Hermite (Catmull-Rom) spline so the motion is C1-continuous:
-// the curve passes through every key and has no velocity jump AT a key, so fixing
-// one moment with a key does not jerk the frames right after it. A key carries
-// per-corner offsets `c` = [[dx,dy] ×4], or a uniform dx/dy (all four corners).
+// Corrected screen quad at frame f. INSIDE the keyed span the quad follows a smooth
+// time-aware Hermite through the ABSOLUTE key targets (auto-track between keys is
+// ignored, so a jittery/glitchy track between two good keys does not leak in).
+// OUTSIDE the span it is the pure auto-track. Boundary tangents match the auto-track
+// velocity so entering/leaving the keyed span has no jerk. A key carries per-corner
+// offsets `c` = [[dx,dy] ×4] (offset from the auto-track AT THE KEY'S FRAME), or a
+// uniform dx/dy.
 type TrackKeyN = { t: number; dx: number; dy: number; rot: number; c?: number[][] };
 function cornersOfKey(k: TrackKeyN): number[][] {
   if (k.c && k.c.length === 4) return k.c;
   const u = [k.dx, k.dy];
   return [u, u, u, u];
 }
-function interpCornerOffsets(keys: TrackKeyN[], t: number): number[][] {
+function correctedQuadAt(quads: Pt[][], keys: TrackKeyN[], f: number): number[][] {
+  const N = quads.length;
+  const q = quads[Math.max(0, Math.min(N - 1, f))];
+  if (!keys.length || N < 2) return q;
+  const tNow = f / (N - 1);
+  if (tNow <= keys[0].t || tNow >= keys[keys.length - 1].t) return q;
   const n = keys.length;
-  if (!n) return [[0, 0], [0, 0], [0, 0], [0, 0]];
-  if (n === 1 || t <= keys[0].t) return cornersOfKey(keys[0]);
-  if (t >= keys[n - 1].t) return cornersOfKey(keys[n - 1]);
+  const kf = keys.map((k) => Math.max(0, Math.min(N - 1, Math.round(k.t * (N - 1)))));
+  const T = keys.map((k, ki) => {
+    const c = cornersOfKey(k);
+    return quads[kf[ki]].map((p, ci) => [p[0] + c[ci][0], p[1] + c[ci][1]]);
+  });
+  const autoVel = (g: number, cc: number, d: number) => {
+    const a = Math.max(0, g - 1), b = Math.min(N - 1, g + 1);
+    return (quads[b][cc][d] - quads[a][cc][d]) / ((b - a) / (N - 1) || 1e-6);
+  };
   let i = 0;
-  for (let k = 0; k < n - 1; k++) { if (t >= keys[k].t && t <= keys[k + 1].t) { i = k; break; } }
-  const ci = cornersOfKey(keys[i]), cj = cornersOfKey(keys[i + 1]);
-  const cm1 = i > 0 ? cornersOfKey(keys[i - 1]) : ci;
-  const cp2 = i + 2 < n ? cornersOfKey(keys[i + 2]) : cj;
-  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6), s = (t - ti) / h;
-  const tm1 = i > 0 ? keys[i - 1].t : ti, tp2 = i + 2 < n ? keys[i + 2].t : tj;
+  for (let k = 0; k < n - 1; k++) { if (tNow >= keys[k].t && tNow <= keys[k + 1].t) { i = k; break; } }
+  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6), s = (tNow - ti) / h;
   const h00 = 2 * s * s * s - 3 * s * s + 1, h10 = s * s * s - 2 * s * s + s, h01 = -2 * s * s * s + 3 * s * s, h11 = s * s * s - s * s;
   const out: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
   for (let cc = 0; cc < 4; cc++) for (let d = 0; d < 2; d++) {
-    const pI = ci[cc][d], pJ = cj[cc][d];
-    const mI = i > 0 ? (pJ - cm1[cc][d]) / (tj - tm1) : (pJ - pI) / h;
-    const mJ = i + 2 < n ? (cp2[cc][d] - pI) / (tp2 - ti) : (pJ - pI) / h;
+    const pI = T[i][cc][d], pJ = T[i + 1][cc][d];
+    const mI = i === 0 ? autoVel(kf[0], cc, d) : (pJ - T[i - 1][cc][d]) / (tj - keys[i - 1].t);
+    const mJ = i + 1 === n - 1 ? autoVel(kf[n - 1], cc, d) : (T[i + 2][cc][d] - pI) / (keys[i + 2].t - ti);
     out[cc][d] = h00 * pI + h10 * h * mI + h01 * pJ + h11 * h * mJ;
   }
   return out;
@@ -1296,9 +1305,10 @@ export async function compositeGreenScreen(opts: {
       } else {
         cD = stillContent!.data; cW = stillContent!.w; cH = stillContent!.h; cCh = stillContent!.ch;
       }
-      let q = sm[k];
-      // Manual tracking correction: constant global offset + rotation (sliders),
-      // then per-corner keyframe offsets (corner-pin), interpolated for this frame.
+      // Keyframe correction: a smooth absolute path through the keyed positions
+      // inside the keyed span (auto-track between keys ignored), pure auto-track
+      // outside. Then the constant global offset/rotation (sliders) on top.
+      let q: Pt[] = (trackKeys.length ? correctedQuadAt(sm, trackKeys, k) : sm[k]) as Pt[];
       if (gOffX !== 0 || gOffY !== 0 || gRot !== 0) {
         const qx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
         const qy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
@@ -1307,11 +1317,6 @@ export async function compositeGreenScreen(opts: {
           const rx = px - qx, ry = py - qy;
           return [qx + rx * ca - ry * sa + gOffX, qy + rx * sa + ry * ca + gOffY] as Pt;
         });
-      }
-      if (trackKeys.length) {
-        const tt = nFrames > 1 ? k / (nFrames - 1) : 0;
-        const co = interpCornerOffsets(trackKeys, tt);
-        q = q.map((p, ci) => [p[0] + co[ci][0], p[1] + co[ci][1]] as Pt);
       }
       // Default "fill": corner-pin the whole content onto the screen quad. The
       // homography handles the phone's tilt, so content authored at the phone's

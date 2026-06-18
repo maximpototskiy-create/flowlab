@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Loader2, Trash2, Plus, RotateCcw, Maximize2, Minimize2, Play, Pause, Copy, Clipboard, ZoomIn, ZoomOut } from "lucide-react";
+import { X, Loader2, Trash2, Plus, RotateCcw, Maximize2, Minimize2, Play, Pause, Copy, Clipboard, ZoomIn, ZoomOut, Search } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TrackEditor — interactive, Mocha-style correction of the auto screen-track.
@@ -37,24 +37,32 @@ function normKeys(v: unknown): TrackKey[] {
     .sort((a, b) => a.t - b.t);
 }
 
-// Time-aware Hermite (Catmull-Rom) — C1-continuous in time. MUST match the
-// compositor's interpCornerOffsets so the preview equals the render.
-function interpCorners(keys: TrackKey[], t: number): number[][] {
+// Corrected quad at frame f — MUST match the compositor's correctedQuadAt so the
+// preview equals the render. Inside the keyed span: smooth Hermite through the
+// ABSOLUTE key targets (auto-track between keys ignored). Outside: pure auto-track.
+// Boundary tangents match the auto-track velocity for a jerk-free handoff.
+function correctedQuadAt(quads: number[][][], keys: TrackKey[], f: number): number[][] {
+  const N = quads.length;
+  const q = quads[Math.max(0, Math.min(N - 1, f))];
+  if (!keys.length || N < 2) return q;
+  const tNow = f / (N - 1);
+  if (tNow <= keys[0].t || tNow >= keys[keys.length - 1].t) return q;
   const n = keys.length;
-  if (!n) return ZERO();
-  if (n === 1 || t <= keys[0].t) return keys[0].c;
-  if (t >= keys[n - 1].t) return keys[n - 1].c;
+  const kf = keys.map((k) => Math.max(0, Math.min(N - 1, Math.round(k.t * (N - 1)))));
+  const T = keys.map((k, ki) => quads[kf[ki]].map((p, ci) => [p[0] + k.c[ci][0], p[1] + k.c[ci][1]]));
+  const autoVel = (g: number, cc: number, d: number) => {
+    const a = Math.max(0, g - 1), b = Math.min(N - 1, g + 1);
+    return (quads[b][cc][d] - quads[a][cc][d]) / ((b - a) / (N - 1) || 1e-6);
+  };
   let i = 0;
-  for (let k = 0; k < n - 1; k++) { if (t >= keys[k].t && t <= keys[k + 1].t) { i = k; break; } }
-  const ci = keys[i].c, cj = keys[i + 1].c, cm1 = i > 0 ? keys[i - 1].c : ci, cp2 = i + 2 < n ? keys[i + 2].c : cj;
-  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6), s = (t - ti) / h;
-  const tm1 = i > 0 ? keys[i - 1].t : ti, tp2 = i + 2 < n ? keys[i + 2].t : tj;
+  for (let k = 0; k < n - 1; k++) { if (tNow >= keys[k].t && tNow <= keys[k + 1].t) { i = k; break; } }
+  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6), s = (tNow - ti) / h;
   const h00 = 2 * s * s * s - 3 * s * s + 1, h10 = s * s * s - 2 * s * s + s, h01 = -2 * s * s * s + 3 * s * s, h11 = s * s * s - s * s;
   const out: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
   for (let cc = 0; cc < 4; cc++) for (let d = 0; d < 2; d++) {
-    const pI = ci[cc][d], pJ = cj[cc][d];
-    const mI = i > 0 ? (pJ - cm1[cc][d]) / (tj - tm1) : (pJ - pI) / h;
-    const mJ = i + 2 < n ? (cp2[cc][d] - pI) / (tp2 - ti) : (pJ - pI) / h;
+    const pI = T[i][cc][d], pJ = T[i + 1][cc][d];
+    const mI = i === 0 ? autoVel(kf[0], cc, d) : (pJ - T[i - 1][cc][d]) / (tj - keys[i - 1].t);
+    const mJ = i + 1 === n - 1 ? autoVel(kf[n - 1], cc, d) : (T[i + 2][cc][d] - pI) / (keys[i + 2].t - ti);
     out[cc][d] = h00 * pI + h10 * h * mI + h01 * pJ + h11 * h * mJ;
   }
   return out;
@@ -87,6 +95,7 @@ export default function TrackEditor({
   const [big, setBig] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [vzoom, setVzoom] = useState(1);
   const [clip, setClip] = useState<number[][] | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -128,9 +137,9 @@ export default function TrackEditor({
   const nFrames = track ? track.quads.length : 0;
   const frame = nFrames ? Math.max(0, Math.min(nFrames - 1, Math.round(t * (nFrames - 1)))) : 0;
   const autoQuad = track ? track.quads[frame] : null;
-  const offNow = interpCorners(keys, t);
-  const correctedQuad = autoQuad ? autoQuad.map((p, i) => [p[0] + offNow[i][0], p[1] + offNow[i][1]]) : null;
+  const correctedQuad = track && autoQuad ? correctedQuadAt(track.quads, keys, frame) : null;
   const keyHere = keys.find((k) => Math.abs(k.t - t) < 0.012);
+  const vCenter = correctedQuad ? quadCenter(correctedQuad) : null;
 
   const stopPlay = useCallback(() => {
     if (raf.current) { cancelAnimationFrame(raf.current); raf.current = null; }
@@ -175,9 +184,12 @@ export default function TrackEditor({
   };
 
   const baseC = useCallback((): number[][] => {
-    const k = keys.find((kk) => Math.abs(kk.t - t) < 0.012);
-    return (k ? k.c : interpCorners(keys, t)).map((o) => [o[0], o[1]]);
-  }, [keys, t]);
+    if (!track) return ZERO();
+    const N = track.quads.length;
+    const f = N ? Math.max(0, Math.min(N - 1, Math.round(t * (N - 1)))) : 0;
+    const aq = track.quads[f];
+    return correctedQuadAt(track.quads, keys, f).map((p, i) => [p[0] - aq[i][0], p[1] - aq[i][1]]);
+  }, [keys, t, track]);
 
   const upsertKeyC = useCallback((tt: number, c: number[][]) => {
     setKeys((prev) => {
@@ -258,6 +270,7 @@ export default function TrackEditor({
             <div className="flex-1 min-h-0 flex flex-col p-3 gap-2 bg-black/30">
               <div className="flex-1 min-h-0 flex items-center justify-center">
                 <div className="relative h-full max-h-full max-w-full bg-black rounded-lg overflow-hidden" style={{ aspectRatio: aspect }}>
+                  <div className="absolute inset-0" style={{ transform: `scale(${vzoom})`, transformOrigin: vCenter && track ? `${(vCenter[0] / track.w) * 100}% ${(vCenter[1] / track.h) * 100}%` : "50% 50%" }}>
                   <video ref={videoRef} src={source} className="absolute inset-0 w-full h-full object-contain" onLoadedMetadata={(e) => setDur(e.currentTarget.duration || 0)} onEnded={stopPlay} playsInline muted />
                   <svg
                     ref={svgRef}
@@ -289,6 +302,7 @@ export default function TrackEditor({
                       </>
                     )}
                   </svg>
+                  </div>
                 </div>
               </div>
 
@@ -296,6 +310,7 @@ export default function TrackEditor({
               <div className="shrink-0">
                 <div className="flex items-center gap-2 mb-1">
                   <button type="button" onClick={togglePlay} className="w-8 h-8 rounded-md bg-white/10 hover:bg-white/20 text-fg flex items-center justify-center shrink-0">{playing ? <Pause size={15} /> : <Play size={15} />}</button>
+                  <button type="button" onClick={() => setVzoom((z) => (z >= 3 ? 1 : z + 1))} title="Zoom into the screen (easier to grab corners)" className="h-8 px-2 rounded-md bg-white/10 hover:bg-white/20 text-fg flex items-center gap-1 shrink-0 text-[11px]"><Search size={13} /> {vzoom}×</button>
                   <span className="text-[10px] text-fg-subtle tabular-nums shrink-0">frame {frame}/{nFrames - 1}{fromCache ? " · cached" : ""}</span>
                   <div className="ml-auto flex items-center gap-1 shrink-0">
                     <button type="button" onClick={() => setZoom((z) => Math.max(1, z - 1))} disabled={zoom <= 1} className="w-6 h-6 rounded border border-border text-fg-muted hover:text-fg disabled:opacity-40 flex items-center justify-center"><ZoomOut size={12} /></button>
@@ -333,7 +348,7 @@ export default function TrackEditor({
               <p className="text-[10px] text-fg-subtle leading-snug border-t border-border pt-2">
                 <span className="inline-block w-2 h-2 align-middle rounded-sm bg-cyan-400 mr-1" /> cyan = content lands here · <span className="inline-block w-3 h-0 align-middle border-t-2 border-dashed border-amber-400 mr-1" /> = auto-track.
                 <br /><br />
-                Keys interpolate on a <b>smooth</b> curve (no jerk after a key). Fix one moment by dragging a corner/the body; drop neutral <b>Key (0)</b>s on the good frames either side so the fix eases in and out. <b>Copy/Paste</b> reuses a key; <b>zoom</b> (top-right) spreads close keys. Then <b>Save</b> and re-run the node.
+                Inside your keyframed span the screen follows a <b>smooth path through the keys</b> — the shaky auto-track between keys is ignored, so a glitch won&apos;t leak in. Outside the keys it&apos;s the plain auto-track. Fix a bad moment by dragging a corner/the body, and drop neutral <b>Key (0)</b>s on the good frames either side to bound the fix. <b>Copy/Paste</b> reuses a key; <b>zoom</b> (top-right) spreads close keys. Then <b>Save</b> and re-run the node.
               </p>
             </div>
           </div>
