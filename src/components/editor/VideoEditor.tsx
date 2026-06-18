@@ -9,6 +9,8 @@ import {
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
   Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw,
 } from "lucide-react";
+import TrackEditor from "@/components/canvas/TrackEditor";
+import { correctedQuadAt, cornerPinMatrix3d, type TrackMode, type TrackKeyC } from "@/lib/track/correct";
 
 export type EditorAsset = {
   id: string;
@@ -266,6 +268,10 @@ type EditClip = {
   keyTol?: number;   // 0..1
   tstyle?: TextStyle;
   words?: CapWord[];
+  // Screen-track (live corner-pin onto a green-screen clip's phone screen):
+  trackTo?: string;            // id of the green-screen video clip to track onto
+  trackKeys?: TrackKeyC[];     // correction keyframes (per-corner offsets)
+  trackMode?: TrackMode;       // interpolation mode
 };
 
 const RESOLUTIONS = [
@@ -305,6 +311,9 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
   const [clips, setClips] = useState<EditClip[]>([]);
+  // Per-source green-screen track cache (auto-track quads), keyed by clip URL.
+  const [trackCache, setTrackCache] = useState<Record<string, { fps: number; w: number; h: number; quads: number[][][] } | "loading" | "error">>({});
+  const [trackOpen, setTrackOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selected = selectedIds.length ? selectedIds[selectedIds.length - 1] : null;
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -836,6 +845,24 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     const ids = selectedRef.current.includes(id) && selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([id]);
     setClips((p) => p.map((c) => (ids.has(c.id) ? { ...c, ...patch } : c)));
   };
+
+  // Fetch the green-screen auto-track for any source referenced by a tracked clip.
+  useEffect(() => {
+    const urls = new Set<string>();
+    for (const c of clips) {
+      if (!c.trackTo) continue;
+      const p = clips.find((x) => x.id === c.trackTo);
+      if (p?.url && p.kind === "video") urls.add(p.url);
+    }
+    urls.forEach((url) => {
+      if (trackCache[url]) return;
+      setTrackCache((s) => ({ ...s, [url]: "loading" }));
+      fetch("/api/screen-replace/track", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: url }) })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("track fetch failed"))))
+        .then((j) => setTrackCache((s) => ({ ...s, [url]: { fps: j.fps || 30, w: j.w || 1080, h: j.h || 1920, quads: j.quads || [] } })))
+        .catch(() => setTrackCache((s) => ({ ...s, [url]: "error" })));
+    });
+  }, [clips, trackCache]);
   const remove = useCallback((id: string) => { setClips((p) => p.filter((c) => c.id !== id)); setSelectedIds((s) => s.filter((x) => x !== id)); }, []);
   const removeMany = useCallback((ids: string[]) => { const set = new Set(ids); setClips((p) => p.filter((c) => !set.has(c.id))); setSelectedIds([]); }, []);
   // razor: split clips at the playhead (selected ones, or every clip under the playhead)
@@ -1047,7 +1074,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, trackTo: c.trackTo, trackKeys: c.trackKeys, trackMode: c.trackMode })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -1072,7 +1099,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, trackTo: c.trackTo, trackKeys: c.trackKeys, trackMode: c.trackMode })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -1362,6 +1389,25 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       transformOrigin: "center",
       clipPath: v.reveal != null ? `inset(0 ${Math.round((1 - v.reveal) * 100)}% 0 0)` : undefined,
     };
+  };
+  // Live corner-pin warp for a clip tracked onto a green-screen phone screen.
+  // Maps the clip's full preview rect onto the corrected screen quad at the
+  // current frame. Returns null when not tracked / track not loaded yet.
+  // NOTE: assumes the green-screen clip fills the frame at the project aspect.
+  const warpStyle = (c: EditClip, opacity: number, tt: number): React.CSSProperties | null => {
+    if (!c.trackTo || !previewSize.w) return null;
+    const phone = clips.find((x) => x.id === c.trackTo);
+    const trk = phone?.url ? trackCache[phone.url] : null;
+    if (!phone || !trk || typeof trk === "string") return null;
+    const N = trk.quads.length;
+    if (N < 1) return null;
+    const vt = (tt - (phone.start || 0)) + (phone.inset || 0);
+    const frame = Math.max(0, Math.min(N - 1, Math.round(vt * trk.fps)));
+    const quad = correctedQuadAt(trk.quads, c.trackKeys || [], frame, c.trackMode || "anchor");
+    const sx = previewSize.w / (trk.w || previewSize.w), sy = previewSize.h / (trk.h || previewSize.h);
+    const qp = quad.map((p) => [p[0] * sx, p[1] * sy]);
+    const m = cornerPinMatrix3d(previewSize.w, previewSize.h, qp);
+    return { transform: `matrix3d(${m.join(",")})`, transformOrigin: "0 0", opacity };
   };
   const fxStyle = (kind?: string): React.CSSProperties =>
     kind === "flash" ? { background: "#fff" }
@@ -1740,18 +1786,19 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                       const active = isActive(c, t);
                       const isSel = selectedIds.includes(c.id);
                       const v = clipVisual(c as CompClip, t, clips as CompClip[]);
+                      const w3d = warpStyle(c, v.opacity, t);
                       return (
                         <div key={c.id} className="absolute inset-0"
-                          style={{ ...styleFromVisual(c, v), mixBlendMode: (c.blend || undefined) as React.CSSProperties["mixBlendMode"], pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
+                          style={{ ...(w3d ?? styleFromVisual(c, v)), mixBlendMode: (c.blend || undefined) as React.CSSProperties["mixBlendMode"], pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
                           onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}>
                           {c.kind === "image" && !c.keyColor && (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={c.url} alt="" draggable={false} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                            <img src={c.url} alt="" draggable={false} className={`absolute inset-0 w-full h-full ${w3d ? "object-fill" : "object-contain"} pointer-events-none`} />
                           )}
                           {c.kind === "image" && c.keyColor && <KeyedImage url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3} />}
                           {c.kind === "video" && !c.keyColor && (
                             <video src={c.url} playsInline preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
-                              className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                              className={`absolute inset-0 w-full h-full ${w3d ? "object-fill" : "object-contain"} pointer-events-none`} />
                           )}
                           {c.kind === "video" && c.keyColor && (
                             <KeyedVideo url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3}
@@ -2087,6 +2134,32 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                     <label className="flex items-center gap-2 text-fg-muted">tolerance<input type="range" min={0.05} max={0.8} step={0.01} value={sel.keyTol ?? 0.3} onChange={(e) => updateSel(sel.id, { keyTol: Number(e.target.value) })} className="flex-1" /><span className="w-8 text-right tabular-nums">{Math.round((sel.keyTol ?? 0.3) * 100)}%</span></label>
                   )}
                   <div className="text-[10px] text-fg-subtle">Transparent PNG and alpha WebM work as-is. For footage on a solid color use chroma key; for glows/fireworks on black use Screen.</div>
+                  {/* Screen track — pin this clip onto a green-screen phone screen (live corner-pin). */}
+                  <div className="border-t border-border pt-2 mt-1 space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-fg-muted">
+                      <span className="whitespace-nowrap">screen track</span>
+                      <select value={sel.trackTo ?? ""} onChange={(e) => updateSel(sel.id, { trackTo: e.target.value || undefined })} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none text-[11px]">
+                        <option value="">Off</option>
+                        {clips.filter((c) => c.kind === "video" && c.id !== sel.id && c.url).map((c) => (
+                          <option key={c.id} value={c.id}>{c.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {sel.trackTo && (() => {
+                      const phone = clips.find((c) => c.id === sel.trackTo);
+                      const trk = phone?.url ? trackCache[phone.url] : null;
+                      const status = trk === "loading" ? "tracking…" : trk === "error" ? "track failed" : trk ? "tracked ✓" : "—";
+                      return (
+                        <div className="space-y-1.5">
+                          <div className="text-[10px] text-fg-subtle">Source: <b>{phone?.label ?? "?"}</b> · {status}</div>
+                          <button type="button" onClick={() => setTrackOpen(true)} disabled={!trk || typeof trk === "string"} className="w-full px-2 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium disabled:opacity-50 inline-flex items-center justify-center gap-1.5">
+                            <SlidersHorizontal size={13} /> Adjust track
+                          </button>
+                          <div className="text-[10px] text-fg-subtle leading-snug">Content warps onto the phone screen live. Put the green-screen clip on a layer ABOVE this one with chroma-key on, so fingers stay on top.</div>
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
               )}
 
@@ -2150,6 +2223,19 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       {marquee && marquee.w > 1 && marquee.h > 1 && (
         <div className="fixed z-50 border border-brand bg-brand/15 pointer-events-none" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
       )}
+      {trackOpen && sel && sel.trackTo && (() => {
+        const phone = clips.find((c) => c.id === sel.trackTo);
+        if (!phone?.url) return null;
+        return (
+          <TrackEditor
+            source={phone.url}
+            value={sel.trackKeys ?? []}
+            initialMode={sel.trackMode}
+            onSave={(keys, mode) => updateSel(sel.id, { trackKeys: keys, trackMode: mode })}
+            onClose={() => setTrackOpen(false)}
+          />
+        );
+      })()}
     </div>
   );
 }
