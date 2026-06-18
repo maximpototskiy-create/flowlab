@@ -41,33 +41,47 @@ function normKeys(v: unknown): TrackKey[] {
 // preview equals the render. Inside the keyed span: smooth Hermite through the
 // ABSOLUTE key targets (auto-track between keys ignored). Outside: pure auto-track.
 // Boundary tangents match the auto-track velocity for a jerk-free handoff.
-function correctedQuadAt(quads: number[][][], keys: TrackKey[], f: number): number[][] {
-  const N = quads.length;
-  const q = quads[Math.max(0, Math.min(N - 1, f))];
-  if (!keys.length || N < 2) return q;
+type TrackMode = "region" | "keys" | "anchor";
+function interpPts(quads: number[][][], P: number[][][], keys: TrackKey[], kf: number[], f: number, N: number, useAutoVel: boolean): number[][] {
   const n = keys.length;
-  const kf = keys.map((k) => Math.max(0, Math.min(N - 1, Math.round(k.t * (N - 1)))));
-  if (f < kf[0] || f > kf[n - 1]) return q; // strictly outside the keyed span (by frame index — robust to t rounding)
-  if (n === 1) return quads[kf[0]].map((p, ci) => [p[0] + keys[0].c[ci][0], p[1] + keys[0].c[ci][1]]);
   const tNow = f / (N - 1);
-  const T = keys.map((k, ki) => quads[kf[ki]].map((p, ci) => [p[0] + k.c[ci][0], p[1] + k.c[ci][1]]));
-  const autoVel = (g: number, cc: number, d: number) => {
-    const a = Math.max(0, g - 1), b = Math.min(N - 1, g + 1);
-    return (quads[b][cc][d] - quads[a][cc][d]) / ((b - a) / (N - 1) || 1e-6);
-  };
   let i = 0;
   for (let k = 0; k < n - 1; k++) { if (f >= kf[k] && f <= kf[k + 1]) { i = k; break; } }
   const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6);
   let s = (tNow - ti) / h; s = s < 0 ? 0 : s > 1 ? 1 : s;
   const h00 = 2 * s * s * s - 3 * s * s + 1, h10 = s * s * s - 2 * s * s + s, h01 = -2 * s * s * s + 3 * s * s, h11 = s * s * s - s * s;
+  const autoVel = (g: number, cc: number, d: number) => {
+    const a = Math.max(0, g - 1), b = Math.min(N - 1, g + 1);
+    return (quads[b][cc][d] - quads[a][cc][d]) / ((b - a) / (N - 1) || 1e-6);
+  };
   const out: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
   for (let cc = 0; cc < 4; cc++) for (let d = 0; d < 2; d++) {
-    const pI = T[i][cc][d], pJ = T[i + 1][cc][d];
-    const mI = i === 0 ? autoVel(kf[0], cc, d) : (pJ - T[i - 1][cc][d]) / (tj - keys[i - 1].t);
-    const mJ = i + 1 === n - 1 ? autoVel(kf[n - 1], cc, d) : (T[i + 2][cc][d] - pI) / (keys[i + 2].t - ti);
+    const pI = P[i][cc][d], pJ = P[i + 1][cc][d];
+    const mI = i > 0 ? (pJ - P[i - 1][cc][d]) / (tj - keys[i - 1].t) : (useAutoVel ? autoVel(kf[0], cc, d) : (pJ - pI) / h);
+    const mJ = i + 1 < n - 1 ? (P[i + 2][cc][d] - pI) / (keys[i + 2].t - ti) : (useAutoVel ? autoVel(kf[n - 1], cc, d) : (pJ - pI) / h);
     out[cc][d] = h00 * pI + h10 * h * mI + h01 * pJ + h11 * h * mJ;
   }
   return out;
+}
+// Mode-aware corrected quad — MUST match the compositor's correctedQuadAt.
+function correctedQuadAt(quads: number[][][], keys: TrackKey[], f: number, mode: TrackMode): number[][] {
+  const N = quads.length;
+  const q = quads[Math.max(0, Math.min(N - 1, f))];
+  if (!keys.length || N < 2) return q;
+  const n = keys.length;
+  const kf = keys.map((k) => Math.max(0, Math.min(N - 1, Math.round(k.t * (N - 1)))));
+  if (mode === "anchor") {
+    let off: number[][];
+    if (n === 1 || f <= kf[0]) off = keys[0].c;
+    else if (f >= kf[n - 1]) off = keys[n - 1].c;
+    else off = interpPts(quads, keys.map((k) => k.c), keys, kf, f, N, false);
+    return q.map((p, ci) => [p[0] + off[ci][0], p[1] + off[ci][1]]);
+  }
+  const T = keys.map((k, ki) => quads[kf[ki]].map((p, ci) => [p[0] + k.c[ci][0], p[1] + k.c[ci][1]]));
+  if (f < kf[0]) return mode === "keys" ? T[0] : q;
+  if (f > kf[n - 1]) return mode === "keys" ? T[n - 1] : q;
+  if (n === 1) return T[0];
+  return interpPts(quads, T, keys, kf, f, N, mode === "region");
 }
 function quadCenter(q: number[][]): Pt {
   return [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4];
@@ -77,13 +91,15 @@ export default function TrackEditor({
   source,
   value,
   cachedTrackUrl,
+  initialMode,
   onSave,
   onClose,
 }: {
   source: string;
   value: TrackKey[];
   cachedTrackUrl?: string;
-  onSave: (keys: TrackKey[]) => void;
+  initialMode?: TrackMode;
+  onSave: (keys: TrackKey[], mode: TrackMode) => void;
   onClose: () => void;
 }) {
   const [track, setTrack] = useState<Track | null>(null);
@@ -99,6 +115,7 @@ export default function TrackEditor({
   const [zoom, setZoom] = useState(1);
   const [vzoom, setVzoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [mode, setMode] = useState<TrackMode>(initialMode === "keys" || initialMode === "anchor" ? initialMode : "region");
   const [clip, setClip] = useState<number[][] | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -140,7 +157,7 @@ export default function TrackEditor({
   const nFrames = track ? track.quads.length : 0;
   const frame = nFrames ? Math.max(0, Math.min(nFrames - 1, Math.round(t * (nFrames - 1)))) : 0;
   const autoQuad = track ? track.quads[frame] : null;
-  const correctedQuad = track && autoQuad ? correctedQuadAt(track.quads, keys, frame) : null;
+  const correctedQuad = track && autoQuad ? correctedQuadAt(track.quads, keys, frame, mode) : null;
   const keyHere = keys.find((k) => Math.abs(k.t - t) < 0.012);
   const vCenter = correctedQuad ? quadCenter(correctedQuad) : null;
 
@@ -191,8 +208,8 @@ export default function TrackEditor({
     const N = track.quads.length;
     const f = N ? Math.max(0, Math.min(N - 1, Math.round(t * (N - 1)))) : 0;
     const aq = track.quads[f];
-    return correctedQuadAt(track.quads, keys, f).map((p, i) => [p[0] - aq[i][0], p[1] - aq[i][1]]);
-  }, [keys, t, track]);
+    return correctedQuadAt(track.quads, keys, f, mode).map((p, i) => [p[0] - aq[i][0], p[1] - aq[i][1]]);
+  }, [keys, t, track, mode]);
 
   const upsertKeyC = useCallback((tt: number, c: number[][]) => {
     setKeys((prev) => {
@@ -353,7 +370,22 @@ export default function TrackEditor({
 
             {/* controls */}
             <div className="w-full md:w-64 border-t md:border-t-0 md:border-l border-border p-3 overflow-y-auto shrink-0 space-y-2.5">
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="space-y-1">
+                <div className="text-[9px] text-fg-subtle uppercase tracking-wide">Interpolation</div>
+                <div className="grid grid-cols-3 gap-1">
+                  {(["region", "keys", "anchor"] as TrackMode[]).map((m) => (
+                    <button key={m} type="button" onClick={() => setMode(m)} className={`px-1 py-1 rounded text-[10px] border ${mode === m ? "border-brand bg-brand/10 text-fg" : "border-border text-fg-muted hover:text-fg"}`}>
+                      {m === "region" ? "Track+fix" : m === "keys" ? "Keyframes" : "Anchor"}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[10px] text-fg-subtle leading-snug">
+                  {mode === "region" && "Keys fix only their span; plain auto-track elsewhere. Best for a glitchy stretch."}
+                  {mode === "keys" && "Screen follows your keys across the whole clip; auto-track ignored. Best when the track is bad throughout — key the path."}
+                  {mode === "anchor" && "Screen follows the auto-track everywhere; keys add a smooth offset. Best to nudge/anchor a drifting track."}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 border-t border-border pt-2.5">
                 <button type="button" onClick={addZeroKey} className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] border border-border text-fg-muted hover:text-fg hover:border-brand"><Plus size={12} /> Key (0)</button>
                 <button type="button" onClick={deleteKeyHere} disabled={!keyHere} className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] border border-border text-fg-muted hover:text-fg hover:border-red-500 disabled:opacity-40"><Trash2 size={12} /> Delete</button>
                 <button type="button" onClick={copyKey} disabled={!keyHere} className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40"><Copy size={12} /> Copy</button>
@@ -372,7 +404,7 @@ export default function TrackEditor({
 
         <div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-border shrink-0">
           <button type="button" onClick={onClose} className="px-3 py-1.5 rounded text-[12px] text-fg-muted hover:text-fg">Cancel</button>
-          <button type="button" onClick={() => { onSave(keys); onClose(); }} className="px-4 py-1.5 rounded text-[12px] bg-brand text-white hover:bg-brand/90 font-medium">Save keyframes</button>
+          <button type="button" onClick={() => { onSave(keys, mode); onClose(); }} className="px-4 py-1.5 rounded text-[12px] bg-brand text-white hover:bg-brand/90 font-medium">Save keyframes</button>
         </div>
       </div>
     </div>,

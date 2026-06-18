@@ -230,8 +230,9 @@ export default function NodeExpandedModal({
         <TrackEditor
           source={sourceVideoUrl}
           cachedTrackUrl={cachedTrackUrl}
+          initialMode={node.config.track_mode as "region" | "keys" | "anchor" | undefined}
           value={parseTrackKeys(node.config.track_keys)}
-          onSave={(keys) => onConfigChange("track_keys", JSON.stringify(keys))}
+          onSave={(keys, mode) => { onConfigChange("track_keys", JSON.stringify(keys)); onConfigChange("track_mode", mode); }}
           onClose={() => setTrackOpen(false)}
         />
       )}

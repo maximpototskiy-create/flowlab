@@ -707,36 +707,59 @@ function cornersOfKey(k: TrackKeyN): number[][] {
   const u = [k.dx, k.dy];
   return [u, u, u, u];
 }
-function correctedQuadAt(quads: Pt[][], keys: TrackKeyN[], f: number): number[][] {
-  const N = quads.length;
-  const q = quads[Math.max(0, Math.min(N - 1, f))];
-  if (!keys.length || N < 2) return q;
+type TrackMode = "region" | "keys" | "anchor";
+// Hermite interpolation of a per-corner point set P across the keyed range. Interior
+// tangents are time-aware Catmull-Rom; the two end tangents are the auto-track velocity
+// (useAutoVel — for "region", a smooth handoff to the surrounding auto-track) or a
+// one-sided difference (otherwise).
+function interpPts(quads: Pt[][], P: number[][][], keys: TrackKeyN[], kf: number[], f: number, N: number, useAutoVel: boolean): number[][] {
   const n = keys.length;
-  const kf = keys.map((k) => Math.max(0, Math.min(N - 1, Math.round(k.t * (N - 1)))));
-  if (f < kf[0] || f > kf[n - 1]) return q; // strictly outside the keyed span (by frame index — robust to t rounding)
-  if (n === 1) { const c0 = cornersOfKey(keys[0]); return quads[kf[0]].map((p, ci) => [p[0] + c0[ci][0], p[1] + c0[ci][1]]); }
   const tNow = f / (N - 1);
-  const T = keys.map((k, ki) => {
-    const c = cornersOfKey(k);
-    return quads[kf[ki]].map((p, ci) => [p[0] + c[ci][0], p[1] + c[ci][1]]);
-  });
-  const autoVel = (g: number, cc: number, d: number) => {
-    const a = Math.max(0, g - 1), b = Math.min(N - 1, g + 1);
-    return (quads[b][cc][d] - quads[a][cc][d]) / ((b - a) / (N - 1) || 1e-6);
-  };
   let i = 0;
   for (let k = 0; k < n - 1; k++) { if (f >= kf[k] && f <= kf[k + 1]) { i = k; break; } }
   const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6);
   let s = (tNow - ti) / h; s = s < 0 ? 0 : s > 1 ? 1 : s;
   const h00 = 2 * s * s * s - 3 * s * s + 1, h10 = s * s * s - 2 * s * s + s, h01 = -2 * s * s * s + 3 * s * s, h11 = s * s * s - s * s;
+  const autoVel = (g: number, cc: number, d: number) => {
+    const a = Math.max(0, g - 1), b = Math.min(N - 1, g + 1);
+    return (quads[b][cc][d] - quads[a][cc][d]) / ((b - a) / (N - 1) || 1e-6);
+  };
   const out: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
   for (let cc = 0; cc < 4; cc++) for (let d = 0; d < 2; d++) {
-    const pI = T[i][cc][d], pJ = T[i + 1][cc][d];
-    const mI = i === 0 ? autoVel(kf[0], cc, d) : (pJ - T[i - 1][cc][d]) / (tj - keys[i - 1].t);
-    const mJ = i + 1 === n - 1 ? autoVel(kf[n - 1], cc, d) : (T[i + 2][cc][d] - pI) / (keys[i + 2].t - ti);
+    const pI = P[i][cc][d], pJ = P[i + 1][cc][d];
+    const mI = i > 0 ? (pJ - P[i - 1][cc][d]) / (tj - keys[i - 1].t) : (useAutoVel ? autoVel(kf[0], cc, d) : (pJ - pI) / h);
+    const mJ = i + 1 < n - 1 ? (P[i + 2][cc][d] - pI) / (keys[i + 2].t - ti) : (useAutoVel ? autoVel(kf[n - 1], cc, d) : (pJ - pI) / h);
     out[cc][d] = h00 * pI + h10 * h * mI + h01 * pJ + h11 * h * mJ;
   }
   return out;
+}
+// Corrected screen quad at frame f, per mode:
+//   "region" — keys define the screen INSIDE the keyed span via a smooth absolute path
+//     (auto-track jitter between keys ignored); pure auto-track OUTSIDE; ends hand off to
+//     the auto-track velocity. Best to fix a glitchy stretch on an otherwise-good track.
+//   "keys"   — the screen follows a smooth absolute path through the keys across the WHOLE
+//     clip; auto-track ignored; held before the first / after the last key. Best when the
+//     track is bad throughout and you hand-key the path.
+//   "anchor" — the screen follows the auto-track everywhere PLUS a smooth keyed offset
+//     (held outside the span). Best to anchor/nudge a track that drifts.
+function correctedQuadAt(quads: Pt[][], keys: TrackKeyN[], f: number, mode: TrackMode): number[][] {
+  const N = quads.length;
+  const q = quads[Math.max(0, Math.min(N - 1, f))];
+  if (!keys.length || N < 2) return q;
+  const n = keys.length;
+  const kf = keys.map((k) => Math.max(0, Math.min(N - 1, Math.round(k.t * (N - 1)))));
+  if (mode === "anchor") {
+    let off: number[][];
+    if (n === 1 || f <= kf[0]) off = cornersOfKey(keys[0]);
+    else if (f >= kf[n - 1]) off = cornersOfKey(keys[n - 1]);
+    else off = interpPts(quads, keys.map(cornersOfKey), keys, kf, f, N, false);
+    return q.map((p, ci) => [p[0] + off[ci][0], p[1] + off[ci][1]]);
+  }
+  const T = keys.map((k, ki) => { const c = cornersOfKey(k); return quads[kf[ki]].map((p, ci) => [p[0] + c[ci][0], p[1] + c[ci][1]]); });
+  if (f < kf[0]) return mode === "keys" ? T[0] : q;
+  if (f > kf[n - 1]) return mode === "keys" ? T[n - 1] : q;
+  if (n === 1) return T[0];
+  return interpPts(quads, T, keys, kf, f, N, mode === "region");
 }
 
 // Per-frame PLANAR-TRACKED chroma-key composite. The green screen's 4 corners
@@ -766,6 +789,8 @@ export async function compositeGreenScreen(opts: {
   // zero correction stay exactly as the auto-track. Either a uniform dx/dy/rot, OR
   // per-corner offsets `c` = [[dx,dy] ×4] (corner-pin) for shape/perspective fixes.
   trackKeys?: { t: number; dx?: number; dy?: number; rot?: number; c?: number[][] }[];
+  // Interpolation mode for the keyframes (see correctedQuadAt).
+  trackMode?: "region" | "keys" | "anchor";
   // Optional out-param: if provided, it's filled with the per-frame auto-tracked
   // screen quads (BEFORE manual correction) + fps/dims. Lets the editor draw the
   // track for interactive keyframing. Does not affect the rendered output.
@@ -792,6 +817,7 @@ export async function compositeGreenScreen(opts: {
         : undefined,
     }))
     .sort((a, b) => a.t - b.t);
+  const trackMode: TrackMode = opts.trackMode === "keys" || opts.trackMode === "anchor" ? opts.trackMode : "region";
   const dir = await mkdtemp(path.join(os.tmpdir(), "sr_"));
   // Reclaim any disk leaked by earlier hard-killed runs before we start.
   await sweepStaleScreenReplaceTemp(dir);
@@ -1310,7 +1336,7 @@ export async function compositeGreenScreen(opts: {
       // Keyframe correction: a smooth absolute path through the keyed positions
       // inside the keyed span (auto-track between keys ignored), pure auto-track
       // outside. Then the constant global offset/rotation (sliders) on top.
-      let q: Pt[] = (trackKeys.length ? correctedQuadAt(sm, trackKeys, k) : sm[k]) as Pt[];
+      let q: Pt[] = (trackKeys.length ? correctedQuadAt(sm, trackKeys, k, trackMode) : sm[k]) as Pt[];
       if (gOffX !== 0 || gOffY !== 0 || gRot !== 0) {
         const qx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
         const qy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
