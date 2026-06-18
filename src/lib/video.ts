@@ -711,10 +711,11 @@ function correctedQuadAt(quads: Pt[][], keys: TrackKeyN[], f: number): number[][
   const N = quads.length;
   const q = quads[Math.max(0, Math.min(N - 1, f))];
   if (!keys.length || N < 2) return q;
-  const tNow = f / (N - 1);
-  if (tNow <= keys[0].t || tNow >= keys[keys.length - 1].t) return q;
   const n = keys.length;
   const kf = keys.map((k) => Math.max(0, Math.min(N - 1, Math.round(k.t * (N - 1)))));
+  if (f < kf[0] || f > kf[n - 1]) return q; // strictly outside the keyed span (by frame index — robust to t rounding)
+  if (n === 1) { const c0 = cornersOfKey(keys[0]); return quads[kf[0]].map((p, ci) => [p[0] + c0[ci][0], p[1] + c0[ci][1]]); }
+  const tNow = f / (N - 1);
   const T = keys.map((k, ki) => {
     const c = cornersOfKey(k);
     return quads[kf[ki]].map((p, ci) => [p[0] + c[ci][0], p[1] + c[ci][1]]);
@@ -724,8 +725,9 @@ function correctedQuadAt(quads: Pt[][], keys: TrackKeyN[], f: number): number[][
     return (quads[b][cc][d] - quads[a][cc][d]) / ((b - a) / (N - 1) || 1e-6);
   };
   let i = 0;
-  for (let k = 0; k < n - 1; k++) { if (tNow >= keys[k].t && tNow <= keys[k + 1].t) { i = k; break; } }
-  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6), s = (tNow - ti) / h;
+  for (let k = 0; k < n - 1; k++) { if (f >= kf[k] && f <= kf[k + 1]) { i = k; break; } }
+  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6);
+  let s = (tNow - ti) / h; s = s < 0 ? 0 : s > 1 ? 1 : s;
   const h00 = 2 * s * s * s - 3 * s * s + 1, h10 = s * s * s - 2 * s * s + s, h01 = -2 * s * s * s + 3 * s * s, h11 = s * s * s - s * s;
   const out: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
   for (let cc = 0; cc < 4; cc++) for (let d = 0; d < 2; d++) {

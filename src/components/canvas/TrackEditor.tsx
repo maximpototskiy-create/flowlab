@@ -45,18 +45,20 @@ function correctedQuadAt(quads: number[][][], keys: TrackKey[], f: number): numb
   const N = quads.length;
   const q = quads[Math.max(0, Math.min(N - 1, f))];
   if (!keys.length || N < 2) return q;
-  const tNow = f / (N - 1);
-  if (tNow <= keys[0].t || tNow >= keys[keys.length - 1].t) return q;
   const n = keys.length;
   const kf = keys.map((k) => Math.max(0, Math.min(N - 1, Math.round(k.t * (N - 1)))));
+  if (f < kf[0] || f > kf[n - 1]) return q; // strictly outside the keyed span (by frame index — robust to t rounding)
+  if (n === 1) return quads[kf[0]].map((p, ci) => [p[0] + keys[0].c[ci][0], p[1] + keys[0].c[ci][1]]);
+  const tNow = f / (N - 1);
   const T = keys.map((k, ki) => quads[kf[ki]].map((p, ci) => [p[0] + k.c[ci][0], p[1] + k.c[ci][1]]));
   const autoVel = (g: number, cc: number, d: number) => {
     const a = Math.max(0, g - 1), b = Math.min(N - 1, g + 1);
     return (quads[b][cc][d] - quads[a][cc][d]) / ((b - a) / (N - 1) || 1e-6);
   };
   let i = 0;
-  for (let k = 0; k < n - 1; k++) { if (tNow >= keys[k].t && tNow <= keys[k + 1].t) { i = k; break; } }
-  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6), s = (tNow - ti) / h;
+  for (let k = 0; k < n - 1; k++) { if (f >= kf[k] && f <= kf[k + 1]) { i = k; break; } }
+  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6);
+  let s = (tNow - ti) / h; s = s < 0 ? 0 : s > 1 ? 1 : s;
   const h00 = 2 * s * s * s - 3 * s * s + 1, h10 = s * s * s - 2 * s * s + s, h01 = -2 * s * s * s + 3 * s * s, h11 = s * s * s - s * s;
   const out: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
   for (let cc = 0; cc < 4; cc++) for (let d = 0; d < 2; d++) {
@@ -96,11 +98,12 @@ export default function TrackEditor({
   const [playing, setPlaying] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [vzoom, setVzoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [clip, setClip] = useState<number[][] | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const drag = useRef<{ mode: number | "move"; lastX: number; lastY: number } | null>(null);
+  const drag = useRef<{ mode: number | "move" | "pan"; lastX: number; lastY: number } | null>(null);
   const raf = useRef<number | null>(null);
 
   useEffect(() => setMounted(true), []);
@@ -200,6 +203,12 @@ export default function TrackEditor({
   }, []);
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button === 1 && vzoom > 1) {
+      drag.current = { mode: "pan", lastX: e.clientX, lastY: e.clientY };
+      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+      return;
+    }
     if (!track || !autoQuad || !correctedQuad) return;
     stopPlay();
     const p = clientToSvg(e.clientX, e.clientY); if (!p) return;
@@ -215,7 +224,14 @@ export default function TrackEditor({
     e.preventDefault();
   };
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!drag.current || !track || !autoQuad) return;
+    if (!drag.current) return;
+    if (drag.current.mode === "pan") {
+      const dxp = e.clientX - drag.current.lastX, dyp = e.clientY - drag.current.lastY;
+      setPan((pp) => ({ x: pp.x + dxp, y: pp.y + dyp }));
+      drag.current.lastX = e.clientX; drag.current.lastY = e.clientY;
+      return;
+    }
+    if (!track || !autoQuad) return;
     const p = clientToSvg(e.clientX, e.clientY); if (!p) return;
     const d = drag.current;
     if (typeof d.mode === "number") {
@@ -270,7 +286,7 @@ export default function TrackEditor({
             <div className="flex-1 min-h-0 flex flex-col p-3 gap-2 bg-black/30">
               <div className="flex-1 min-h-0 flex items-center justify-center">
                 <div className="relative h-full max-h-full max-w-full bg-black rounded-lg overflow-hidden" style={{ aspectRatio: aspect }}>
-                  <div className="absolute inset-0" style={{ transform: `scale(${vzoom})`, transformOrigin: vCenter && track ? `${(vCenter[0] / track.w) * 100}% ${(vCenter[1] / track.h) * 100}%` : "50% 50%" }}>
+                  <div className="absolute inset-0" style={{ transform: `translate(${vzoom > 1 ? pan.x : 0}px, ${vzoom > 1 ? pan.y : 0}px) scale(${vzoom})`, transformOrigin: vCenter && track ? `${(vCenter[0] / track.w) * 100}% ${(vCenter[1] / track.h) * 100}%` : "50% 50%" }}>
                   <video ref={videoRef} src={source} className="absolute inset-0 w-full h-full object-contain" onLoadedMetadata={(e) => setDur(e.currentTarget.duration || 0)} onEnded={stopPlay} playsInline muted />
                   <svg
                     ref={svgRef}
@@ -310,7 +326,7 @@ export default function TrackEditor({
               <div className="shrink-0">
                 <div className="flex items-center gap-2 mb-1">
                   <button type="button" onClick={togglePlay} className="w-8 h-8 rounded-md bg-white/10 hover:bg-white/20 text-fg flex items-center justify-center shrink-0">{playing ? <Pause size={15} /> : <Play size={15} />}</button>
-                  <button type="button" onClick={() => setVzoom((z) => (z >= 3 ? 1 : z + 1))} title="Zoom into the screen (easier to grab corners)" className="h-8 px-2 rounded-md bg-white/10 hover:bg-white/20 text-fg flex items-center gap-1 shrink-0 text-[11px]"><Search size={13} /> {vzoom}×</button>
+                  <button type="button" onClick={() => { setVzoom((z) => (z >= 3 ? 1 : z + 1)); setPan({ x: 0, y: 0 }); }} title="Zoom into the screen (easier to grab corners)" className="h-8 px-2 rounded-md bg-white/10 hover:bg-white/20 text-fg flex items-center gap-1 shrink-0 text-[11px]"><Search size={13} /> {vzoom}×</button>
                   <span className="text-[10px] text-fg-subtle tabular-nums shrink-0">frame {frame}/{nFrames - 1}{fromCache ? " · cached" : ""}</span>
                   <div className="ml-auto flex items-center gap-1 shrink-0">
                     <button type="button" onClick={() => setZoom((z) => Math.max(1, z - 1))} disabled={zoom <= 1} className="w-6 h-6 rounded border border-border text-fg-muted hover:text-fg disabled:opacity-40 flex items-center justify-center"><ZoomOut size={12} /></button>
