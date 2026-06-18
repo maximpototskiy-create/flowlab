@@ -694,9 +694,11 @@ const median = (arr: number[]): number => {
   return s[(s.length / 2) | 0];
 };
 
-// Per-corner keyframe offsets at normalized time t (0..1), linearly interpolated.
-// A key carries either per-corner offsets `c` = [[dx,dy] ×4], or a uniform dx/dy
-// (applied to all four corners). Returns [[dx,dy] ×4]. Empty keys → all zero.
+// Per-corner keyframe offsets at normalized time t (0..1), smoothly interpolated
+// with a TIME-AWARE Hermite (Catmull-Rom) spline so the motion is C1-continuous:
+// the curve passes through every key and has no velocity jump AT a key, so fixing
+// one moment with a key does not jerk the frames right after it. A key carries
+// per-corner offsets `c` = [[dx,dy] ×4], or a uniform dx/dy (all four corners).
 type TrackKeyN = { t: number; dx: number; dy: number; rot: number; c?: number[][] };
 function cornersOfKey(k: TrackKeyN): number[][] {
   if (k.c && k.c.length === 4) return k.c;
@@ -704,19 +706,26 @@ function cornersOfKey(k: TrackKeyN): number[][] {
   return [u, u, u, u];
 }
 function interpCornerOffsets(keys: TrackKeyN[], t: number): number[][] {
-  if (!keys.length) return [[0, 0], [0, 0], [0, 0], [0, 0]];
-  if (t <= keys[0].t) return cornersOfKey(keys[0]);
-  const last = keys[keys.length - 1];
-  if (t >= last.t) return cornersOfKey(last);
-  for (let i = 0; i < keys.length - 1; i++) {
-    const a = keys[i], b = keys[i + 1];
-    if (t >= a.t && t <= b.t) {
-      const f = (t - a.t) / ((b.t - a.t) || 1e-6);
-      const ca = cornersOfKey(a), cb = cornersOfKey(b);
-      return [0, 1, 2, 3].map((j) => [ca[j][0] + (cb[j][0] - ca[j][0]) * f, ca[j][1] + (cb[j][1] - ca[j][1]) * f]);
-    }
+  const n = keys.length;
+  if (!n) return [[0, 0], [0, 0], [0, 0], [0, 0]];
+  if (n === 1 || t <= keys[0].t) return cornersOfKey(keys[0]);
+  if (t >= keys[n - 1].t) return cornersOfKey(keys[n - 1]);
+  let i = 0;
+  for (let k = 0; k < n - 1; k++) { if (t >= keys[k].t && t <= keys[k + 1].t) { i = k; break; } }
+  const ci = cornersOfKey(keys[i]), cj = cornersOfKey(keys[i + 1]);
+  const cm1 = i > 0 ? cornersOfKey(keys[i - 1]) : ci;
+  const cp2 = i + 2 < n ? cornersOfKey(keys[i + 2]) : cj;
+  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6), s = (t - ti) / h;
+  const tm1 = i > 0 ? keys[i - 1].t : ti, tp2 = i + 2 < n ? keys[i + 2].t : tj;
+  const h00 = 2 * s * s * s - 3 * s * s + 1, h10 = s * s * s - 2 * s * s + s, h01 = -2 * s * s * s + 3 * s * s, h11 = s * s * s - s * s;
+  const out: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
+  for (let cc = 0; cc < 4; cc++) for (let d = 0; d < 2; d++) {
+    const pI = ci[cc][d], pJ = cj[cc][d];
+    const mI = i > 0 ? (pJ - cm1[cc][d]) / (tj - tm1) : (pJ - pI) / h;
+    const mJ = i + 2 < n ? (cp2[cc][d] - pI) / (tp2 - ti) : (pJ - pI) / h;
+    out[cc][d] = h00 * pI + h10 * h * mI + h01 * pJ + h11 * h * mJ;
   }
-  return [[0, 0], [0, 0], [0, 0], [0, 0]];
+  return out;
 }
 
 // Per-frame PLANAR-TRACKED chroma-key composite. The green screen's 4 corners

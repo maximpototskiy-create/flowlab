@@ -2,17 +2,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Loader2, Trash2, Plus, RotateCcw, Maximize2 } from "lucide-react";
+import { X, Loader2, Trash2, Plus, RotateCcw, Maximize2, Minimize2, Play, Pause, Copy, Clipboard, ZoomIn, ZoomOut } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TrackEditor — interactive, Mocha-style correction of the auto screen-track.
-//   • Loads the per-frame auto-track (cached from the last run if available, else
-//     computed via /api/screen-replace/track).
-//   • Scrub the source video; the cyan quad shows where the content will land.
-//   • Drag a CORNER handle → corner-pin that corner; drag the body/centre → move
-//     the whole quad. Either way a KEYFRAME is set at that moment (per-corner
-//     offsets). Frames away from a key stay as the auto-track.
-//   • Emits keyframes as [{ t, c: [[dx,dy]×4] }] consumed by the compositor.
+//   • Loads the per-frame auto-track (cached from the last run if available).
+//   • Play or scrub the source video; the cyan quad shows where content lands.
+//   • Drag a CORNER to corner-pin it, or the body/centre to move the whole quad;
+//     a KEYFRAME is set automatically (per-corner offsets).
+//   • Keyframes interpolate with a SMOOTH (time-aware Hermite) spline, identical
+//     to the compositor, so the preview matches the render and there is no jerk
+//     right after a key. Copy/paste keys, zoom the timeline for close keys.
+//   • Emits keyframes as [{ t, c: [[dx,dy]×4] }].
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type TrackKey = { t: number; c: number[][] }; // c = 4 corner offsets [[dx,dy]×4]
@@ -22,7 +23,6 @@ type Pt = [number, number];
 const clamp01 = (n: unknown) => Math.max(0, Math.min(1, Number(n) || 0));
 const ZERO = (): number[][] => [[0, 0], [0, 0], [0, 0], [0, 0]];
 
-// Normalize incoming keys: per-corner `c`, or legacy uniform dx/dy → 4 equal corners.
 function normKeys(v: unknown): TrackKey[] {
   const arr = Array.isArray(v) ? v : [];
   return arr
@@ -37,19 +37,27 @@ function normKeys(v: unknown): TrackKey[] {
     .sort((a, b) => a.t - b.t);
 }
 
+// Time-aware Hermite (Catmull-Rom) — C1-continuous in time. MUST match the
+// compositor's interpCornerOffsets so the preview equals the render.
 function interpCorners(keys: TrackKey[], t: number): number[][] {
-  if (!keys.length) return ZERO();
-  if (t <= keys[0].t) return keys[0].c;
-  const last = keys[keys.length - 1];
-  if (t >= last.t) return last.c;
-  for (let i = 0; i < keys.length - 1; i++) {
-    const a = keys[i], b = keys[i + 1];
-    if (t >= a.t && t <= b.t) {
-      const f = (t - a.t) / ((b.t - a.t) || 1e-6);
-      return [0, 1, 2, 3].map((j) => [a.c[j][0] + (b.c[j][0] - a.c[j][0]) * f, a.c[j][1] + (b.c[j][1] - a.c[j][1]) * f]);
-    }
+  const n = keys.length;
+  if (!n) return ZERO();
+  if (n === 1 || t <= keys[0].t) return keys[0].c;
+  if (t >= keys[n - 1].t) return keys[n - 1].c;
+  let i = 0;
+  for (let k = 0; k < n - 1; k++) { if (t >= keys[k].t && t <= keys[k + 1].t) { i = k; break; } }
+  const ci = keys[i].c, cj = keys[i + 1].c, cm1 = i > 0 ? keys[i - 1].c : ci, cp2 = i + 2 < n ? keys[i + 2].c : cj;
+  const ti = keys[i].t, tj = keys[i + 1].t, h = Math.max(tj - ti, 1e-6), s = (t - ti) / h;
+  const tm1 = i > 0 ? keys[i - 1].t : ti, tp2 = i + 2 < n ? keys[i + 2].t : tj;
+  const h00 = 2 * s * s * s - 3 * s * s + 1, h10 = s * s * s - 2 * s * s + s, h01 = -2 * s * s * s + 3 * s * s, h11 = s * s * s - s * s;
+  const out: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
+  for (let cc = 0; cc < 4; cc++) for (let d = 0; d < 2; d++) {
+    const pI = ci[cc][d], pJ = cj[cc][d];
+    const mI = i > 0 ? (pJ - cm1[cc][d]) / (tj - tm1) : (pJ - pI) / h;
+    const mJ = i + 2 < n ? (cp2[cc][d] - pI) / (tp2 - ti) : (pJ - pI) / h;
+    out[cc][d] = h00 * pI + h10 * h * mI + h01 * pJ + h11 * h * mJ;
   }
-  return ZERO();
+  return out;
 }
 function quadCenter(q: number[][]): Pt {
   return [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4];
@@ -75,11 +83,19 @@ export default function TrackEditor({
   const [keys, setKeys] = useState<TrackKey[]>(normKeys(value));
   const [t, setT] = useState(0);
   const [dur, setDur] = useState(0);
+  const [mounted, setMounted] = useState(false);
+  const [big, setBig] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [clip, setClip] = useState<number[][] | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ mode: number | "move"; lastX: number; lastY: number } | null>(null);
-  const [mounted, setMounted] = useState(false);
+  const raf = useRef<number | null>(null);
+
   useEffect(() => setMounted(true), []);
+  useEffect(() => () => { if (raf.current) cancelAnimationFrame(raf.current); }, []);
 
   useEffect(() => {
     let off = false;
@@ -88,7 +104,7 @@ export default function TrackEditor({
       try {
         let j: Partial<Track> & { error?: string } = {};
         if (cachedTrackUrl) {
-          try { const r = await fetch(cachedTrackUrl); if (r.ok) { j = await r.json(); if (j.quads) { if (!off) setFromCache(true); } } } catch { /* fall through to compute */ }
+          try { const r = await fetch(cachedTrackUrl); if (r.ok) { j = await r.json(); if (j.quads) { if (!off) setFromCache(true); } } } catch { /* fall through */ }
         }
         if (!j.quads) {
           const r = await fetch("/api/screen-replace/track", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) });
@@ -116,11 +132,39 @@ export default function TrackEditor({
   const correctedQuad = autoQuad ? autoQuad.map((p, i) => [p[0] + offNow[i][0], p[1] + offNow[i][1]]) : null;
   const keyHere = keys.find((k) => Math.abs(k.t - t) < 0.012);
 
+  const stopPlay = useCallback(() => {
+    if (raf.current) { cancelAnimationFrame(raf.current); raf.current = null; }
+    if (videoRef.current) videoRef.current.pause();
+    setPlaying(false);
+  }, []);
+
+  const togglePlay = () => {
+    const v = videoRef.current; if (!v || !dur) return;
+    if (playing) { stopPlay(); return; }
+    if (t >= 0.999) { v.currentTime = 0; setT(0); }
+    v.play().catch(() => {});
+    setPlaying(true);
+    const tick = () => {
+      if (videoRef.current) setT(Math.min(1, (videoRef.current.currentTime || 0) / (dur || 1)));
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+  };
+
   const seek = (nt: number) => {
+    stopPlay();
     const c = Math.max(0, Math.min(1, nt));
     setT(c);
     if (videoRef.current && dur) videoRef.current.currentTime = c * dur;
   };
+
+  // Keep the playhead visible while playing on a zoomed timeline.
+  useEffect(() => {
+    if (!playing || zoom <= 1) return;
+    const el = scrollRef.current; if (!el) return;
+    const inner = el.scrollWidth;
+    el.scrollLeft = Math.max(0, Math.min(inner - el.clientWidth, t * inner - el.clientWidth / 2));
+  }, [t, zoom, playing]);
 
   const clientToSvg = (cx: number, cy: number): Pt | null => {
     const svg = svgRef.current; if (!svg) return null;
@@ -130,7 +174,6 @@ export default function TrackEditor({
     return [q.x, q.y];
   };
 
-  // Start a new/updated key at t from the current state (existing key or interpolated).
   const baseC = useCallback((): number[][] => {
     const k = keys.find((kk) => Math.abs(kk.t - t) < 0.012);
     return (k ? k.c : interpCorners(keys, t)).map((o) => [o[0], o[1]]);
@@ -146,8 +189,9 @@ export default function TrackEditor({
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!track || !autoQuad || !correctedQuad) return;
+    stopPlay();
     const p = clientToSvg(e.clientX, e.clientY); if (!p) return;
-    const hr = track.w / 28; // generous grab radius (working-res px)
+    const hr = track.w / 28;
     let mode: number | "move" = "move";
     let best = hr;
     for (let i = 0; i < 4; i++) {
@@ -180,18 +224,27 @@ export default function TrackEditor({
   const addZeroKey = () => upsertKeyC(t, ZERO());
   const deleteKeyHere = () => setKeys((prev) => prev.filter((k) => Math.abs(k.t - t) >= 0.012));
   const resetAll = () => setKeys([]);
+  const copyKey = () => { if (keyHere) setClip(keyHere.c.map((o) => [o[0], o[1]])); };
+  const pasteKey = () => { if (clip) upsertKeyC(t, clip); };
 
   const aspect = track ? `${track.w} / ${track.h}` : "9 / 16";
   const handleR = track ? track.w / 95 : 6;
   const strokeW = track ? Math.max(2, track.w / 520) : 2;
+  const dashStroke = track ? Math.max(2.5, track.w / 380) : 3;
 
   if (!mounted) return null;
   return createPortal(
     <div className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3" onClick={onClose}>
-      <div className="bg-bg-card border border-border rounded-xl w-full max-w-[880px] h-[90vh] flex flex-col overflow-hidden shadow-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
-          <div className="text-[13px] font-medium text-fg">Adjust track <span className="text-fg-subtle font-normal">— drag the corners to pin the screen, or the body to move it; keyframes are set as you go</span></div>
-          <button type="button" onClick={onClose} className="w-7 h-7 rounded-md hover:bg-white/10 text-fg-muted flex items-center justify-center"><X size={16} /></button>
+      <div
+        className={`bg-bg-card border border-border rounded-xl flex flex-col overflow-hidden shadow-panel ${big ? "w-[98vw] h-[97vh] max-w-none" : "w-full max-w-[880px] h-[90vh]"}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0 gap-2">
+          <div className="text-[13px] font-medium text-fg truncate">Adjust track <span className="text-fg-subtle font-normal">— drag a corner to pin, or the body to move; keys are set as you go</span></div>
+          <div className="flex items-center gap-1 shrink-0">
+            <button type="button" onClick={() => setBig((b) => !b)} title={big ? "Shrink" : "Maximise"} className="w-7 h-7 rounded-md hover:bg-white/10 text-fg-muted flex items-center justify-center">{big ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
+            <button type="button" onClick={onClose} className="w-7 h-7 rounded-md hover:bg-white/10 text-fg-muted flex items-center justify-center"><X size={16} /></button>
+          </div>
         </div>
 
         {loading && (
@@ -201,11 +254,11 @@ export default function TrackEditor({
 
         {track && !loading && (
           <div className="flex-1 min-h-0 flex flex-col md:flex-row">
-            {/* video + scrub */}
+            {/* video + transport + timeline */}
             <div className="flex-1 min-h-0 flex flex-col p-3 gap-2 bg-black/30">
               <div className="flex-1 min-h-0 flex items-center justify-center">
                 <div className="relative h-full max-h-full max-w-full bg-black rounded-lg overflow-hidden" style={{ aspectRatio: aspect }}>
-                  <video ref={videoRef} src={source} className="absolute inset-0 w-full h-full object-contain" onLoadedMetadata={(e) => setDur(e.currentTarget.duration || 0)} playsInline muted />
+                  <video ref={videoRef} src={source} className="absolute inset-0 w-full h-full object-contain" onLoadedMetadata={(e) => setDur(e.currentTarget.duration || 0)} onEnded={stopPlay} playsInline muted />
                   <svg
                     ref={svgRef}
                     viewBox={`0 0 ${track.w} ${track.h}`}
@@ -217,7 +270,11 @@ export default function TrackEditor({
                     onPointerCancel={onPointerUp}
                   >
                     {autoQuad && (
-                      <polygon points={autoQuad.map((p) => p.join(",")).join(" ")} fill="none" stroke="#94a3b8" strokeWidth={Math.max(1.5, track.w / 760)} strokeDasharray={`${track.w / 110} ${track.w / 160}`} opacity={0.6} />
+                      <>
+                        {/* dark backing makes the dashed auto-track readable on any frame */}
+                        <polygon points={autoQuad.map((p) => p.join(",")).join(" ")} fill="none" stroke="#000000" strokeWidth={dashStroke * 1.9} strokeDasharray={`${track.w / 70} ${track.w / 90}`} opacity={0.55} />
+                        <polygon points={autoQuad.map((p) => p.join(",")).join(" ")} fill="none" stroke="#fbbf24" strokeWidth={dashStroke} strokeDasharray={`${track.w / 70} ${track.w / 90}`} />
+                      </>
                     )}
                     {correctedQuad && (
                       <>
@@ -234,36 +291,49 @@ export default function TrackEditor({
                   </svg>
                 </div>
               </div>
-              {/* scrub */}
+
+              {/* transport + zoomable timeline */}
               <div className="shrink-0">
-                <input type="range" min={0} max={1000} value={Math.round(t * 1000)} onChange={(e) => seek(Number(e.target.value) / 1000)} className="w-full accent-brand cursor-pointer" />
-                <div className="relative h-3">
-                  {keys.map((k, i) => (
-                    <button key={i} type="button" title={`keyframe @ ${(k.t * 100).toFixed(0)}%`} onClick={() => seek(k.t)}
-                      className="absolute -translate-x-1/2 w-2.5 h-2.5 rounded-sm bg-amber-400 border border-amber-600 hover:scale-125 transition" style={{ left: `${k.t * 100}%`, top: 0 }} />
-                  ))}
+                <div className="flex items-center gap-2 mb-1">
+                  <button type="button" onClick={togglePlay} className="w-8 h-8 rounded-md bg-white/10 hover:bg-white/20 text-fg flex items-center justify-center shrink-0">{playing ? <Pause size={15} /> : <Play size={15} />}</button>
+                  <span className="text-[10px] text-fg-subtle tabular-nums shrink-0">frame {frame}/{nFrames - 1}{fromCache ? " · cached" : ""}</span>
+                  <div className="ml-auto flex items-center gap-1 shrink-0">
+                    <button type="button" onClick={() => setZoom((z) => Math.max(1, z - 1))} disabled={zoom <= 1} className="w-6 h-6 rounded border border-border text-fg-muted hover:text-fg disabled:opacity-40 flex items-center justify-center"><ZoomOut size={12} /></button>
+                    <span className="text-[10px] text-fg-subtle tabular-nums w-7 text-center">{zoom}×</span>
+                    <button type="button" onClick={() => setZoom((z) => Math.min(16, z + 1))} disabled={zoom >= 16} className="w-6 h-6 rounded border border-border text-fg-muted hover:text-fg disabled:opacity-40 flex items-center justify-center"><ZoomIn size={12} /></button>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-fg-subtle tabular-nums">
-                  <span>frame {frame} / {nFrames - 1}{fromCache ? " · cached" : ""}</span>
-                  <span>{track.fps} fps · {(t * 100).toFixed(0)}%</span>
+                <div ref={scrollRef} className="overflow-x-auto overflow-y-hidden">
+                  <div className="relative" style={{ width: `${zoom * 100}%` }}>
+                    <input type="range" min={0} max={1000} value={Math.round(t * 1000)} onChange={(e) => seek(Number(e.target.value) / 1000)} className="w-full accent-brand cursor-pointer" />
+                    <div className="relative h-3">
+                      {keys.map((k, i) => (
+                        <button key={i} type="button" title={`keyframe @ ${(k.t * 100).toFixed(1)}%`} onClick={() => seek(k.t)}
+                          className={`absolute -translate-x-1/2 w-2.5 h-2.5 rounded-sm border hover:scale-125 transition ${keyHere && Math.abs(keyHere.t - k.t) < 0.012 ? "bg-cyan-300 border-cyan-500" : "bg-amber-400 border-amber-600"}`} style={{ left: `${k.t * 100}%`, top: 0 }} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-end text-[10px] text-fg-subtle tabular-nums pt-0.5">
+                  <span>{track.fps} fps · {(t * 100).toFixed(1)}%</span>
                 </div>
               </div>
             </div>
 
             {/* controls */}
-            <div className="w-full md:w-64 border-t md:border-t-0 md:border-l border-border p-3 overflow-y-auto shrink-0 space-y-3">
+            <div className="w-full md:w-64 border-t md:border-t-0 md:border-l border-border p-3 overflow-y-auto shrink-0 space-y-2.5">
               <div className="grid grid-cols-2 gap-1.5">
                 <button type="button" onClick={addZeroKey} className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] border border-border text-fg-muted hover:text-fg hover:border-brand"><Plus size={12} /> Key (0)</button>
                 <button type="button" onClick={deleteKeyHere} disabled={!keyHere} className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] border border-border text-fg-muted hover:text-fg hover:border-red-500 disabled:opacity-40"><Trash2 size={12} /> Delete</button>
+                <button type="button" onClick={copyKey} disabled={!keyHere} className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40"><Copy size={12} /> Copy</button>
+                <button type="button" onClick={pasteKey} disabled={!clip} className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] border border-border text-fg-muted hover:text-fg hover:border-brand disabled:opacity-40"><Clipboard size={12} /> Paste</button>
               </div>
               <button type="button" onClick={resetAll} disabled={!keys.length} className="w-full inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] border border-border text-fg-muted hover:text-fg disabled:opacity-40"><RotateCcw size={12} /> Reset all</button>
-              <div className="text-[11px] text-fg-subtle">{keys.length} keyframe{keys.length === 1 ? "" : "s"}{keyHere ? " · keyed here" : ""}</div>
+              <div className="text-[11px] text-fg-subtle">{keys.length} keyframe{keys.length === 1 ? "" : "s"}{keyHere ? " · keyed here" : ""}{clip ? " · 1 copied" : ""}</div>
               <p className="text-[10px] text-fg-subtle leading-snug border-t border-border pt-2">
-                <span className="inline-block w-2 h-2 align-middle rounded-sm bg-cyan-400 mr-1" /> cyan = where the content lands · dashed = auto-track.
+                <span className="inline-block w-2 h-2 align-middle rounded-sm bg-cyan-400 mr-1" /> cyan = content lands here · <span className="inline-block w-3 h-0 align-middle border-t-2 border-dashed border-amber-400 mr-1" /> = auto-track.
                 <br /><br />
-                Scrub to a frame where it&apos;s off. Drag a <b>corner</b> to pin it, or the <b>middle</b> to slide the whole screen — a keyframe is set automatically. Drop a <b>Key (0)</b> just before/after to keep the fix local. Then <b>Save</b> and re-run the node.
-                <br /><br />
-                <Maximize2 size={10} className="inline align-middle mr-1" /> Window scales with the modal — corners are easier to grab on a big screen.
+                Keys interpolate on a <b>smooth</b> curve (no jerk after a key). Fix one moment by dragging a corner/the body; drop neutral <b>Key (0)</b>s on the good frames either side so the fix eases in and out. <b>Copy/Paste</b> reuses a key; <b>zoom</b> (top-right) spreads close keys. Then <b>Save</b> and re-run the node.
               </p>
             </div>
           </div>
