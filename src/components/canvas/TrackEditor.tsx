@@ -385,7 +385,7 @@ export default function TrackEditor({
                 </div>
                 <div ref={scrollRef} className="overflow-x-auto overflow-y-hidden">
                   <div className="relative" style={{ width: `${zoom * 100}%` }}>
-                    <input type="range" min={0} max={1000} value={Math.round(t * 1000)} onChange={(e) => seek(Number(e.target.value) / 1000)} className="w-full accent-brand cursor-pointer" />
+                    <input type="range" min={0} max={Math.max(1, nFrames - 1)} step={1} value={frame} onChange={(e) => seek(nFrames > 1 ? Number(e.target.value) / (nFrames - 1) : 0)} className="w-full accent-brand cursor-pointer" />
                     <div className="relative h-3">
                       {keys.map((k, i) => (
                         <button key={i} type="button" title={`keyframe @ ${(k.t * 100).toFixed(1)}%`} onClick={() => seek(k.t)}
@@ -394,7 +394,12 @@ export default function TrackEditor({
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center justify-end text-[10px] text-fg-subtle tabular-nums pt-0.5">
+                <div className="flex items-center justify-between gap-2 text-[10px] text-fg-subtle tabular-nums pt-0.5">
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={() => { if (nFrames > 1) seek(Math.max(0, frame - 1) / (nFrames - 1)); }} title="Previous frame" className="px-1.5 py-0.5 rounded border border-border hover:text-fg hover:border-border-strong">◀</button>
+                    <button type="button" onClick={() => { if (nFrames > 1) seek(Math.min(nFrames - 1, frame + 1) / (nFrames - 1)); }} title="Next frame" className="px-1.5 py-0.5 rounded border border-border hover:text-fg hover:border-border-strong">▶</button>
+                    <span className="ml-1">frame {frame + 1} / {nFrames}</span>
+                  </div>
                   <span>{track.fps} fps · {(t * 100).toFixed(1)}%</span>
                 </div>
               </div>

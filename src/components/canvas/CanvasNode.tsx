@@ -1253,7 +1253,7 @@ function OutputPreview({
   /** Inline-expanded node — render a taller preview. */
   expanded?: boolean;
 }) {
-  const list = results && results.length > 0 ? results : Object.values(outputs).filter((v) => typeof v === "string").map((v) => ({ value: v as string }));
+  const list = results && results.length > 0 ? results : Object.entries(outputs).filter(([k, v]) => typeof v === "string" && k !== "track_url" && !k.startsWith("_")).map(([, v]) => ({ value: v as string }));
   if (list.length === 0) return null;
   const current = list[Math.min(selectedIdx, list.length - 1)];
   const url = current.value;

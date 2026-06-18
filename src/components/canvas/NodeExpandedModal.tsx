@@ -378,9 +378,9 @@ function BigPreview({
   const list =
     results && results.length > 0
       ? results
-      : Object.values(outputs)
-          .filter((v) => typeof v === "string")
-          .map((v) => ({ value: v as string }));
+      : Object.entries(outputs)
+          .filter(([k, v]) => typeof v === "string" && k !== "track_url" && !k.startsWith("_"))
+          .map(([, v]) => ({ value: v as string }));
   if (list.length === 0) return null;
   return (
     <div className={`grid ${list.length === 1 ? "grid-cols-1 justify-items-center" : "grid-cols-2"} gap-2`}>

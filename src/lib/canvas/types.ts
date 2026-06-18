@@ -1281,7 +1281,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "track_rotate", label: "Track rotation", type: "slider", min: -15, max: 15, step: 0.5, unit: "°", help: "Rotate the tracked screen about its centre on every frame." },
       { name: "track_keys", label: "Tracking keyframes (advanced)", type: "text", placeholder: '[{"t":0.5,"dx":20,"dy":-10}]', help: "Per-moment correction, Mocha-style. JSON array of keyframes: t = 0..1 (position in the clip), dx/dy = px, rot = deg. Linearly interpolated and ADDED to the offsets above; frames away from a key stay as the auto-track, so fixing one jerk doesn't move the rest. Leave empty if unused. (A scrub-and-set UI is coming to the editor.)" },
     ],
-    quickFields: ["fit", "key_similarity"],
+    quickFields: ["key_similarity", "matte_choke", "feather", "fit"],
     primaryField: "instructions",
     primaryLabel: "Prompt (optional)",
     primaryPlaceholder: "Describe the new screen, e.g. 'the phone screen shows the reference app UI, crisp and bright'. Leave empty for a sensible default.",
