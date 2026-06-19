@@ -27,6 +27,18 @@
   --grid-dot: 203 213 225;
 
   --shadow-color: 0 0 0;
+
+  /* ── Apple-glass design system ──────────────────────────── */
+  --radius-sm: 10px; --radius: 14px; --radius-lg: 20px; --radius-xl: 26px;
+  --glass-tint: 255 255 255;     /* material base color */
+  --glass-strength: 0.62;        /* panel translucency */
+  --hairline: 15 23 42;          /* border base (low alpha) */
+  --hairline-alpha: 0.08;
+  --highlight: 255 255 255;      /* top inner edge highlight */
+  --highlight-alpha: 0.65;
+  --shadow-1: 0 1px 2px rgb(15 23 42 / 0.05), 0 1px 3px rgb(15 23 42 / 0.06);
+  --shadow-2: 0 2px 6px rgb(15 23 42 / 0.06), 0 10px 24px rgb(15 23 42 / 0.09);
+  --shadow-3: 0 6px 16px rgb(15 23 42 / 0.09), 0 24px 56px rgb(15 23 42 / 0.13);
 }
 
 html.dark {
@@ -49,6 +61,15 @@ html.dark {
   --grid-dot: 38 38 38;
 
   --shadow-color: 0 0 0;
+  --glass-tint: 30 30 34;
+  --glass-strength: 0.55;
+  --hairline: 255 255 255;
+  --hairline-alpha: 0.10;
+  --highlight: 255 255 255;
+  --highlight-alpha: 0.06;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.40), 0 1px 3px rgb(0 0 0 / 0.30);
+  --shadow-2: 0 2px 6px rgb(0 0 0 / 0.40), 0 10px 24px rgb(0 0 0 / 0.45);
+  --shadow-3: 0 6px 16px rgb(0 0 0 / 0.45), 0 24px 56px rgb(0 0 0 / 0.55);
 }
 
 html, body {
@@ -60,7 +81,14 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-body { margin: 0; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(1100px 780px at 100% -5%, rgb(var(--brand) / 0.05), transparent 55%),
+    radial-gradient(900px 700px at -5% 105%, rgb(99 102 241 / 0.05), transparent 50%),
+    rgb(var(--bg));
+  background-attachment: fixed;
+}
 
 * { box-sizing: border-box; }
 
@@ -155,3 +183,41 @@ select.no-native-arrow {
   user-select: none;
   overscroll-behavior: contain;
 }
+
+/* ── Apple-glass materials (opt-in utilities) ──────────────────────────
+   Apply to chrome surfaces (panels, nav, cards, modals). Translucent +
+   backdrop blur + hairline border + soft layered shadow + top edge highlight.
+   Everything is driven by the tokens above, so the whole look retunes from
+   one place. */
+.glass {
+  background: rgb(var(--glass-tint) / var(--glass-strength));
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgb(var(--hairline) / var(--hairline-alpha));
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgb(var(--highlight) / var(--highlight-alpha));
+  border-radius: var(--radius);
+}
+/* Heavier, more opaque material for nav bars and side panels. */
+.glass-strong {
+  background: rgb(var(--glass-tint) / 0.80);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgb(var(--hairline) / var(--hairline-alpha));
+  box-shadow: var(--shadow-1), inset 0 1px 0 rgb(var(--highlight) / var(--highlight-alpha));
+}
+/* Solid (non-translucent) panel that still carries the system radius + shadow,
+   for surfaces sitting directly on the page background. */
+.surface {
+  background: rgb(var(--bg-card));
+  border: 1px solid rgb(var(--hairline) / var(--hairline-alpha));
+  box-shadow: var(--shadow-2);
+  border-radius: var(--radius);
+}
+.elev-1 { box-shadow: var(--shadow-1); }
+.elev-2 { box-shadow: var(--shadow-2); }
+.elev-3 { box-shadow: var(--shadow-3); }
+.r-sm { border-radius: var(--radius-sm); }
+.r-md { border-radius: var(--radius); }
+.r-lg { border-radius: var(--radius-lg); }
+.r-xl { border-radius: var(--radius-xl); }
+.hairline { border: 1px solid rgb(var(--hairline) / var(--hairline-alpha)); }
