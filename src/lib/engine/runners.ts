@@ -121,7 +121,7 @@ async function gatherImages(
   label: string,
   count: number,
   make: () => Promise<string[]>,
-  concurrency = 2,
+  concurrency = 1,
 ): Promise<string[]> {
   const out: string[] = [];
   const errs: string[] = [];
