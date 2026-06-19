@@ -425,6 +425,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       model: "fal-ai/nano-banana-2",
       aspect: "1:1",
       num_results: 1,
+      quality: "medium",
       // Brand kit auto-inject is ON by default. Users can flip it OFF in
       // the expanded settings to generate something off-brand without
       // having to delete the brand or its kit. Has no effect when the
@@ -458,6 +459,16 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       },
       { name: "aspect", label: "Aspect ratio", type: "select", options: ASPECT_OPTS },
       { name: "num_results", label: "Number of results in a run", type: "number", min: 1, max: 4, step: 1 },
+      {
+        name: "quality",
+        label: "Quality (GPT Image 2)",
+        type: "select",
+        options: [
+          { value: "low", label: "Low (fast, cheap)" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High (best, slow)" },
+        ],
+      },
       { name: "useBrandKit", label: "Auto-attach brand UI screenshots", type: "toggle" },
     ],
     primaryField: "instructions",

@@ -241,12 +241,23 @@ export async function runNode(
       if (model.startsWith("openai/")) {
         const apiModel = model.split("/").slice(1).join("/"); // e.g. "gpt-image-2"
         const size = ASPECT_TO_OPENAI_SIZE[aspect] ?? "1024x1024";
-        const quality = String(config.quality || "high");
-        const b64s = hasRefs
-          ? await editOpenAIImage(prompt, refImages, { model: apiModel, size, quality })
-          : await generateOpenAIImage(prompt, { model: apiModel, size, quality, n: numResults });
-        const persisted: string[] = [];
-        for (const b64 of b64s) persisted.push(await persistImageB64(b64, ctx, "img"));
+        const quality = String(config.quality || "medium");
+        let b64s: string[];
+        if (hasRefs) {
+          b64s = await editOpenAIImage(prompt, refImages, { model: apiModel, size, quality });
+        } else {
+          // GPT Image 2 returns ONE image per call in practice (its "thinking"
+          // pass produces a single reasoned image), so request N results as N
+          // concurrent single-image calls — this guarantees num_results is
+          // honored and wall-time stays ~one call since they run in parallel.
+          const batches = await Promise.all(
+            Array.from({ length: numResults }, () =>
+              generateOpenAIImage(prompt, { model: apiModel, size, quality, n: 1 }),
+            ),
+          );
+          b64s = batches.flat();
+        }
+        const persisted = await Promise.all(b64s.map((b64) => persistImageB64(b64, ctx, "img")));
         return {
           outputs: { image: persisted[0] },
           results: persisted.map((url) => ({ value: url, mime: "image/png" })),
