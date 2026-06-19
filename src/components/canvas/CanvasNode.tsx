@@ -160,6 +160,10 @@ function CanvasNodeImpl({
   };
   // Pre-filter edges incoming to this node — used to count refs on multi-ports.
   const edgesTo = edges.filter((e) => e.to.nodeId === node.id);
+  // Guarantee the node body is at least tall enough to contain every port row
+  // (ports are absolutely positioned), so input/output icons never spill below
+  // the card on nodes with many ports but little body content.
+  const portRows = def ? Math.max(getActiveInputs(def, node.config).length, def.outputs.length) : 0;
 
   return (
     <div
@@ -177,6 +181,7 @@ function CanvasNodeImpl({
         top: 0,
         left: 0,
         width: NODE_TYPES[node.type]?.custom === "heygen" && inlineExpanded ? NODE_WIDTH * 2 : NODE_WIDTH,
+        minHeight: NODE_HEADER_HEIGHT + 14 + portRows * NODE_PORT_SPACING + 10,
         transform: `translate(${node.position.x}px, ${node.position.y}px)`,
         willChange: "transform",
       }}
@@ -1131,23 +1136,15 @@ function Port({
       className="absolute group/port"
       style={{
         top: y,
-        [side === "in" ? "left" : "right"]: side === "in" ? -9 : -7,
+        [side === "in" ? "left" : "right"]: -9,
       }}
     >
       <button
-        // Input ports show a type icon (image/video/text/audio) in a rounded
-        // square so the accepted media is obvious; output ports stay as the
-        // classic circle. Multi-ports get a ring so they read as "drop many".
-        className={`${
-          side === "in"
-            ? `${multi ? "w-5 h-5 ring-2 ring-offset-1 ring-offset-bg-card" : "w-[18px] h-[18px]"} rounded-md border-2 flex items-center justify-center`
-            : `${multi ? "w-4 h-4 border-[3px] ring-2 ring-offset-1 ring-offset-bg-card" : "w-3.5 h-3.5 border-2"} rounded-full`
-        } bg-bg-card cursor-crosshair hover:scale-125 transition-transform`}
-        style={{
-          borderColor: color,
-          color,
-          ...(multi ? { boxShadow: `0 0 0 1px ${color}33` } : {}),
-        }}
+        // The port IS the type icon (image/video/text/audio/any) — no circle.
+        // Centered on the node edge so connectors land right on the icon.
+        // Multi-ports get a small "+" badge meaning "accepts many".
+        className="relative flex items-center justify-center cursor-crosshair hover:scale-125 transition-transform"
+        style={{ color, filter: "drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35))" }}
         data-port-side={side}
         data-port-kind={kind}
         data-port-id={name}
@@ -1166,7 +1163,15 @@ function Port({
         }}
         title={`${label ?? name} · ${kind}${multi ? " · accepts many" : ""}`}
       >
-        {side === "in" && <KindIcon size={11} strokeWidth={2.25} />}
+        <KindIcon size={18} strokeWidth={2.25} />
+        {multi && (
+          <span
+            className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full bg-bg-card flex items-center justify-center text-[8px] leading-none font-bold"
+            style={{ color, boxShadow: `0 0 0 1.5px ${color}` }}
+          >
+            +
+          </span>
+        )}
       </button>
       {/* Edge count badge for multi-ports with at least one connection. */}
       {multi && (edgeCount ?? 0) > 0 && (
@@ -1179,7 +1184,7 @@ function Port({
       )}
       <div
         className={`absolute top-1/2 -translate-y-1/2 opacity-0 group-hover/port:opacity-100 pointer-events-none whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded bg-fg text-bg ${
-          side === "in" ? "left-6" : "right-5"
+          side === "in" ? "left-6" : "right-6"
         }`}
       >
         {label ?? name}
