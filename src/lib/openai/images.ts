@@ -5,6 +5,8 @@
 //
 // Docs: https://developers.openai.com/api/reference/resources/images
 
+import { fetchWithRetry } from "@/lib/fetchRetry";
+
 const GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
 const EDITS_URL = "https://api.openai.com/v1/images/edits";
 
@@ -33,7 +35,7 @@ export async function generateOpenAIImage(
   prompt: string,
   opts: OpenAIImageOpts,
 ): Promise<string[]> {
-  const res = await fetch(GENERATIONS_URL, {
+  const res = await fetchWithRetry(GENERATIONS_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -74,7 +76,7 @@ export async function editOpenAIImage(
     // GPT Image edit accepts an array of images via repeated `image[]` parts.
     form.append("image[]", blob, `ref_${i}.png`);
   }
-  const res = await fetch(EDITS_URL, {
+  const res = await fetchWithRetry(EDITS_URL, {
     method: "POST",
     // No explicit Content-Type — fetch sets the multipart boundary itself.
     headers: { Authorization: `Bearer ${apiKey()}` },

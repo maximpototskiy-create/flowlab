@@ -10,6 +10,8 @@
 // NOTE: Google has deprecated the Imagen 4 endpoints (shutdown mid-2026) and
 // recommends migrating to the Gemini image ("Nano Banana") models.
 
+import { fetchWithRetry } from "@/lib/fetchRetry";
+
 const BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 function apiKey(): string {
@@ -42,7 +44,7 @@ export async function generateGeminiImage(
       imageConfig: { aspectRatio: opts.aspect },
     },
   };
-  const res = await fetch(`${BASE}/${opts.model}:generateContent?key=${apiKey()}`, {
+  const res = await fetchWithRetry(`${BASE}/${opts.model}:generateContent?key=${apiKey()}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -75,7 +77,7 @@ export async function generateImagen(
     instances: [{ prompt }],
     parameters: { sampleCount: opts.n, aspectRatio: opts.aspect },
   };
-  const res = await fetch(`${BASE}/${opts.model}:predict?key=${apiKey()}`, {
+  const res = await fetchWithRetry(`${BASE}/${opts.model}:predict?key=${apiKey()}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

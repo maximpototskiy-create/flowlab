@@ -121,14 +121,24 @@ async function gatherImages(
   label: string,
   count: number,
   make: () => Promise<string[]>,
+  concurrency = 2,
 ): Promise<string[]> {
-  const settled = await Promise.allSettled(Array.from({ length: count }, () => make()));
   const out: string[] = [];
   const errs: string[] = [];
-  for (const s of settled) {
-    if (s.status === "fulfilled") out.push(...s.value);
-    else errs.push(s.reason instanceof Error ? s.reason.message : String(s.reason));
+  let next = 0;
+  async function worker() {
+    while (next < count) {
+      next++;
+      try {
+        out.push(...(await make()));
+      } catch (e) {
+        errs.push(e instanceof Error ? e.message : String(e));
+      }
+    }
   }
+  // Cap parallelism to avoid provider rate limits (429); the image clients also
+  // retry 429/5xx with backoff, so throttled calls still land.
+  await Promise.all(Array.from({ length: Math.min(concurrency, count) }, () => worker()));
   console.log(
     `[imageGen/${label}] requested ${count} call(s) -> ${out.length} image(s)` +
       (errs.length ? `; ${errs.length} failed (first: ${errs[0]})` : ""),
