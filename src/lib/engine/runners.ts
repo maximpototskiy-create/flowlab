@@ -114,6 +114,29 @@ async function persistImageB64(b64: string, ctx: RunnerContext, prefix = "img"):
   return cdnUrl;
 }
 
+/** Run N image-generating calls concurrently, tolerating partial failures
+ *  (e.g. provider rate limits) so the user still gets whatever succeeded.
+ *  Logs requested-vs-succeeded for diagnosis. Throws only if ALL calls fail. */
+async function gatherImages(
+  label: string,
+  count: number,
+  make: () => Promise<string[]>,
+): Promise<string[]> {
+  const settled = await Promise.allSettled(Array.from({ length: count }, () => make()));
+  const out: string[] = [];
+  const errs: string[] = [];
+  for (const s of settled) {
+    if (s.status === "fulfilled") out.push(...s.value);
+    else errs.push(s.reason instanceof Error ? s.reason.message : String(s.reason));
+  }
+  console.log(
+    `[imageGen/${label}] requested ${count} call(s) -> ${out.length} image(s)` +
+      (errs.length ? `; ${errs.length} failed (first: ${errs[0]})` : ""),
+  );
+  if (out.length === 0) throw new Error(errs[0] || "No images returned");
+  return out;
+}
+
 /** Helper: normalise an `images` multi-port input into a clean string[] of
  * URLs. Accepts the new array form (post-multi-port runtime), the legacy
  * `inputs.image` single-string form (workflows saved before multi-ports
@@ -249,14 +272,11 @@ export async function runNode(
         } else {
           // GPT Image 2 returns ONE image per call in practice (its "thinking"
           // pass produces a single reasoned image), so request N results as N
-          // concurrent single-image calls — this guarantees num_results is
-          // honored and wall-time stays ~one call since they run in parallel.
-          const batches = await Promise.all(
-            Array.from({ length: numResults }, () =>
-              generateOpenAIImage(prompt, { model: apiModel, size, quality, n: 1 }),
-            ),
+          // concurrent single-image calls. gatherImages tolerates partial
+          // failures (rate limits) and logs the requested-vs-received count.
+          b64s = await gatherImages("openai", numResults, () =>
+            generateOpenAIImage(prompt, { model: apiModel, size, quality, n: 1 }),
           );
-          b64s = batches.flat();
         }
         const persisted = await Promise.all(b64s.map((b64) => persistImageB64(b64, ctx, "img")));
         return {
@@ -283,13 +303,10 @@ export async function runNode(
           b64s = await generateGeminiImage(prompt, { model: apiModel, aspect, refImages });
         } else {
           // Nano Banana returns one image per call → N concurrent calls for N
-          // results (wall-time ~one call since they run in parallel).
-          const batches = await Promise.all(
-            Array.from({ length: numResults }, () =>
-              generateGeminiImage(prompt, { model: apiModel, aspect }),
-            ),
+          // results (tolerant of partial failures, logs the count).
+          b64s = await gatherImages("gemini", numResults, () =>
+            generateGeminiImage(prompt, { model: apiModel, aspect }),
           );
-          b64s = batches.flat();
         }
         const persisted = await Promise.all(b64s.map((b64) => persistImageB64(b64, ctx, "img")));
         return {
