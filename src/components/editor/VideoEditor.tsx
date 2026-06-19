@@ -328,6 +328,22 @@ let _id = 0, _l = 0;
 const uid = () => `c${Date.now()}_${_id++}`;
 const fmt = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
 
+// Loads its video source only once the tile scrolls into view, so a picker with
+// dozens of clips doesn't fire dozens of parallel range requests at storage
+// (which Supabase resets — net::ERR_CONNECTION_RESET).
+function LazyVideo({ src, className }: { src: string; className?: string }) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || show) return;
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setShow(true); io.disconnect(); } }, { rootMargin: "120px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [show]);
+  return <video ref={ref} src={show ? src : undefined} muted playsInline preload="metadata" className={className} />;
+}
+
 export default function VideoEditor({ assets, workflowId, projectId }: { assets: EditorAsset[]; workflowId?: string; projectId?: string }) {
   const [layers, setLayers] = useState<Layer[]>([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]);
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
@@ -337,6 +353,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [srBusy, setSrBusy] = useState(false);
   const [srErr, setSrErr] = useState<string | null>(null);
   const [srPicker, setSrPicker] = useState(false);
+  const [srTrackCache, setSrTrackCache] = useState<Record<string, { fps: number; w: number; h: number; quads: number[][][] } | "loading" | "error">>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selected = selectedIds.length ? selectedIds[selectedIds.length - 1] : null;
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -1072,6 +1089,24 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   }, [loop, stop, syncMedia]);
   const seek = useCallback((sec: number) => { const tt = Math.max(0, sec); playheadRef.current = tt; setPlayhead(tt); syncMedia(tt); }, [syncMedia]);
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
+
+  // Precompute + cache the green-screen track for the selected screen-replace clip
+  // so "Adjust track" opens instantly (the canvas feels instant because it reuses
+  // the track already computed during the node run).
+  useEffect(() => {
+    const c = clips.find((x) => x.id === selected);
+    const url = c?.sr?.green;
+    if (!url || srTrackCache[url]) return;
+    setSrTrackCache((s) => ({ ...s, [url]: "loading" }));
+    fetch("/api/screen-replace/track", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: url }) })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("track failed"))))
+      .then((j) => setSrTrackCache((s) => ({ ...s, [url]: { fps: j.fps || 30, w: j.w || 1080, h: j.h || 1920, quads: j.quads || [] } })))
+      .catch(() => setSrTrackCache((s) => ({ ...s, [url]: "error" })));
+  }, [selected, clips, srTrackCache]);
+
+  // Pause editor playback while the track editor (Adjust) is open — keeps the
+  // overlay in sync with the video and frees the main thread for tracking.
+  useEffect(() => { if (trackOpen) stop(); }, [trackOpen, stop]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -2177,8 +2212,8 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                           const tile = (url: string, label: string, isVid: boolean, on: boolean, key: string) => (
                             <button key={key} type="button" onClick={() => pick(url, isVid)} className={`relative rounded overflow-hidden border aspect-square bg-black ${on ? "border-brand ring-1 ring-brand" : "border-border hover:border-brand/50"}`} title={label}>
                               {isVid
-                                ? <video src={url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" />
-                                : /* eslint-disable-next-line @next/next/no-img-element */ <img src={url} alt="" className="w-full h-full object-cover pointer-events-none" />}
+                                ? <LazyVideo src={url} className="w-full h-full object-cover pointer-events-none" />
+                                : /* eslint-disable-next-line @next/next/no-img-element */ <img src={url} alt="" loading="lazy" className="w-full h-full object-cover pointer-events-none" />}
                               <span className="absolute inset-x-0 bottom-0 bg-black/65 text-white text-[8px] leading-tight px-1 py-0.5 truncate">{label}</span>
                             </button>
                           );
@@ -2214,9 +2249,10 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                       </div>
                       <label className="flex items-center gap-2 text-fg-muted">matte<input type="range" min={-8} max={8} step={1} value={sel.sr.matte ?? 0} onChange={(e) => updateSel(sel.id, { sr: { ...sel.sr!, matte: Number(e.target.value) } })} className="flex-1" /><span className="w-9 text-right tabular-nums">{sel.sr.matte ?? 0}px</span></label>
                       <label className="flex items-center gap-2 text-fg-muted">soften<input type="range" min={0} max={8} step={1} value={sel.sr.feather ?? 0} onChange={(e) => updateSel(sel.id, { sr: { ...sel.sr!, feather: Number(e.target.value) } })} className="flex-1" /><span className="w-9 text-right tabular-nums">{sel.sr.feather ?? 0}px</span></label>
+                      {(() => { const t = sel.sr.green ? srTrackCache[sel.sr.green] : null; const txt = t === "loading" ? "Tracking screen…" : t === "error" ? "Auto-track failed — opens fresh" : t ? "Track ready" : ""; return txt ? <div className="text-[10px] text-fg-subtle flex items-center gap-1">{t === "loading" && <Loader2 size={11} className="animate-spin" />}{txt}</div> : null; })()}
                       <div className="flex gap-1.5">
                         <button type="button" onClick={() => setTrackOpen(true)} className="flex-1 px-2 py-1.5 rounded-md border border-border text-[11px] text-fg-muted hover:text-fg inline-flex items-center justify-center gap-1.5"><SlidersHorizontal size={13} /> Adjust track</button>
-                        <button type="button" onClick={renderSR} disabled={srBusy || !sel.sr.content} className="flex-1 px-2 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium disabled:opacity-50 inline-flex items-center justify-center gap-1.5">{srBusy ? (<><Loader2 size={13} className="animate-spin" /> Rendering…</>) : (<><Wand2 size={13} /> Render</>)}</button>
+                        <button type="button" onClick={renderSR} disabled={srBusy || !sel.sr.content} className="flex-1 px-2 py-1.5 rounded-md bg-brand text-white text-[11px] font-medium disabled:opacity-50 inline-flex items-center justify-center gap-1.5">{srBusy ? (<><Loader2 size={13} className="animate-spin" /> Replacing…</>) : (<><Wand2 size={13} /> Replace screen</>)}</button>
                       </div>
                       {srErr && <div className="text-[10px] text-red-400">{srErr}</div>}
                       <div className="text-[10px] text-fg-subtle leading-snug">After Render the clip plays the finished composite. Tweak the track / params and Render again to update.</div>
@@ -2289,6 +2325,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
         <TrackEditor
           source={sel.sr.green}
           value={sel.sr.keys ?? []}
+          cachedTrack={(() => { const t = srTrackCache[sel.sr!.green]; return t && typeof t !== "string" ? t : undefined; })()}
           initialMode={sel.sr.mode}
           onSave={(keys, mode) => updateSel(sel.id, { sr: { ...sel.sr!, keys, mode } })}
           onClose={() => setTrackOpen(false)}

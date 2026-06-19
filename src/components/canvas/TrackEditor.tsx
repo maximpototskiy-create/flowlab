@@ -109,6 +109,7 @@ export default function TrackEditor({
   source,
   value,
   cachedTrackUrl,
+  cachedTrack,
   initialMode,
   onSave,
   onClose,
@@ -116,6 +117,7 @@ export default function TrackEditor({
   source: string;
   value: TrackKey[];
   cachedTrackUrl?: string;
+  cachedTrack?: Track;
   initialMode?: TrackMode;
   onSave: (keys: TrackKey[], mode: TrackMode) => void;
   onClose: () => void;
@@ -150,6 +152,11 @@ export default function TrackEditor({
     setLoading(true); setErr("");
     (async () => {
       try {
+        // Inline cached track (passed by the editor once computed) — instant, no recompute.
+        if (cachedTrack?.quads?.length) {
+          if (!off) { setTrack({ fps: cachedTrack.fps || 30, w: cachedTrack.w || 1920, h: cachedTrack.h || 1080, quads: cachedTrack.quads }); setFromCache(true); setLoading(false); }
+          return;
+        }
         let j: Partial<Track> & { error?: string } = {};
         if (cachedTrackUrl) {
           try { const r = await fetch(cachedTrackUrl); if (r.ok) { j = await r.json(); if (j.quads) { if (!off) setFromCache(true); } } } catch { /* fall through */ }
@@ -165,7 +172,7 @@ export default function TrackEditor({
       } catch (e) { if (!off) { setErr(e instanceof Error ? e.message : "error"); setLoading(false); } }
     })();
     return () => { off = true; };
-  }, [source, cachedTrackUrl]);
+  }, [source, cachedTrackUrl, cachedTrack]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
