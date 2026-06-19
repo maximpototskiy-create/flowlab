@@ -78,7 +78,7 @@ export default async function DashboardPage() {
         </div>
 
         {/* Stats strip */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-px bg-bg-subtle border border-border mb-12">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-px rounded-[var(--radius-lg)] overflow-hidden border border-[rgb(var(--hairline)/var(--hairline-alpha))] bg-[rgb(var(--hairline)/var(--hairline-alpha))] elev-1 mb-12">
           <StatCell label="Brands" value={brandsCount} />
           <StatCell label="Projects" value={projectsCount} />
           <StatCell label="Workflows" value={workflowsCount} />
@@ -154,7 +154,7 @@ export default async function DashboardPage() {
               <h2 className="font-display text-3xl">Workflows</h2>
             </div>
 
-            <div className="bg-bg border border-border rounded-sm overflow-hidden">
+            <div className="surface rounded-[var(--radius-lg)] overflow-hidden">
               {recentWorkflows.map((wf: {
                 id: string;
                 projectId: string;
@@ -166,7 +166,7 @@ export default async function DashboardPage() {
                 <Link
                   key={wf.id}
                   href={`/projects/${wf.projectId}/workflows/${wf.id}`}
-                  className="group flex items-center gap-4 px-5 py-4 border-b border-border last:border-b-0 hover:bg-bg-hover/50 transition"
+                  className="group flex items-center gap-4 px-5 py-4 border-b border-[rgb(var(--hairline)/var(--hairline-alpha))] last:border-b-0 hover:bg-bg-hover/50 transition"
                 >
                   <div className="font-display text-lg leading-tight flex-1 truncate group-hover:text-brand transition">
                     {wf.name}
@@ -184,7 +184,7 @@ export default async function DashboardPage() {
         )}
       </main>
 
-      <footer className="border-t border-border mt-24">
+      <footer className="border-t border-[rgb(var(--hairline)/var(--hairline-alpha))] mt-24">
         <div className="max-w-7xl mx-auto px-6 lg:px-12 py-6 flex justify-between items-center font-mono text-[10px] tracking-wider uppercase text-fg-subtle">
           <div>FlowLab v0.2 — Internal tool</div>
           <div>Part of Creative Lab</div>
@@ -204,7 +204,7 @@ function StatCell({
   isText?: boolean;
 }) {
   return (
-    <div className="bg-bg px-5 py-5">
+    <div className="bg-bg-card px-5 py-5">
       <div className="font-mono text-[10px] tracking-[0.2em] uppercase text-fg-muted mb-2">
         {label}
       </div>
@@ -224,7 +224,7 @@ function StatCell({
 function EmptyProjects({ hasBrands }: { hasBrands: boolean }) {
   if (!hasBrands) {
     return (
-      <div className="bg-bg border border-dashed border-border-strong rounded-sm py-16 px-6 text-center">
+      <div className="rounded-[var(--radius-lg)] border border-dashed border-[rgb(var(--hairline)/0.18)] bg-bg-card/40 py-16 px-6 text-center">
         <div className="font-mono text-[10px] tracking-[0.2em] uppercase text-fg-muted mb-4">
           Get started
         </div>
@@ -237,7 +237,7 @@ function EmptyProjects({ hasBrands }: { hasBrands: boolean }) {
     );
   }
   return (
-    <div className="bg-bg border border-dashed border-border-strong rounded-sm py-16 px-6 text-center">
+    <div className="rounded-[var(--radius-lg)] border border-dashed border-[rgb(var(--hairline)/0.18)] bg-bg-card/40 py-16 px-6 text-center">
       <div className="font-mono text-[10px] tracking-[0.2em] uppercase text-fg-muted mb-4">
         Empty state
       </div>
@@ -247,7 +247,7 @@ function EmptyProjects({ hasBrands }: { hasBrands: boolean }) {
       </p>
       <Link
         href="/brands"
-        className="inline-block bg-brand text-black font-mono text-xs tracking-[0.15em] uppercase py-3 px-5 rounded-sm hover:bg-emerald-400 transition"
+        className="inline-block bg-brand text-white font-medium text-[13px] py-2.5 px-5 rounded-lg hover:opacity-90 transition elev-1"
       >
         Go to brands →
       </Link>

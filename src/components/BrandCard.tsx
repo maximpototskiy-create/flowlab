@@ -21,10 +21,10 @@ export default function BrandCard({ brand }: { brand: BrandCardData }) {
   return (
     <Link
       href={`/brands/${brand.slug}`}
-      className="group relative bg-bg border border-border hover:border-border-strong rounded-sm p-5 transition flex flex-col min-h-[200px]"
+      className="group relative surface rounded-[var(--radius-lg)] p-5 transition hover:-translate-y-0.5 flex flex-col min-h-[200px]"
     >
       <div className="flex items-start justify-between mb-4">
-        <div className={`w-12 h-12 rounded-sm ${color.bg} border ${color.border} flex items-center justify-center`}>
+        <div className={`w-12 h-12 rounded-xl ${color.bg} border ${color.border} flex items-center justify-center`}>
           <div className={`w-3 h-3 rounded-full ${color.dot}`} />
         </div>
         <StopPropagation>
@@ -42,7 +42,7 @@ export default function BrandCard({ brand }: { brand: BrandCardData }) {
         )}
       </p>
 
-      <div className="flex justify-between items-end font-mono text-[10px] tracking-wider uppercase text-fg-subtle mt-4 pt-3 border-t border-border">
+      <div className="flex justify-between items-end font-mono text-[10px] tracking-wider uppercase text-fg-subtle mt-4 pt-3 border-t border-[rgb(var(--hairline)/var(--hairline-alpha))]">
         <span>
           {brand._count.projects} project{brand._count.projects === 1 ? "" : "s"}
         </span>
