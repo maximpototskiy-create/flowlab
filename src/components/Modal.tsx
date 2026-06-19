@@ -68,10 +68,10 @@ export default function Modal({
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
       <div
         ref={dialogRef}
-        className={`relative bg-bg border border-border-strong rounded-lg shadow-2xl w-full ${sizeClasses[size]} animate-fade-up`}
+        className={`relative glass r-lg w-full ${sizeClasses[size]} animate-fade-up`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

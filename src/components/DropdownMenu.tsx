@@ -80,7 +80,7 @@ export default function DropdownMenu({
         createPortal(
           <div
             data-dropdown-menu
-            className="fixed z-[999] bg-bg-subtle border border-border-strong rounded-sm shadow-xl min-w-[180px] py-1 animate-fade-up"
+            className="fixed z-[999] glass r-sm min-w-[180px] py-1 animate-fade-up"
             style={{ top: pos.top, left: pos.left }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
