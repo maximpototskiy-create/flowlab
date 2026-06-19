@@ -9,6 +9,7 @@ import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime 
 import { compositeGreenScreen } from "@/lib/video";
 import { directLLM } from "@/lib/agent/router";
 import { generateOpenAIImage, editOpenAIImage } from "@/lib/openai/images";
+import { generateGeminiImage, generateImagen } from "@/lib/google/images";
 import { isDirectLLM } from "@/lib/canvas/types";
 
 // Route first-party OpenAI/Gemini node models through the user's own keys
@@ -253,6 +254,39 @@ export async function runNode(
           const batches = await Promise.all(
             Array.from({ length: numResults }, () =>
               generateOpenAIImage(prompt, { model: apiModel, size, quality, n: 1 }),
+            ),
+          );
+          b64s = batches.flat();
+        }
+        const persisted = await Promise.all(b64s.map((b64) => persistImageB64(b64, ctx, "img")));
+        return {
+          outputs: { image: persisted[0] },
+          results: persisted.map((url) => ({ value: url, mime: "image/png" })),
+          costUsd: estimateCost(model, { numImages: numResults }),
+          durationMs: Date.now() - t0,
+        };
+      }
+
+      // ─── Direct Google image (Nano Banana via Gemini, or Imagen) ────
+      // Routed through the user's own GEMINI_API_KEY. Both return base64,
+      // which we persist to Storage ourselves.
+      if (model.startsWith("google/")) {
+        const apiModel = model.split("/").slice(1).join("/");
+        let b64s: string[];
+        if (model.includes("imagen")) {
+          // Imagen :predict — sampleCount up to 4 covers N in one call. Imagen
+          // aspect ratios don't include 4:5, so fall back to 3:4 for it.
+          const imagenAspect = aspect === "4:5" ? "3:4" : aspect;
+          b64s = await generateImagen(prompt, { model: apiModel, aspect: imagenAspect, n: numResults });
+        } else if (hasRefs) {
+          // Nano Banana edit/compose: references go in as inline image parts.
+          b64s = await generateGeminiImage(prompt, { model: apiModel, aspect, refImages });
+        } else {
+          // Nano Banana returns one image per call → N concurrent calls for N
+          // results (wall-time ~one call since they run in parallel).
+          const batches = await Promise.all(
+            Array.from({ length: numResults }, () =>
+              generateGeminiImage(prompt, { model: apiModel, aspect }),
             ),
           );
           b64s = batches.flat();
