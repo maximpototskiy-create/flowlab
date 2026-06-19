@@ -17,6 +17,15 @@ export const NODE_WIDTH = 280;
 export const NODE_HEADER_HEIGHT = 36;
 export const NODE_PORT_SPACING = 26;
 
+// Port chips are rendered OUTSIDE the node edge (patch 247). PORT_CHIP is the
+// square chip size, PORT_GAP the gap between the node edge and the chip, so the
+// chip's CENTRE — where edges anchor — sits PORT_OUTSET px beyond the node edge.
+// CanvasEdges and Canvas (edge-draft start) import these to keep connectors
+// glued to the chip centres.
+export const PORT_CHIP = 22;
+export const PORT_GAP = 6;
+export const PORT_OUTSET = PORT_GAP + PORT_CHIP / 2; // 17
+
 export function getNodeHeight(node: GraphNode): number {
   // Rough — actual height is determined by content. We use 200 as a baseline for edge routing.
   // Real heights come from DOM measurement during render.
@@ -1131,20 +1140,42 @@ function Port({
 }) {
   const color = PORT_COLORS[kind] ?? "#71717a";
   const KindIcon = KIND_ICON[kind] ?? Circle;
+  // `--pc` lets the .port-chip utility tint border/icon/hover with the type
+  // colour while keeping alpha math in CSS. PORT_COLORS are 6-digit hex.
+  const pc = hexToRgbTriplet(color);
+  // Container sits fully OUTSIDE the node edge: chip centre = PORT_OUTSET px out.
+  const containerOffset = -(PORT_GAP + PORT_CHIP);
   return (
     <div
       className="absolute group/port"
       style={{
         top: y,
-        [side === "in" ? "left" : "right"]: -9,
-      }}
+        [side === "in" ? "left" : "right"]: containerOffset,
+        "--pc": pc,
+      } as React.CSSProperties}
     >
+      {/* Multi-ports get a faded chip behind the main one — a small "stack"
+          that reads as "accepts many" (replaces the old type-icon + "+"). */}
+      {multi && (
+        <span
+          aria-hidden
+          className="port-chip-back absolute pointer-events-none"
+          style={{
+            width: PORT_CHIP,
+            height: PORT_CHIP,
+            top: 3,
+            left: side === "in" ? -3 : 3,
+            zIndex: 0,
+          }}
+        />
+      )}
       <button
-        // The port IS the type icon (image/video/text/audio/any) — no circle.
-        // Centered on the node edge so connectors land right on the icon.
-        // Multi-ports get a small "+" badge meaning "accepts many".
-        className="relative flex items-center justify-center cursor-crosshair hover:scale-125 transition-transform"
-        style={{ color, filter: "drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35))" }}
+        // The port IS the type icon (image/video/text/audio/any) inside a small
+        // soft-square chip, placed outside the node edge. The chip's neutral
+        // card surface + type-coloured hairline read on both themes with no
+        // dark drop-shadow. Connectors anchor to the chip centre (DOM-measured).
+        className="port-chip relative flex items-center justify-center cursor-crosshair"
+        style={{ width: PORT_CHIP, height: PORT_CHIP, zIndex: 1 }}
         data-port-side={side}
         data-port-kind={kind}
         data-port-id={name}
@@ -1163,34 +1194,38 @@ function Port({
         }}
         title={`${label ?? name} · ${kind}${multi ? " · accepts many" : ""}`}
       >
-        <KindIcon size={18} strokeWidth={2.25} />
-        {multi && (
-          <span
-            className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full bg-bg-card flex items-center justify-center text-[8px] leading-none font-bold"
-            style={{ color, boxShadow: `0 0 0 1.5px ${color}` }}
-          >
-            +
-          </span>
-        )}
+        <KindIcon size={14} strokeWidth={2} />
       </button>
-      {/* Edge count badge for multi-ports with at least one connection. */}
+      {/* Edge count badge for multi-ports with at least one connection — placed
+          on the outer-top corner so it never clashes with the stack. */}
       {multi && (edgeCount ?? 0) > 0 && (
         <div
-          className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-1 rounded-full bg-fg text-bg text-[8px] font-bold leading-[14px] text-center pointer-events-none"
+          className="absolute -top-1.5 min-w-[14px] h-[14px] px-1 rounded-full bg-fg text-bg text-[8px] font-bold leading-[14px] text-center pointer-events-none"
+          style={{ [side === "in" ? "left" : "right"]: -6, zIndex: 2 }}
           title={`${edgeCount} reference${edgeCount === 1 ? "" : "s"} connected`}
         >
           {edgeCount}
         </div>
       )}
+      {/* Hover label — appears OUTWARD from the chip (away from the node body). */}
       <div
         className={`absolute top-1/2 -translate-y-1/2 opacity-0 group-hover/port:opacity-100 pointer-events-none whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded bg-fg text-bg ${
-          side === "in" ? "left-6" : "right-6"
+          side === "in" ? "right-full mr-2" : "left-full ml-2"
         }`}
       >
         {label ?? name}
       </div>
     </div>
   );
+}
+
+// PORT_COLORS are 6-digit hex; the .port-chip CSS utility needs an "R G B"
+// triplet in --pc so it can apply alpha. Cheap, allocation-light conversion.
+function hexToRgbTriplet(hex: string): string {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`;
 }
 
 const PORT_COLORS: Record<string, string> = {

@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useRef, useState } from "react";
 import { NODE_TYPES, PORT_COLORS, getActiveInputs, type Graph, type GraphNode } from "@/lib/canvas/types";
-import { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING } from "./CanvasNode";
+import { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING, PORT_CHIP, PORT_OUTSET } from "./CanvasNode";
 
 type EdgePos = { x1: number; y1: number; x2: number; y2: number; color: string; id: string };
 
@@ -11,17 +11,18 @@ type EdgePos = { x1: number; y1: number; x2: number; y2: number; color: string; 
 // currently being dragged (its DOM position is updated via direct style.transform
 // every frame; measuring during drag would be expensive AND stale).
 //
-// Port container is at `top: y`, where y = NODE_HEADER_HEIGHT + 14 + idx * SPACING.
-// The 14px circle sits inside the container at top=0, so its visual centre is
-// y + 7 (PORT_RADIUS).
+// Ports (patch 247) are small chips placed OUTSIDE the node edge. The chip
+// container is at `top: y` (y = NODE_HEADER_HEIGHT + 14 + idx * SPACING) with
+// the chip at the container origin, so the chip's visual centre is y + CHIP/2.
 //
-// X for an INPUT port: container at `left: -7`, the 14px circle therefore
-// spans x ∈ [-7, +7] relative to the node's left edge, so centre =
-// node.position.x.
-// X for an OUTPUT port: container at `right: -7`, centre = node.position.x + NODE_WIDTH.
+// X for an INPUT port: chip centre sits PORT_OUTSET px LEFT of the node's left
+// edge, i.e. node.position.x - PORT_OUTSET.
+// X for an OUTPUT port: chip centre sits PORT_OUTSET px RIGHT of the node's
+// right edge, i.e. node.position.x + NODE_WIDTH + PORT_OUTSET.
+// (Stationary nodes use the pixel-perfect DOM-measured centre; this formula is
+// only the first-paint / mid-drag fallback, so it just needs to be close.)
 // ─────────────────────────────────────────────────────────────────────────────
-const PORT_RADIUS = 7;
-const PORT_BASE_Y = NODE_HEADER_HEIGHT + 14 + PORT_RADIUS;
+const PORT_BASE_Y = NODE_HEADER_HEIGHT + 14 + PORT_CHIP / 2;
 
 function fallbackPortY(node: GraphNode, portName: string, side: "in" | "out"): number {
   const def = NODE_TYPES[node.type];
@@ -148,7 +149,7 @@ export default function CanvasEdges({
     const live = livePosOf(node.id);
 
     // Node being dragged: shift its MEASURED port position by how far the
-    // node has moved (live − committed position). This is exact — it reuses
+    // node has moved (live - committed position). This is exact — it reuses
     // the real DOM-measured offset instead of the formula, so connectors
     // stay glued to ports during drag (single or multi-node).
     if (live && m) {
@@ -163,10 +164,10 @@ export default function CanvasEdges({
     }
 
     // Fallback: formula (first paint / not yet measured / dragging an
-    // unmeasured port).
+    // unmeasured port). Chip centres sit PORT_OUTSET px outside the node edge.
     const p = posOf(node);
     const y = p.y + fallbackPortY(node, portName, side);
-    const x = side === "out" ? p.x + NODE_WIDTH : p.x;
+    const x = side === "out" ? p.x + NODE_WIDTH + PORT_OUTSET : p.x - PORT_OUTSET;
     return { x, y };
   }
 

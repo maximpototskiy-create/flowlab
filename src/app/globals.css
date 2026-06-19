@@ -233,3 +233,28 @@ select.no-native-arrow {
 .r-lg { border-radius: var(--radius-lg); }
 .r-xl { border-radius: var(--radius-xl); }
 .hairline { border: 1px solid rgb(var(--hairline) / var(--hairline-alpha)); }
+
+/* ── Canvas node port chips ────────────────────────────────────────────
+   Type icons (image / video / text / audio) live OUTSIDE the node edge as
+   small soft-square chips. A neutral card surface + a type-colored hairline
+   reads cleanly on BOTH themes WITHOUT any dark drop-shadow. The port's type
+   color is passed per-element as `--pc` ("R G B" triplet) so alpha works. */
+.port-chip {
+  background: rgb(var(--bg-card));
+  border: 1px solid rgb(var(--pc) / 0.5);
+  color: rgb(var(--pc));
+  border-radius: 7px;
+  transition: transform 120ms ease, border-color 120ms, background-color 120ms;
+}
+.port-chip:hover {
+  border-color: rgb(var(--pc) / 0.95);
+  background: rgb(var(--pc) / 0.12);
+  transform: scale(1.12);
+}
+/* Faded duplicate behind a multi-port chip — reads as a small stack, meaning
+   "accepts many" (replaces the old icon + "+" badge). */
+.port-chip-back {
+  background: rgb(var(--bg-card));
+  border: 1px solid rgb(var(--pc) / 0.32);
+  border-radius: 7px;
+}

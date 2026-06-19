@@ -6,7 +6,7 @@ import {
   type Graph, type GraphNode, type PortKind, type Group, EMPTY_GRAPH,
 } from "@/lib/canvas/types";
 import { getVideoModel, defaultModelForMode, clampDuration, type VideoMode } from "@/lib/canvas/videoModels";
-import CanvasNode, { NODE_WIDTH } from "./CanvasNode";
+import CanvasNode, { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING, PORT_CHIP, PORT_OUTSET } from "./CanvasNode";
 import CanvasEdges from "./CanvasEdges";
 import Minimap from "./Minimap";
 import GroupBox from "./GroupBox";
@@ -849,13 +849,14 @@ export default function Canvas({
     const port = def.outputs[portIdx];
     if (!port) return;
     const canvasPt = screenToCanvas(e.clientX, e.clientY);
-    // Match CanvasEdges port calculation: NODE_HEADER_HEIGHT(36) + 14 + PORT_RADIUS(7) + idx*spacing(26)
-    const portYpx = 36 + 14 + 7 + portIdx * 26;
+    // Match CanvasEdges: chip centre Y = NODE_HEADER_HEIGHT + 14 + CHIP/2 + idx*SPACING;
+    // output chip centre X sits PORT_OUTSET px beyond the node's right edge.
+    const portYpx = NODE_HEADER_HEIGHT + 14 + PORT_CHIP / 2 + portIdx * NODE_PORT_SPACING;
     setEdgeDraft({
       fromNode: nodeId,
       fromPort: portName,
       fromKind: port.type,
-      x1: node.position.x + NODE_WIDTH,
+      x1: node.position.x + NODE_WIDTH + PORT_OUTSET,
       y1: node.position.y + portYpx,
       x2: canvasPt.x,
       y2: canvasPt.y,
