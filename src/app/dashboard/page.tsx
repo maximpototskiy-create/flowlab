@@ -6,7 +6,7 @@ import { cached } from "@/lib/cache";
 import TopNav from "@/components/TopNav";
 import CreateBrandButton from "@/components/CreateBrandButton";
 import ProjectCard, { type ProjectCardData } from "@/components/ProjectCard";
-import BrandCard, { type BrandCardData, type BrandProject } from "@/components/BrandCard";
+import DashboardBrands from "@/components/DashboardBrands";
 import { relativeTime } from "@/lib/format";
 
 export default async function DashboardPage() {
@@ -19,7 +19,6 @@ export default async function DashboardPage() {
     prisma.brand.findMany({
       where: { archivedAt: null },
       orderBy: { updatedAt: "desc" },
-      take: 4,
       include: {
         _count: { select: { projects: true } },
         projects: {
@@ -114,11 +113,7 @@ export default async function DashboardPage() {
                 <CreateBrandButton variant="ghost" />
               </div>
             </div>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {recentBrands.map((b: BrandCardData & { projects: BrandProject[] }) => (
-                <BrandCard key={b.id} brand={b} projects={b.projects} />
-              ))}
-            </div>
+            <DashboardBrands brands={recentBrands} />
           </section>
         )}
 
