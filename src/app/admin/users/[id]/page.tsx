@@ -210,7 +210,7 @@ function AssetThumb({ asset }: { asset: AssetLite }) {
   if (isImage) {
     if (canOptimize(asset.cdnUrl)) {
       return (
-        <div className="relative w-16 h-16 rounded-md overflow-hidden bg-bg-card border border-border">
+        <div className="relative w-16 h-16 r-sm overflow-hidden hairline bg-bg-card">
           <Image src={asset.cdnUrl} alt="" fill sizes="64px" className="object-cover" />
         </div>
       );
@@ -220,14 +220,14 @@ function AssetThumb({ asset }: { asset: AssetLite }) {
       <img
         src={asset.cdnUrl}
         alt=""
-        className="w-16 h-16 rounded-md object-cover bg-bg-card border border-border"
+        className="w-16 h-16 r-sm object-cover hairline bg-bg-card"
         loading="lazy"
         decoding="async"
       />
     );
   }
   return (
-    <div className="w-16 h-16 rounded-md bg-bg-card border border-border flex items-center justify-center text-fg-subtle text-[9px] uppercase tracking-wide">
+    <div className="w-16 h-16 r-sm hairline bg-bg-card flex items-center justify-center text-fg-subtle text-[9px] uppercase tracking-wide">
       {asset.kind}
     </div>
   );
@@ -250,7 +250,7 @@ function StatusChip({ status }: { status: string }) {
 
 function Card({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="bg-bg-card border border-border rounded-lg p-4">
+    <div className="surface p-4">
       <div className="text-[10px] uppercase tracking-wider text-fg-subtle">{label}</div>
       <div className={`font-display text-2xl mt-1 ${accent ? "text-red-400" : ""}`}>{value}</div>
     </div>

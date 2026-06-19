@@ -21,7 +21,7 @@ export default function ActiveRunsBar({
 
   return (
     <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 max-w-[88%] pointer-events-none">
-      <div className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-bg-card/95 backdrop-blur border border-border shadow-panel">
+      <div className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-bg-card/95 backdrop-blur hairline elev-2">
         <Loader2 size={14} className="animate-spin text-brand shrink-0" />
         <span className="text-[11px] font-semibold text-fg shrink-0">
           {active.length} running

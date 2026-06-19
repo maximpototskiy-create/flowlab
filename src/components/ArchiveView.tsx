@@ -257,7 +257,7 @@ export default function ArchiveView() {
                 <button
                   key={`${c.videoId}-${i}`}
                   onClick={() => setOpen(c)}
-                  className="text-left rounded-md overflow-hidden border border-border bg-bg-card hover:border-brand transition"
+                  className="text-left r-sm overflow-hidden hairline bg-bg-card hover:border-brand transition"
                 >
                   <div className="aspect-video bg-black flex items-center justify-center">
                     {c.thumbnailUrl ? (

@@ -2129,7 +2129,7 @@ export default function Canvas({
           )}
 
           {/* Floating toolbar bottom-center: zoom + grid + fullscreen */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 bg-bg-card border border-border rounded-full px-2 py-1 shadow-node">
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 bg-bg-card hairline rounded-full px-2 py-1 elev-2">
             <button
               onClick={() => setZoom((z) => Math.max(0.4, z - 0.1))}
               className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"

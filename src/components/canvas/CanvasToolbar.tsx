@@ -29,7 +29,7 @@ export default function CanvasToolbar({
   workflowId: string;
 }) {
   return (
-    <div className="h-12 shrink-0 border-b border-border bg-bg-card px-4 flex items-center gap-3">
+    <div className="h-12 shrink-0 glass-strong px-4 flex items-center gap-3">
       <Link
         href={`/projects/${projectId}`}
         className="text-[12px] text-fg-muted hover:text-fg"

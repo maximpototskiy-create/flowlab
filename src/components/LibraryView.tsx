@@ -176,7 +176,7 @@ export default function LibraryView() {
           {imageUrl ? (
             <div className="relative">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={imageUrl} alt="" className="w-20 h-20 object-cover rounded-md border border-border" />
+              <img src={imageUrl} alt="" className="w-20 h-20 object-cover r-sm hairline" />
               <button onClick={() => setImageUrl(null)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-bg-card border border-border flex items-center justify-center text-fg-muted">
                 <X size={11} />
               </button>
@@ -268,7 +268,7 @@ export default function LibraryView() {
                 <button
                   key={`${r.assetId ?? r.url}-${i}`}
                   onClick={() => setOpen(r)}
-                  className="text-left rounded-md overflow-hidden border border-border bg-bg-card hover:border-brand transition"
+                  className="text-left r-sm overflow-hidden hairline bg-bg-card hover:border-brand transition"
                 >
                   <div className="aspect-square bg-black flex items-center justify-center">
                     {r.modality === "image" ? (

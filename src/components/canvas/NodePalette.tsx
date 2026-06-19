@@ -28,7 +28,7 @@ export default function NodePalette({
   }, [query]);
 
   return (
-    <div className="w-56 shrink-0 border-r border-border bg-bg flex flex-col">
+    <div className="w-56 shrink-0 glass-strong flex flex-col">
       {/* Search */}
       <div className="p-2.5 border-b border-border">
         <div className="relative">

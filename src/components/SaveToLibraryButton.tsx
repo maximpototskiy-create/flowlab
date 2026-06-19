@@ -114,7 +114,7 @@ export default function SaveToLibraryButton({
 
       {open && (
         <div
-          className="absolute right-0 bottom-full mb-2 z-50 w-60 rounded-lg border border-border bg-bg-card p-3 shadow-xl space-y-2"
+          className="absolute right-0 bottom-full mb-2 z-50 w-60 glass r-md p-3 space-y-2"
           onClick={(e) => e.stopPropagation()}
         >
           {!brandId && (

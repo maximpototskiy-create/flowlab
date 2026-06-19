@@ -125,7 +125,7 @@ export default function GroupBox({
             />
             {showColors && (
               <div
-                className="absolute top-5 left-0 z-30 flex gap-1 p-1 rounded-md bg-bg-card border border-border shadow-node"
+                className="absolute top-5 left-0 z-30 flex gap-1 p-1 glass r-sm"
                 onPointerDown={stop}
               >
                 {colorKeys.map((k) => (

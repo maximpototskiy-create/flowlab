@@ -275,7 +275,7 @@ export default function BrandAssetsManager({ brandId }: { brandId: string }) {
       ) : (
         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
           {visible.map((a) => (
-            <div key={a.id} className="relative group aspect-square rounded-md overflow-hidden border border-border bg-bg">
+            <div key={a.id} className="relative group aspect-square r-sm overflow-hidden hairline bg-bg">
               {a.kind === "image" && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={a.url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />

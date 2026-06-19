@@ -79,7 +79,7 @@ export default function RunsPanel({
 
   return (
     <div
-      className="absolute right-4 bottom-4 z-20 w-80 rounded-xl bg-bg-card border border-border shadow-panel overflow-hidden"
+      className="absolute right-4 bottom-4 z-20 w-80 glass r-lg overflow-hidden"
       style={{ transform: `translate(${offset.dx}px, ${offset.dy}px)` }}
     >
       <div

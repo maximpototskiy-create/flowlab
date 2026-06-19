@@ -313,14 +313,14 @@ export default function TrackEditor({
     <div className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3" onClick={onClose}>
       {tip && (
         <div
-          className="fixed z-[10000] w-64 p-2.5 rounded-md bg-bg-card border border-border shadow-panel text-[11px] text-fg-muted leading-snug pointer-events-none"
+          className="fixed z-[10000] w-64 p-2.5 glass r-sm text-[11px] text-fg-muted leading-snug pointer-events-none"
           style={{ right: `calc(100vw - ${tip.x}px + 8px)`, top: tip.y, transform: "translateY(-50%)" }}
         >
           {tip.text}
         </div>
       )}
       <div
-        className={`bg-bg-card border border-border rounded-xl flex flex-col overflow-hidden shadow-panel ${big ? "w-[98vw] h-[97vh] max-w-none" : "w-full max-w-[880px] h-[90vh]"}`}
+        className={`glass r-lg flex flex-col overflow-hidden ${big ? "w-[98vw] h-[97vh] max-w-none" : "w-full max-w-[880px] h-[90vh]"}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0 gap-2">

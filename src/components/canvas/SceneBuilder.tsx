@@ -84,7 +84,7 @@ export default function SceneBuilder({
         {scenes.map((scene, idx) => (
           <div
             key={scene.id}
-            className="rounded-lg bg-bg-subtle border border-border p-3 space-y-2"
+            className="r-md hairline bg-bg-subtle p-3 space-y-2"
           >
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-fg-muted font-medium">

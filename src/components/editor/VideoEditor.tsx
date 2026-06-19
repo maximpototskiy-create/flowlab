@@ -2296,7 +2296,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
         const apply = (patch: Partial<EditClip>) => { update(menu.id, patch); setMenu(null); };
         const isMedia = c.kind === "video" || c.kind === "image" || c.kind === "text";
         return (
-          <div className="fixed z-50 w-52 bg-bg-card border border-border rounded-lg shadow-xl p-1.5 text-[11px]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.max(8, Math.min(menu.y, window.innerHeight - 500)) }} onClick={(e) => e.stopPropagation()}>
+          <div className="fixed z-50 w-52 glass r-md p-1.5 text-[11px]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.max(8, Math.min(menu.y, window.innerHeight - 500)) }} onClick={(e) => e.stopPropagation()}>
             {isMedia && (
               <>
                 <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Animation</div>
@@ -2324,7 +2324,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       {transMenu && (() => {
         const b = clips.find((x) => x.id === transMenu.id);
         return (
-          <div className="fixed z-50 w-44 bg-bg-card border border-border rounded-lg shadow-xl p-1.5 text-[11px]" style={{ left: Math.min(transMenu.x, window.innerWidth - 190), top: Math.max(8, Math.min(transMenu.y, window.innerHeight - 320)) }} onClick={(e) => e.stopPropagation()}>
+          <div className="fixed z-50 w-44 glass r-md p-1.5 text-[11px]" style={{ left: Math.min(transMenu.x, window.innerWidth - 190), top: Math.max(8, Math.min(transMenu.y, window.innerHeight - 320)) }} onClick={(e) => e.stopPropagation()}>
             <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Transition</div>
             <div className="grid grid-cols-2 gap-1 px-1 pb-1">
               {TRANSITIONS.map((a) => (

@@ -160,28 +160,28 @@ export default function BrandAssetsPicker({
 
   if (!brandId) {
     return (
-      <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle border border-border rounded-md">
+      <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle r-sm hairline">
         This workflow isn&apos;t inside a brand, so there&apos;s no Brand Kit to read from.
       </div>
     );
   }
   if (assets === null) {
     return (
-      <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle border border-border rounded-md">
+      <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle r-sm hairline">
         Loading assets…
       </div>
     );
   }
   if (loadError) {
     return (
-      <div className="text-[11px] text-red-500 p-3 bg-bg-subtle border border-border rounded-md">
+      <div className="text-[11px] text-red-500 p-3 bg-bg-subtle r-sm hairline">
         Failed to load: {loadError}
       </div>
     );
   }
   if (assets.length === 0) {
     return (
-      <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle border border-border rounded-md">
+      <div className="text-[11px] text-fg-muted p-3 bg-bg-subtle r-sm hairline">
         <div className="flex items-center gap-1.5 mb-1.5 text-fg">
           <Package size={11} />
           <span className="font-medium">No brand assets yet</span>

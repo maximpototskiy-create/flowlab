@@ -49,7 +49,7 @@ export default function ContextMenu({
   return createPortal(
     <div
       ref={ref}
-      className="fixed z-[900] bg-bg-card border border-border rounded-xl shadow-panel overflow-hidden flex flex-col animate-fade-up"
+      className="fixed z-[900] glass r-lg overflow-hidden flex flex-col animate-fade-up"
       style={{ left, top, width: W, maxHeight: H }}
     >
       {/* Search */}

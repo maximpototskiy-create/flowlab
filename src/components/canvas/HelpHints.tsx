@@ -72,7 +72,7 @@ export default function HelpHints({ onClose }: { onClose: () => void }) {
   return (
     <div
       ref={ref}
-      className="absolute bottom-16 left-1/2 z-30 w-[340px] -ml-[170px] rounded-xl bg-bg-card border border-border shadow-panel p-4"
+      className="absolute bottom-16 left-1/2 z-30 w-[340px] -ml-[170px] glass r-lg p-4"
     >
       <div className="flex items-center justify-between mb-3">
         <span className="text-[13px] font-semibold text-fg">Canvas shortcuts</span>

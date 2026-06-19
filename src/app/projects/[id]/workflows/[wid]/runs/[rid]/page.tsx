@@ -74,7 +74,7 @@ export default async function RunDetailPage({
                 ? Math.round((s.finishedAt.getTime() - s.startedAt.getTime()) / 1000)
                 : null;
             return (
-              <div key={s.id} className="rounded-md border border-border bg-bg-card overflow-hidden">
+              <div key={s.id} className="surface overflow-hidden">
                 <div className="px-4 py-2.5 flex items-center gap-3 border-b border-border">
                   <StatusIcon status={s.status} />
                   <div className="flex-1 min-w-0">
@@ -99,7 +99,7 @@ export default async function RunDetailPage({
                         href={a.cdnUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="block rounded-md overflow-hidden bg-bg-subtle border border-border hover:border-border-strong"
+                        className="block r-sm overflow-hidden hairline bg-bg-subtle hover:border-border-strong"
                       >
                         {a.kind === "image" && (
                           // eslint-disable-next-line @next/next/no-img-element

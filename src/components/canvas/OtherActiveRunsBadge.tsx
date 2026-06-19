@@ -45,7 +45,7 @@ export default function OtherActiveRunsBadge({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 w-72 max-h-80 overflow-auto rounded-md border border-border bg-bg-card shadow-lg z-50">
+        <div className="absolute right-0 top-full mt-1.5 w-72 max-h-80 overflow-auto glass r-sm z-50">
           <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-fg-muted border-b border-border">
             Running in other workflows
           </div>

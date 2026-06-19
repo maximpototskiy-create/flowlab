@@ -48,7 +48,7 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
           <input type="hidden" name="brandId" value={brand.id} />
 
           {/* ─────────────────────────────────────── Product context (NEW) */}
-          <div className="rounded-lg border border-border bg-bg-card p-5 space-y-5">
+          <div className="surface p-5 space-y-5">
             <div>
               <h2 className="text-[14px] font-medium text-fg">Product context</h2>
               <p className="text-[11px] text-fg-muted mt-0.5">
@@ -135,7 +135,7 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
           </div>
 
           {/* ─────────────────────────────────────── Voice & lexicon */}
-          <div className="rounded-lg border border-border bg-bg-card p-5 space-y-5">
+          <div className="surface p-5 space-y-5">
             <div>
               <h2 className="text-[14px] font-medium text-fg">Voice & lexicon</h2>
               <p className="text-[11px] text-fg-muted mt-0.5">
@@ -204,7 +204,7 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
           </div>
 
           {/* ─────────────────────────────────────── Visual identity */}
-          <div className="rounded-lg border border-border bg-bg-card p-5 space-y-5">
+          <div className="surface p-5 space-y-5">
             <div>
               <h2 className="text-[14px] font-medium text-fg">Visual identity</h2>
               <p className="text-[11px] text-fg-muted mt-0.5">
@@ -257,7 +257,7 @@ export default async function BrandKitPage({ params }: { params: Promise<{ slug:
           </div>
         </form>
 
-        <div className="rounded-lg border border-border bg-bg-card p-5 space-y-4 mt-6">
+        <div className="surface p-5 space-y-4 mt-6">
           <div>
             <h2 className="text-[14px] font-medium text-fg">Brand assets</h2>
             <p className="text-[11px] text-fg-muted mt-0.5">

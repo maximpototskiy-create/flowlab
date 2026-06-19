@@ -58,7 +58,7 @@ export default function NodeExpandedModal({
           dispatches after its dropdown closes, which used to shut the modal. */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onMouseDown={onClose} />
       <div
-        className="relative bg-bg-card border border-border rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col md:flex-row overflow-hidden shadow-panel animate-fade-up"
+        className="relative glass r-lg w-full max-w-4xl max-h-[90vh] flex flex-col md:flex-row overflow-hidden animate-fade-up"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >

@@ -53,7 +53,7 @@ export default function WorkflowBuilderPanel({
   return (
     <div className="fixed inset-0 z-[900] flex justify-end bg-black/40" onClick={onClose}>
       <div
-        className="w-full max-w-md h-full bg-bg border-l border-border flex flex-col"
+        className="w-full max-w-md h-full glass-strong flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

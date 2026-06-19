@@ -388,7 +388,7 @@ export default function AssetDrawer({
   return (
     <div
       ref={rootRef}
-      className="absolute top-0 right-0 h-full w-[340px] z-30 bg-bg-card border-l border-border shadow-panel flex flex-col"
+      className="absolute top-0 right-0 h-full w-[340px] z-30 glass-strong flex flex-col"
       onPointerDown={(e) => e.stopPropagation()}
     >
       {/* Header */}

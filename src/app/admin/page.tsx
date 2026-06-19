@@ -216,7 +216,7 @@ export default async function AdminPage({
 
 function Card({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-bg-card border border-border rounded-lg p-4">
+    <div className="surface p-4">
       <div className="text-[10px] uppercase tracking-wider text-fg-subtle">{label}</div>
       <div className="font-display text-2xl mt-1">{value}</div>
     </div>

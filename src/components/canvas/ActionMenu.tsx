@@ -51,7 +51,7 @@ export default function ActionMenu({
   return createPortal(
     <div
       ref={ref}
-      className="fixed z-[900] bg-bg-card border border-border rounded-lg shadow-panel overflow-hidden py-1 animate-fade-up"
+      className="fixed z-[900] glass r-md overflow-hidden py-1 animate-fade-up"
       style={{ left, top, width: W }}
     >
       {items.map((it, i) => (

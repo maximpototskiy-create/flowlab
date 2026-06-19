@@ -225,7 +225,7 @@ function CanvasNodeImpl({
         {showInfo && (
           <div
             ref={infoRef}
-            className="absolute top-9 right-2 z-30 w-60 rounded-lg bg-bg-card border border-border shadow-panel p-3 text-left nodrag"
+            className="absolute top-9 right-2 z-30 w-60 glass r-md p-3 text-left nodrag"
             onMouseDown={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}

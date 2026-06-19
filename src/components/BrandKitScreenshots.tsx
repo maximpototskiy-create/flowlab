@@ -81,7 +81,7 @@ export default function BrandKitScreenshots({
           {urls.map((u, i) => (
             <div
               key={`${u}-${i}`}
-              className="relative aspect-[9/16] rounded-md overflow-hidden border border-border bg-bg-card group"
+              className="relative aspect-[9/16] r-sm overflow-hidden hairline bg-bg-card group"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
