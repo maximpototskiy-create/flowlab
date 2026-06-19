@@ -17,13 +17,13 @@ export default async function TopNav({
   const user = await requireUser();
 
   return (
-    <header className="border-b border-border sticky top-0 z-40 bg-bg/80 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-[rgb(var(--hairline)/var(--hairline-alpha))] bg-[rgb(var(--glass-tint)/0.80)] backdrop-blur-2xl">
       <div className="max-w-7xl mx-auto px-6 lg:px-10 h-14 flex items-center justify-between">
         <div className="flex items-center gap-7 min-w-0">
-          <Link href="/dashboard" className="font-medium text-[15px] leading-none whitespace-nowrap">
+          <Link href="/dashboard" className="font-semibold text-[15px] leading-none whitespace-nowrap tracking-tight">
             Flow<em className="text-brand not-italic">Lab</em>
           </Link>
-          <nav className="hidden md:flex items-center gap-5 text-[11px] uppercase tracking-wider font-medium">
+          <nav className="hidden md:flex items-center gap-0.5 text-[13px] font-medium">
             <NavLink href="/dashboard" active={activeNav === "dashboard"}>
               Dashboard
             </NavLink>
@@ -44,14 +44,14 @@ export default async function TopNav({
                 Admin
               </NavLink>
             )}
-            <span className="text-fg-subtle cursor-not-allowed" title="Coming soon">
+            <span className="px-2.5 py-1.5 rounded-lg text-fg-subtle cursor-not-allowed" title="Coming soon">
               Templates
             </span>
           </nav>
         </div>
         <div className="flex items-center gap-3">
           <ActiveRunsIndicator />
-          <span className="hidden md:flex items-center gap-2 text-[11px] text-fg-muted max-w-[200px] truncate">
+          <span className="hidden md:flex items-center gap-2 text-[12px] text-fg-muted max-w-[200px] truncate px-2.5 py-1 rounded-full bg-bg-hover/50">
             <span className="w-1.5 h-1.5 rounded-full bg-brand animate-pulse" />
             <span className="truncate">{user.email}</span>
           </span>
@@ -61,7 +61,7 @@ export default async function TopNav({
       </div>
 
       {crumbs.length > 0 && (
-        <div className="max-w-7xl mx-auto px-6 lg:px-10 h-9 flex items-center gap-2 text-[11px] uppercase tracking-wider text-fg-muted border-t border-border/60">
+        <div className="max-w-7xl mx-auto px-6 lg:px-10 h-9 flex items-center gap-2 text-[11px] uppercase tracking-wider text-fg-muted border-t border-[rgb(var(--hairline)/var(--hairline-alpha))]">
           {crumbs.map((c, i) => (
             <span key={i} className="flex items-center gap-2">
               {i > 0 && <span className="text-fg-subtle">/</span>}
@@ -84,7 +84,7 @@ function NavLink({ href, active, children }: { href: string; active?: boolean; c
   return (
     <Link
       href={href}
-      className={active ? "text-fg" : "text-fg-muted hover:text-fg transition"}
+      className={`px-2.5 py-1.5 rounded-lg transition ${active ? "bg-bg-hover text-fg" : "text-fg-muted hover:text-fg hover:bg-bg-hover/60"}`}
     >
       {children}
     </Link>
