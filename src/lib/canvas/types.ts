@@ -116,18 +116,22 @@ export const LLM_MODELS = [
   { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6", vision: true },
   { id: "anthropic/claude-sonnet-4.5", label: "Claude Sonnet 4.5", vision: true },
   // ─── OpenAI ─────────────────────────────────────────────────────────
-  // gpt-4o + gpt-4.1 confirmed working. gpt-oss-120b is a REASONING model
-  // — fal rejects it with 400 unless reasoning:true is sent.
-  { id: "openai/gpt-4o", label: "GPT-4o", vision: true },
-  { id: "openai/gpt-4.1", label: "GPT-4.1 (text only)", vision: false },
-  { id: "openai/gpt-oss-120b", label: "GPT OSS 120B (reasoning)", vision: false, reasoning: true },
+  // `direct: true` models are called via the user's own OPENAI_API_KEY
+  // (OpenAI chat-completions API) instead of fal's OpenRouter wrapper — the id
+  // suffix after "openai/" IS the OpenAI API model name. gpt-oss-120b is an
+  // open model NOT on OpenAI's first-party API, so it stays on fal (no direct).
+  { id: "openai/gpt-5.5", label: "GPT-5.5 ⭐", vision: true, direct: true },
+  { id: "openai/gpt-4o", label: "GPT-4o", vision: true, direct: true },
+  { id: "openai/gpt-4.1", label: "GPT-4.1 (text only)", vision: false, direct: true },
+  { id: "openai/gpt-oss-120b", label: "GPT OSS 120B (reasoning, via fal)", vision: false, reasoning: true },
   // ─── Google ─────────────────────────────────────────────────────────
-  // gemini-2.5-flash confirmed working. gemini-3.1-pro-preview is a
-  // REASONING model (needs reasoning:true). gemini-3-pro-preview and
-  // gemini-3-flash-preview were REMOVED — fal returned "No endpoints
-  // found" for them (don't exist on the wrapper).
-  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", vision: true },
-  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (reasoning)", vision: false, reasoning: true },
+  // `direct: true` → called via the user's own GEMINI_API_KEY (Gemini
+  // generateContent API); the id suffix after "google/" IS the Gemini API
+  // model name. Gemini handles "thinking" internally, so reasoning variants
+  // work on the direct path without special flags.
+  { id: "google/gemini-3.5-flash", label: "Gemini 3.5 Flash ⭐", vision: true, direct: true },
+  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", vision: true, direct: true },
+  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (reasoning)", vision: false, reasoning: true, direct: true },
   // ─── Meta ──────────────────────────────────────────────────────────
   { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick (text only)", vision: false },
   // ─── Moonshot ──────────────────────────────────────────────────────
@@ -139,6 +143,15 @@ export const LLM_MODELS = [
   // Switched to grok-4.3 as recommended.
   { id: "x-ai/grok-4.3", label: "Grok 4.3", vision: true },
 ];
+
+/** True when this LLM model is a first-party OpenAI/Gemini model that should be
+ *  called directly via the user's own key (not through fal's OpenRouter
+ *  wrapper). See `directLLM` in src/lib/agent/router.ts. */
+export function isDirectLLM(modelId: string): boolean {
+  return LLM_MODELS.some(
+    (m) => m.id === modelId && (m as { direct?: boolean }).direct === true,
+  );
+}
 
 /** Helper used by the runner — does this model accept image inputs on
  *  fal's openrouter/router/vision wrapper? Used to know whether to
@@ -428,6 +441,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         options: [
           { value: "fal-ai/nano-banana-2", label: "Nano Banana 2 ⭐ (Google Gemini 3.1 Flash)" },
           { value: "fal-ai/nano-banana-pro", label: "Nano Banana Pro (Gemini 3 Pro)" },
+          { value: "openai/gpt-image-2", label: "GPT Image 2 ⭐ (OpenAI)" },
           { value: "fal-ai/flux-2-flex", label: "FLUX 2 Flex" },
           { value: "fal-ai/flux-pro/v1.1-ultra", label: "FLUX 1.1 Pro Ultra" },
           { value: "fal-ai/flux-pro/v1.1", label: "FLUX Pro 1.1" },

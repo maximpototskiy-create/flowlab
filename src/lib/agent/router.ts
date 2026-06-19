@@ -23,6 +23,8 @@ export type AgentCall = {
   webSearch?: boolean; // force web search on/off (default: on for research)
   json?: boolean; // ask for JSON-only output (generate)
   temperature?: number;
+  model?: string; // explicit model override (else the task default)
+  images?: string[]; // image URLs for multimodal/vision calls
 };
 
 export type AgentResult = {
@@ -50,14 +52,24 @@ export async function callAgent(call: AgentCall): Promise<AgentResult> {
 async function callOpenAI(call: AgentCall): Promise<AgentResult> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY not set");
-  const model = OPENAI_MODEL;
+  const model = call.model ?? OPENAI_MODEL;
+
+  // Vision: when images are supplied, send the user turn as multimodal content
+  // (OpenAI fetches each image_url directly — our URLs are public CDN links).
+  const userContent: unknown =
+    call.images && call.images.length
+      ? [
+          { type: "text", text: call.user },
+          ...call.images.map((url) => ({ type: "image_url", image_url: { url } })),
+        ]
+      : call.user;
 
   // gpt-5.x are reasoning models — don't send temperature (not supported).
   const body: Record<string, unknown> = {
     model,
     messages: [
       ...(call.system ? [{ role: "system", content: call.system }] : []),
-      { role: "user", content: call.user },
+      { role: "user", content: userContent },
     ],
   };
   if (call.json) body.response_format = { type: "json_object" };
@@ -81,12 +93,19 @@ async function callOpenAI(call: AgentCall): Promise<AgentResult> {
 async function callGemini(call: AgentCall): Promise<AgentResult> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY not set");
-  const model = GEMINI_MODEL;
+  const model = call.model ?? GEMINI_MODEL;
   const useSearch = call.webSearch ?? call.task === "research";
+
+  // Vision: Gemini generateContent needs inline image BYTES (base64), not URLs,
+  // so fetch each reference and inline it alongside the text part.
+  const imageParts =
+    call.images && call.images.length
+      ? await Promise.all(call.images.map(urlToInlineData))
+      : [];
 
   // Gemini 3.x reasoning — keep default sampling (don't set temperature).
   const body: Record<string, unknown> = {
-    contents: [{ role: "user", parts: [{ text: call.user }] }],
+    contents: [{ role: "user", parts: [{ text: call.user }, ...imageParts] }],
     ...(call.json ? { generationConfig: { responseMimeType: "application/json" } } : {}),
   };
   if (call.system) {
@@ -126,4 +145,38 @@ async function callGemini(call: AgentCall): Promise<AgentResult> {
   }
 
   return { text, provider: "gemini", model, sources };
+}
+
+// Fetch an image URL and inline it as Gemini base64 image bytes.
+async function urlToInlineData(
+  url: string,
+): Promise<{ inline_data: { mime_type: string; data: string } }> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Could not fetch image for vision (${r.status})`);
+  const mime = r.headers.get("content-type") || "image/jpeg";
+  const buf = Buffer.from(await r.arrayBuffer());
+  return { inline_data: { mime_type: mime, data: buf.toString("base64") } };
+}
+
+// Direct LLM call for first-party OpenAI / Gemini node models — routed through
+// the user's own OPENAI_API_KEY / GEMINI_API_KEY instead of fal's OpenRouter
+// wrapper. `modelId` is the node model id, e.g. "openai/gpt-5.5" or
+// "google/gemini-3.5-flash"; provider + API model name are derived from it.
+export async function directLLM(
+  modelId: string,
+  prompt: string,
+  images: string[] = [],
+  systemPrompt?: string,
+): Promise<string> {
+  const provider: Provider = modelId.startsWith("openai/") ? "openai" : "gemini";
+  const apiModel = modelId.split("/").slice(1).join("/");
+  const res = await callAgent({
+    task: "generate",
+    provider,
+    model: apiModel,
+    system: systemPrompt,
+    user: prompt,
+    images,
+  });
+  return res.text;
 }

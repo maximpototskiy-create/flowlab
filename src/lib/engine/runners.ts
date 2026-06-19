@@ -7,6 +7,22 @@ import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, c
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 import { compositeGreenScreen } from "@/lib/video";
+import { directLLM } from "@/lib/agent/router";
+import { isDirectLLM } from "@/lib/canvas/types";
+
+// Route first-party OpenAI/Gemini node models through the user's own keys
+// (direct API); everything else (Anthropic, OSS, etc.) stays on fal's LLM
+// endpoint. Same signature as falLLM so call sites just swap the name.
+async function llmCall(
+  prompt: string,
+  model: string,
+  temperature: number,
+  images: string[],
+  systemPrompt?: string,
+): Promise<string> {
+  if (isDirectLLM(model)) return directLLM(model, prompt, images, systemPrompt);
+  return falLLM(prompt, model, temperature, images, systemPrompt);
+}
 
 export type RunnerContext = {
   brandId?: string | null;
@@ -140,7 +156,7 @@ export async function runNode(
         ? `Context:\n${context}\n\nTask:\n${instructions}${brandSuffix}${formatReminder}`
         : `${instructions}${brandSuffix}${formatReminder}`;
       const systemPrompt = getSystemPrompt(type);
-      const text = await falLLM(prompt, model, temperature, images, systemPrompt);
+      const text = await llmCall(prompt, model, temperature, images, systemPrompt);
       return {
         outputs: { text },
         costUsd: estimateCost("any-llm"),
@@ -157,7 +173,7 @@ export async function runNode(
       const parts = [instructions];
       if (description) parts.push(`Description: ${description}`);
       const systemPrompt = getSystemPrompt("adAnalysis");
-      const text = await falLLM(parts.join("\n\n"), model, temperature, images, systemPrompt);
+      const text = await llmCall(parts.join("\n\n"), model, temperature, images, systemPrompt);
       return { outputs: { analysis: text }, costUsd: estimateCost("any-llm"), durationMs: Date.now() - t0 };
     }
 
@@ -198,6 +214,7 @@ export async function runNode(
         if (model === "fal-ai/nano-banana-2") model = "fal-ai/nano-banana-2/edit";
         else if (model === "fal-ai/nano-banana-pro") model = "fal-ai/nano-banana-pro/edit";
         else if (model === "fal-ai/nano-banana") model = "fal-ai/nano-banana/edit";
+        else if (model === "openai/gpt-image-2") model = "openai/gpt-image-2/edit";
         // Other model families (Flux/Imagen/Ideogram/Recraft) don't accept
         // multi-image inputs at this endpoint — we log a warning and ignore
         // the references rather than error out, since the user might be
@@ -238,6 +255,14 @@ export async function runNode(
         // These use aspect_ratio
         input.aspect_ratio = aspect;
         input.num_images = numResults;
+      } else if (model.includes("gpt-image")) {
+        // OpenAI GPT Image (1/2) via fal: fal's standard named image_size +
+        // quality tiers (low|medium|high). No aspect_ratio / safety_checker
+        // fields — those would 4xx on the OpenAI-backed endpoint.
+        input.image_size = ASPECT_TO_SIZE[aspect] ?? "square_hd";
+        input.num_images = numResults;
+        input.quality = String(config.quality || "high");
+        if (model.includes("/edit") && hasRefs) input.image_urls = refImages;
       } else {
         // FLUX, SD 3.5, etc — use image_size
         input.image_size = ASPECT_TO_SIZE[aspect] ?? "square_hd";
