@@ -10,6 +10,7 @@ import { compositeGreenScreen } from "@/lib/video";
 import { directLLM } from "@/lib/agent/router";
 import { generateOpenAIImage, editOpenAIImage } from "@/lib/openai/images";
 import { generateGeminiImage, generateImagen } from "@/lib/google/images";
+import { generateVeoVideo } from "@/lib/google/video";
 import { isDirectLLM } from "@/lib/canvas/types";
 
 // Route first-party OpenAI/Gemini node models through the user's own keys
@@ -721,6 +722,46 @@ export async function runNode(
       const sourceVideo = inputs.source_video as string | undefined;
       const keepAudio = config.keep_audio !== false; // default true
       const isV2V = model.includes("/video-to-video/");
+
+      // ─── Direct Google Veo (your GEMINI_API_KEY) ────────────────────
+      // Routed through the Gemini API instead of fal. Long-running op:
+      // submit -> poll -> download mp4 bytes (URI is auth-gated, so we can't
+      // hand it to persistAsset). Veo on the Gemini API is a fixed-length 8s
+      // clip; mode is inferred from the connected frames (start -> image2video,
+      // start+end -> first/last frame, neither -> text2video).
+      if (model.startsWith("google/veo")) {
+        const apiModel = model.split("/").slice(1).join("/"); // "veo-3.1-generate-preview"
+        const veoRes = String(config.resolution || "720p");
+        console.log(
+          "[veo-direct] submitting",
+          apiModel,
+          `aspect=${aspect} res=${veoRes}`,
+          startFrame ? "image2video" : "text2video",
+          endFrame ? "+lastFrame" : "",
+        );
+        const bytes = await generateVeoVideo({
+          model: apiModel,
+          prompt,
+          aspect,
+          resolution: veoRes,
+          imageUrl: startFrame,
+          lastFrameUrl: endFrame,
+        });
+        const path = buildStoragePath({
+          brandId: ctx.brandId,
+          projectId: ctx.projectId,
+          workflowId: ctx.workflowId,
+          runStepId: ctx.runStepId,
+          prefix: "vid",
+          ext: "mp4",
+        });
+        const { cdnUrl } = await uploadBytes(bytes, path, "video/mp4");
+        return {
+          outputs: { video: cdnUrl },
+          costUsd: estimateCost(model, { duration: 8 }),
+          durationMs: Date.now() - t0,
+        };
+      }
 
       if (mode === "video-to-video") {
         if (!isV2V) {
