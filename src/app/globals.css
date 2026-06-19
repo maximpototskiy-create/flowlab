@@ -76,7 +76,7 @@ html, body {
   height: 100%;
   background: rgb(var(--bg));
   color: rgb(var(--fg));
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", var(--font-inter), "Segoe UI", system-ui, sans-serif;
   font-feature-settings: "ss01", "cv01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -155,6 +155,18 @@ input:-webkit-autofill:focus {
 
 /* Hide native textarea resize handle by default; we restyle */
 textarea { resize: vertical; }
+
+/* Apple-style control defaults: gentle rounding on any control that isn't
+   explicitly styled, plus a soft brand focus ring. :where() = zero specificity,
+   so component-level classes (rounded-full, etc.) always override these. */
+:where(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), textarea, select, button) {
+  border-radius: var(--radius-sm);
+}
+:where(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), textarea, select):focus-visible {
+  outline: none;
+  border-color: rgb(var(--brand) / 0.55);
+  box-shadow: 0 0 0 3px rgb(var(--brand) / 0.22);
+}
 
 /* Remove native select arrows — we add our own ChevronDown icon */
 select.appearance-none,
