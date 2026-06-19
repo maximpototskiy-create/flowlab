@@ -50,11 +50,14 @@ export default async function BrandDetailPage({
         <div className="grid lg:grid-cols-[2fr,1fr] gap-8 mb-12">
           <div>
             <div className="flex items-center gap-3 mb-4">
-              <div
-                className={`w-12 h-12 rounded-sm ${color.bg} border ${color.border} flex items-center justify-center`}
-              >
-                <div className={`w-3 h-3 rounded-full ${color.dot}`} />
-              </div>
+              {brand.iconUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={brand.iconUrl} alt="" className={`w-12 h-12 rounded-xl object-cover border ${color.border}`} />
+              ) : (
+                <div className={`w-12 h-12 rounded-xl ${color.bg} border ${color.border} flex items-center justify-center`}>
+                  <div className={`w-3 h-3 rounded-full ${color.dot}`} />
+                </div>
+              )}
               <div className="font-mono text-xs tracking-[0.2em] uppercase text-fg-muted">
                 Brand · {brand.slug}
               </div>

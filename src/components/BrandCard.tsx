@@ -11,6 +11,7 @@ export type BrandCardData = {
   slug: string;
   description: string | null;
   color: string;
+  iconUrl: string | null;
   updatedAt: Date;
   _count: { projects: number };
 };
@@ -24,9 +25,14 @@ export default function BrandCard({ brand }: { brand: BrandCardData }) {
       className="group relative surface rounded-[var(--radius-lg)] p-5 transition hover:-translate-y-0.5 flex flex-col min-h-[200px]"
     >
       <div className="flex items-start justify-between mb-4">
-        <div className={`w-12 h-12 rounded-xl ${color.bg} border ${color.border} flex items-center justify-center`}>
-          <div className={`w-3 h-3 rounded-full ${color.dot}`} />
-        </div>
+        {brand.iconUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={brand.iconUrl} alt="" className={`w-12 h-12 rounded-xl object-cover border ${color.border}`} />
+        ) : (
+          <div className={`w-12 h-12 rounded-xl ${color.bg} border ${color.border} flex items-center justify-center`}>
+            <div className={`w-3 h-3 rounded-full ${color.dot}`} />
+          </div>
+        )}
         <StopPropagation>
           <BrandActions brand={brand} />
         </StopPropagation>

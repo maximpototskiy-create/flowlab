@@ -159,7 +159,7 @@ export default function AssetGallery({
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") setFilter("q", search.trim() || null); }}
             placeholder="Search by prompt…"
-            className="bg-bg-card border border-border rounded-md pl-8 pr-3 py-1.5 text-[12px] text-fg w-56 outline-none focus:border-brand"
+            className="bg-bg-card border border-[rgb(var(--hairline)/var(--hairline-alpha))] rounded-md pl-8 pr-3 py-1.5 text-[12px] text-fg w-56 outline-none focus:border-brand"
           />
         </div>
 
@@ -204,7 +204,7 @@ export default function AssetGallery({
         <select
           value={active.project ?? ""}
           onChange={(e) => setFilter("project", e.target.value || null)}
-          className="bg-bg-card border border-border rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
+          className="bg-bg-card border border-[rgb(var(--hairline)/var(--hairline-alpha))] rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
         >
           <option value="">All projects</option>
           {projects.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
@@ -212,7 +212,7 @@ export default function AssetGallery({
         <select
           value={active.brand ?? ""}
           onChange={(e) => setFilter("brand", e.target.value || null)}
-          className="bg-bg-card border border-border rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
+          className="bg-bg-card border border-[rgb(var(--hairline)/var(--hairline-alpha))] rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
         >
           <option value="">All brands</option>
           {brands.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
@@ -220,7 +220,7 @@ export default function AssetGallery({
         <select
           value={active.sort ?? "newest"}
           onChange={(e) => setFilter("sort", e.target.value === "newest" ? null : e.target.value)}
-          className="bg-bg-card border border-border rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
+          className="bg-bg-card border border-[rgb(var(--hairline)/var(--hairline-alpha))] rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
           title="Sort by date"
         >
           <option value="newest">Newest first</option>
@@ -229,7 +229,7 @@ export default function AssetGallery({
         <select
           value={aspect}
           onChange={(e) => setAspect(e.target.value)}
-          className="bg-bg-card border border-border rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
+          className="bg-bg-card border border-[rgb(var(--hairline)/var(--hairline-alpha))] rounded-md px-2 py-1.5 text-[11px] text-fg-muted outline-none focus:border-brand"
           title="Filter by aspect ratio (resolution)"
         >
           <option value="all">All ratios</option>
@@ -255,12 +255,12 @@ export default function AssetGallery({
 
       {/* ── Grid ── */}
       {assets.length === 0 ? (
-        <div className="bg-bg border border-dashed border-border-strong rounded-sm py-20 text-center">
+        <div className="rounded-[var(--radius-lg)] border border-dashed border-[rgb(var(--hairline)/0.18)] bg-bg-card/40 py-20 text-center">
           <h3 className="font-display text-3xl mb-2">Nothing here yet.</h3>
           <p className="text-fg-muted text-sm">Generate or upload assets and they'll show up here.</p>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-bg border border-dashed border-border-strong rounded-sm py-20 text-center">
+        <div className="rounded-[var(--radius-lg)] border border-dashed border-[rgb(var(--hairline)/0.18)] bg-bg-card/40 py-20 text-center">
           <h3 className="font-display text-2xl mb-2">No assets in this ratio.</h3>
           <p className="text-fg-muted text-sm">Try a different aspect-ratio filter, or pick “All ratios”.</p>
         </div>
@@ -273,7 +273,7 @@ export default function AssetGallery({
               <button
                 key={a.id}
                 onClick={() => setLightbox(a)}
-                className="group relative aspect-square rounded-lg overflow-hidden bg-bg-card border border-border hover:border-brand transition text-left"
+                className="group relative aspect-square rounded-[var(--radius)] overflow-hidden bg-bg-card border border-[rgb(var(--hairline)/var(--hairline-alpha))] hover:border-brand/50 hover:elev-2 transition text-left"
               >
                 <AssetThumb asset={a} ek={ek} />
                 {/* hover meta — prompt if present, else model/source */}
@@ -415,11 +415,11 @@ function Lightbox({ asset, onClose, onDeleted }: { asset: AssetItem; onClose: ()
   };
   return (
     <div
-      className="fixed inset-0 z-[800] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
+      className="fixed inset-0 z-[800] bg-black/70 backdrop-blur-md flex items-center justify-center p-6"
       onClick={onClose}
     >
       <div
-        className="bg-bg-card border border-border rounded-xl overflow-hidden max-w-4xl w-full max-h-[88vh] flex flex-col md:flex-row"
+        className="bg-bg-card border border-[rgb(var(--hairline)/var(--hairline-alpha))] rounded-[var(--radius-xl)] elev-3 overflow-hidden max-w-4xl w-full max-h-[88vh] flex flex-col md:flex-row"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Preview */}
@@ -443,7 +443,7 @@ function Lightbox({ asset, onClose, onDeleted }: { asset: AssetItem; onClose: ()
         </div>
 
         {/* Meta panel */}
-        <div className="w-full md:w-72 p-4 flex flex-col gap-3 border-t md:border-t-0 md:border-l border-border">
+        <div className="w-full md:w-72 p-4 flex flex-col gap-3 border-t md:border-t-0 md:border-l border-[rgb(var(--hairline)/var(--hairline-alpha))]">
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px] uppercase tracking-wider text-brand">{ek} · {asset.source}</span>
             <button onClick={onClose} className="text-fg-subtle hover:text-fg"><X size={16} /></button>
@@ -473,7 +473,7 @@ function Lightbox({ asset, onClose, onDeleted }: { asset: AssetItem; onClose: ()
               download
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2 bg-brand text-black font-medium text-[12px] py-2 rounded-md hover:bg-emerald-400 transition"
+              className="flex items-center justify-center gap-2 bg-brand text-white font-medium text-[12px] py-2 rounded-lg hover:opacity-90 transition"
             >
               <Download size={13} /> Download
             </a>
@@ -481,7 +481,7 @@ function Lightbox({ asset, onClose, onDeleted }: { asset: AssetItem; onClose: ()
               <button
                 onClick={doDelete}
                 disabled={deleting}
-                className="flex items-center justify-center gap-2 border border-red-500/40 text-red-400 hover:bg-red-600 hover:text-white font-medium text-[12px] py-2 rounded-md transition disabled:opacity-50"
+                className="flex items-center justify-center gap-2 border border-red-500/40 text-red-400 hover:bg-red-600 hover:text-white font-medium text-[12px] py-2 rounded-lg transition disabled:opacity-50"
               >
                 {deleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Delete permanently
               </button>
