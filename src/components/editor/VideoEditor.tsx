@@ -336,12 +336,13 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [trackOpen, setTrackOpen] = useState(false);
   const [srBusy, setSrBusy] = useState(false);
   const [srErr, setSrErr] = useState<string | null>(null);
+  const [srPicker, setSrPicker] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selected = selectedIds.length ? selectedIds[selectedIds.length - 1] : null;
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const marqueeRef = useRef<{ x0: number; y0: number } | null>(null);
   const [binFilter, setBinFilter] = useState<"all" | "video" | "image" | "audio">("all");
-  const [library, setLibrary] = useState<EditorAsset[]>(assets);
+  const [library, setLibrary] = useState<EditorAsset[]>(assets.filter((a) => !/\.(json|txt|srt|vtt|csv)(\?|$)/i.test(a.url)));
   const [binQuery, setBinQuery] = useState("");
   const [binBrand, setBinBrand] = useState("");
   const [binProject, setBinProject] = useState("");
@@ -541,7 +542,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const items: EditorAsset[] = [];
       const seen = new Set<string>();
       for (const a of aj.assets || []) {
-        if (!a.cdnUrl || seen.has(a.cdnUrl)) continue; if (!(a.kind === "video" || a.kind === "image" || a.kind === "audio")) continue;
+        if (!a.cdnUrl || seen.has(a.cdnUrl)) continue; if (!(a.kind === "video" || a.kind === "image" || a.kind === "audio")) continue; if (/\.(json|txt|srt|vtt|csv)(\?|$)/i.test(a.cdnUrl)) continue;
         seen.add(a.cdnUrl); items.push({ id: a.id, url: a.cdnUrl, kind: a.kind as EditorAsset["kind"], label: a.prompt || a.brandName || a.kind, duration: a.durationSec ?? null });
       }
       setLibrary(items);
@@ -2160,12 +2161,45 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                   {sel.sr && (
                     <div className="space-y-1.5">
                       <div className="text-[10px] text-fg-subtle leading-snug">Replace this green-screen phone screen with content. Rendered on the server — node-quality keying, despill, matte and corner-pin tracking.</div>
-                      <label className="flex items-center gap-1.5 text-fg-muted">content
-                        <select value={sel.sr.content ?? ""} onChange={(e) => { const a = library.find((x) => x.url === e.target.value); updateSel(sel.id, { sr: { ...sel.sr!, content: a?.url, contentVideo: a?.kind === "video" } }); }} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none text-[11px]">
-                          <option value="">Pick from media…</option>
-                          {library.filter((a) => a.kind === "image" || a.kind === "video").map((a) => (<option key={a.id} value={a.url}>{a.label}</option>))}
-                        </select>
-                      </label>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 text-fg-muted">
+                          <span className="whitespace-nowrap">content</span>
+                          <button type="button" onClick={() => setSrPicker((v) => !v)} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-left text-fg text-[11px] truncate hover:border-brand/50">
+                            {sel.sr.content
+                              ? (library.find((a) => a.url === sel.sr!.content)?.label || clips.find((c) => c.url === sel.sr!.content)?.label || "Selected content")
+                              : "Pick content…"}
+                          </button>
+                        </div>
+                        {srPicker && (() => {
+                          const tl = clips.filter((c) => (c.kind === "image" || c.kind === "video") && c.url && c.id !== sel.id);
+                          const media = library.filter((a) => a.kind === "image" || a.kind === "video");
+                          const pick = (url?: string, isVid?: boolean) => { updateSel(sel.id, { sr: { ...sel.sr!, content: url, contentVideo: isVid } }); setSrPicker(false); };
+                          const tile = (url: string, label: string, isVid: boolean, on: boolean, key: string) => (
+                            <button key={key} type="button" onClick={() => pick(url, isVid)} className={`relative rounded overflow-hidden border aspect-square bg-black ${on ? "border-brand ring-1 ring-brand" : "border-border hover:border-brand/50"}`} title={label}>
+                              {isVid
+                                ? <video src={url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" />
+                                : /* eslint-disable-next-line @next/next/no-img-element */ <img src={url} alt="" className="w-full h-full object-cover pointer-events-none" />}
+                              <span className="absolute inset-x-0 bottom-0 bg-black/65 text-white text-[8px] leading-tight px-1 py-0.5 truncate">{label}</span>
+                            </button>
+                          );
+                          return (
+                            <div className="border border-border rounded-md p-1.5 bg-bg-card/60 max-h-56 overflow-y-auto space-y-1.5">
+                              {tl.length > 0 && (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] text-fg-subtle px-0.5">From timeline</div>
+                                  <div className="grid grid-cols-3 gap-1">{tl.map((c) => tile(c.url!, c.label, c.kind === "video", sel.sr!.content === c.url, c.id))}</div>
+                                </div>
+                              )}
+                              <div className="space-y-1">
+                                <div className="text-[10px] text-fg-subtle px-0.5">Media</div>
+                                {media.length > 0
+                                  ? <div className="grid grid-cols-3 gap-1">{media.slice(0, 60).map((a) => tile(a.url, a.label, a.kind === "video", sel.sr!.content === a.url, a.id))}</div>
+                                  : <div className="text-[10px] text-fg-subtle px-0.5">No media yet — upload in the Media panel.</div>}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
                       <div className="grid grid-cols-2 gap-1.5">
                         <label className="flex items-center gap-1 text-fg-muted">fit
                           <select value={sel.sr.fit ?? "fill"} onChange={(e) => updateSel(sel.id, { sr: { ...sel.sr!, fit: e.target.value as "fill" | "cover" } })} className="flex-1 bg-bg-card border border-border rounded px-1 py-1 text-fg outline-none">

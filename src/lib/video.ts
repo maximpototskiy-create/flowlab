@@ -867,8 +867,13 @@ export async function compositeGreenScreen(opts: {
     if (contentIsVideo) {
       contentFps = (await ffprobeBasic(contentPath)).fps || fps;
       await mkdir(cframesDir);
-      await runFfmpeg(["-y", "-i", contentPath, "-fps_mode", "passthrough", path.join(cframesDir, "c_%05d.png")]);
-      contentFiles = (await readdir(cframesDir)).filter((f) => f.endsWith(".png")).sort();
+      // Write content frames as capped JPEGs, NOT full-res PNGs: a long video at
+      // 1080p+ produces hundreds of multi-MB PNGs and overruns the function's
+      // /tmp ("No space left on device"). The read side downscales every frame to
+      // the (small) on-screen size anyway, so capping the long edge to 1280 and
+      // using JPEG is visually lossless here while cutting disk use ~10x.
+      await runFfmpeg(["-y", "-i", contentPath, "-fps_mode", "passthrough", "-vf", "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease", "-q:v", "3", path.join(cframesDir, "c_%05d.jpg")]);
+      contentFiles = (await readdir(cframesDir)).filter((f) => f.endsWith(".jpg")).sort();
       if (contentFiles.length === 0) contentIsVideo = false;
     }
 
