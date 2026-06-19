@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { listAvatars, listVoices, type HeyGenAvatar, type HeyGenVoice } from "@/lib/heygen/client";
 
-export const maxDuration = 60;
+// Avatars/voices barely change — cache in module memory for 10 minutes so
+// opening several HeyGen nodes doesn't hammer the API (and survives within
+// a warm serverless instance). Listing avatars paginates (up to 8 pages) +
+// voices; on a slow HeyGen response the old 60s cap could time out and return
+// a non-JSON platform error page, so give it Pro's full ceiling.
+export const maxDuration = 300;
 
 // Avatars/voices barely change — cache in module memory for 10 minutes so
 // opening several HeyGen nodes doesn't hammer the API (and survives within

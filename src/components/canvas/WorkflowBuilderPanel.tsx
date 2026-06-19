@@ -7,9 +7,9 @@ import type { Graph } from "@/lib/canvas/types";
 type BuildResult = { graph: Graph; summary: string; warnings: string[] };
 
 const EXAMPLES = [
-  "Рекламный ролик: хук на 2 сек, 3 сцены с продуктом, музыка, сборка в MP4",
-  "Из текста идеи — 4 варианта картинки-постера, апскейл лучшего, экспорт",
-  "Говорящая голова: озвучка по скрипту + lipsync, экспорт видео",
+  "Ad spot: a 2-sec hook, 3 product scenes, music, assembled to MP4",
+  "From an idea: 4 poster-image variants, upscale the best, export",
+  "Talking head: voiceover from a script + lipsync, export video",
 ];
 
 export default function WorkflowBuilderPanel({
@@ -78,7 +78,7 @@ export default function WorkflowBuilderPanel({
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") build();
               }}
               rows={5}
-              placeholder="Например: рекламный ролик из хука, 3 сцен и музыки, со сборкой в MP4…"
+              placeholder="e.g. an ad spot from a hook, 3 scenes and music, assembled to MP4…"
               className="mt-1.5 w-full bg-bg-card border border-border rounded-md p-2.5 text-[12px] text-fg outline-none focus:border-brand resize-none"
             />
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -100,7 +100,7 @@ export default function WorkflowBuilderPanel({
             className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50"
           >
             {loading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-            {loading ? "Строю граф…" : "Build"}
+            {loading ? "Building…" : "Build"}
           </button>
           <p className="text-[10px] text-fg-subtle text-center -mt-2">⌘/Ctrl + Enter</p>
 

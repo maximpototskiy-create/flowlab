@@ -214,7 +214,7 @@ function llmFields(): FieldDef[] {
   return [
     { name: "model", label: "Model", type: "select", options: LLM_OPTS, icon: "settings" },
     { name: "temperature", label: "Temperature", type: "number", min: 0, max: 2, step: 0.1 },
-    { name: "useBrandKit", label: "Use brand kit (voice + screenshots)", type: "toggle" },
+    { name: "useBrandKit", label: "Use brand kit", type: "toggle", help: "Auto-attach the brand kit voice + screenshots. Off = ignore brand kit for this node." },
   ];
 }
 
@@ -260,7 +260,7 @@ function llmNode(opts: {
     primaryPlaceholder: "Write or paste text input here…",
     examples: opts.examples,
     starters: opts.starters,
-    quickFields: ["model"],
+    quickFields: ["model", "useBrandKit"],
   };
 }
 
@@ -451,7 +451,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     primaryPlaceholder: "Your prompt here…",
     examples: ["Static ad — earbuds"],
     starters: ["Lifestyle scene showing…"],
-    quickFields: ["model", "aspect"],
+    quickFields: ["model", "aspect", "useBrandKit"],
   },
 
   imageResize: {
@@ -1274,7 +1274,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       },
       { name: "scale_x", label: "Screen scale X", type: "slider", min: 0.5, max: 2, step: 0.05, unit: "×", help: "Scale the replacement content horizontally on the screen. 1 = auto-fit; >1 zooms in (crops edges), <1 shrinks. Tweak and re-run the node." },
       { name: "scale_y", label: "Screen scale Y", type: "slider", min: 0.5, max: 2, step: 0.05, unit: "×", help: "Scale the replacement content vertically on the screen. 1 = auto-fit. Tweak and re-run the node." },
-      { name: "matte_choke", label: "Matte edge", type: "slider", min: -8, max: 8, step: 1, unit: "px", help: "Choke/spread the keyed edge. + spreads the content to cover a green fringe/halo at the screen border; − chokes it in if content bleeds onto fingers/bezel. 0 = off. Tweak and re-run." },
+      { name: "matte_choke", label: "Matte edge", type: "slider", min: -8, max: 8, step: 1, unit: "px", help: "Choke/spread the keyed edge. + spreads the content to cover a green fringe/halo at the screen border; - chokes it in if content bleeds onto fingers/bezel. 0 = off. Tweak and re-run." },
       { name: "feather", label: "Edge softness", type: "slider", min: 0, max: 8, step: 1, unit: "px", help: "Feather the keyed edge: blends the content into the original over this many px so the boundary is soft instead of a hard line. 0 = hard edge. Try 1–3 for a natural screen edge. Tweak and re-run." },
       { name: "track_offset_x", label: "Track offset X", type: "slider", min: -150, max: 150, step: 1, unit: "px", help: "Nudge the tracked screen LEFT/RIGHT on every frame. Use when the whole track sits a bit off horizontally. For a one-moment jerk use keyframes instead." },
       { name: "track_offset_y", label: "Track offset Y", type: "slider", min: -150, max: 150, step: 1, unit: "px", help: "Nudge the tracked screen UP/DOWN on every frame." },

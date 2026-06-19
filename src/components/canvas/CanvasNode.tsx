@@ -1096,8 +1096,23 @@ async function loadHeygenOptions() {
   if (hgCache) return hgCache;
   if (!hgPending) {
     hgPending = fetch("/api/heygen/options").then(async (r) => {
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || "failed to load HeyGen options");
+      // Read as text FIRST. A serverless timeout/crash returns a non-JSON
+      // platform error page (starts with "An error occurred…"); calling
+      // r.json() on that throws a cryptic "Unexpected token 'A'… is not valid
+      // JSON" that ends up shown on the node. Parse defensively and surface a
+      // clean, actionable message instead.
+      const raw = await r.text();
+      let j: { avatars?: HgAvatar[]; voices?: HgVoice[]; error?: string } = {};
+      try {
+        j = raw ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error(
+          r.ok
+            ? "HeyGen options returned an unexpected response — try again."
+            : `HeyGen options unavailable (HTTP ${r.status}). Check the HeyGen API key/credits, then retry.`,
+        );
+      }
+      if (!r.ok) throw new Error(j.error || `HeyGen options failed (HTTP ${r.status})`);
       hgCache = { avatars: j.avatars ?? [], voices: j.voices ?? [] };
       return hgCache;
     }).finally(() => { hgPending = null; });
@@ -1281,6 +1296,31 @@ function QuickField({
         />
         <span className="tabular-nums text-fg whitespace-nowrap">{num}{field.unit ?? ""}</span>
       </div>
+    );
+  }
+  if (field.type === "toggle") {
+    // Default ON (undefined → true), matching the runner's `config.useBrandKit !== false`.
+    const on = value !== false;
+    return (
+      <label
+        className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border cursor-pointer text-[10px] transition ${
+          on
+            ? "border-brand/60 bg-brand/10 text-fg"
+            : "border-border bg-bg-subtle text-fg-subtle hover:text-fg"
+        }`}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        title={field.help ?? field.label}
+      >
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => onChange(e.target.checked)}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="accent-brand cursor-pointer"
+        />
+        <span className="truncate max-w-[120px]">{field.label}</span>
+      </label>
     );
   }
   if (field.type !== "select") return null;
