@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, memo } from "react";
-import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand, Move } from "lucide-react";
+import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand, Move, Image as ImageIcon, Film, Music, Type, Circle } from "lucide-react";
 import { WheelScroll } from "./WheelScroll";
 import VideoGenControls from "./VideoGenControls";
 import Lightbox from "./Lightbox";
@@ -171,7 +171,7 @@ function CanvasNodeImpl({
           ? "border-red-400 shadow-[0_0_0_2px_rgb(239_68_68_/_0.25)]"
           : isSelected
           ? "border-brand shadow-[0_0_0_2px_rgb(var(--brand)/0.3)]"
-          : "border-border hover:border-border-strong"
+          : "border-[rgb(var(--hairline)/var(--hairline-alpha))] hover:border-border-strong"
       }`}
       style={{
         top: 0,
@@ -187,7 +187,7 @@ function CanvasNodeImpl({
     >
       {/* Header — colored top */}
       <div
-        className="h-9 px-3 flex items-center gap-2 cursor-move rounded-t-xl border-b border-border"
+        className="h-9 px-3 flex items-center gap-2 cursor-move rounded-t-xl border-b border-[rgb(var(--hairline)/var(--hairline-alpha))]"
         style={{ background: `${color}15` }}
         onPointerDown={onPointerDown}
       >
@@ -1125,23 +1125,27 @@ function Port({
   onUp?: (e: React.PointerEvent) => void;
 }) {
   const color = PORT_COLORS[kind] ?? "#71717a";
+  const KindIcon = KIND_ICON[kind] ?? Circle;
   return (
     <div
       className="absolute group/port"
       style={{
         top: y,
-        [side === "in" ? "left" : "right"]: -7,
+        [side === "in" ? "left" : "right"]: side === "in" ? -9 : -7,
       }}
     >
       <button
-        // Multi-port circles get a thicker border + outer ring so they read
-        // as "drop multiple here" without needing a label. Single ports stay
-        // the standard 2px circle.
+        // Input ports show a type icon (image/video/text/audio) in a rounded
+        // square so the accepted media is obvious; output ports stay as the
+        // classic circle. Multi-ports get a ring so they read as "drop many".
         className={`${
-          multi ? "w-4 h-4 border-[3px] ring-2 ring-offset-1 ring-offset-bg-card" : "w-3.5 h-3.5 border-2"
-        } rounded-full bg-bg-card cursor-crosshair hover:scale-125 transition-transform`}
+          side === "in"
+            ? `${multi ? "w-5 h-5 ring-2 ring-offset-1 ring-offset-bg-card" : "w-[18px] h-[18px]"} rounded-md border-2 flex items-center justify-center`
+            : `${multi ? "w-4 h-4 border-[3px] ring-2 ring-offset-1 ring-offset-bg-card" : "w-3.5 h-3.5 border-2"} rounded-full`
+        } bg-bg-card cursor-crosshair hover:scale-125 transition-transform`}
         style={{
           borderColor: color,
+          color,
           ...(multi ? { boxShadow: `0 0 0 1px ${color}33` } : {}),
         }}
         data-port-side={side}
@@ -1161,7 +1165,9 @@ function Port({
           }
         }}
         title={`${label ?? name} · ${kind}${multi ? " · accepts many" : ""}`}
-      />
+      >
+        {side === "in" && <KindIcon size={11} strokeWidth={2.25} />}
+      </button>
       {/* Edge count badge for multi-ports with at least one connection. */}
       {multi && (edgeCount ?? 0) > 0 && (
         <div
@@ -1173,7 +1179,7 @@ function Port({
       )}
       <div
         className={`absolute top-1/2 -translate-y-1/2 opacity-0 group-hover/port:opacity-100 pointer-events-none whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded bg-fg text-bg ${
-          side === "in" ? "left-5" : "right-5"
+          side === "in" ? "left-6" : "right-5"
         }`}
       >
         {label ?? name}
@@ -1188,6 +1194,16 @@ const PORT_COLORS: Record<string, string> = {
   video: "#ec4899",
   audio: "#f97316",
   any: "#facc15",
+};
+
+// Type icons shown on input ports so the accepted media type is obvious at a
+// glance (image / video / text / audio) instead of an unlabeled dot.
+const KIND_ICON: Record<string, typeof Circle> = {
+  text: Type,
+  image: ImageIcon,
+  video: Film,
+  audio: Music,
+  any: Circle,
 };
 
 function QuickField({
