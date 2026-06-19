@@ -8,6 +8,7 @@ import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 import { compositeGreenScreen } from "@/lib/video";
 import { directLLM } from "@/lib/agent/router";
+import { generateOpenAIImage, editOpenAIImage } from "@/lib/openai/images";
 import { isDirectLLM } from "@/lib/canvas/types";
 
 // Route first-party OpenAI/Gemini node models through the user's own keys
@@ -57,6 +58,16 @@ const ASPECT_TO_SIZE: Record<string, string> = {
   "3:4": "portrait_4_3",
 };
 
+// GPT Image 2 (direct OpenAI) sizes — arbitrary WIDTHxHEIGHT, both divisible
+// by 16, aspect ratio between 1:3 and 3:1.
+const ASPECT_TO_OPENAI_SIZE: Record<string, string> = {
+  "1:1": "1024x1024",
+  "16:9": "1536x864",
+  "9:16": "864x1536",
+  "4:5": "1024x1280",
+  "3:4": "1152x1536",
+};
+
 /** Helper: store a fal.ai result URL in Supabase Storage; on failure, return the original URL. */
 async function persistAsset(remoteUrl: string, ctx: RunnerContext, prefix = "asset"): Promise<string> {
   const ext = extFromUrl(remoteUrl);
@@ -84,6 +95,22 @@ async function persistAsset(remoteUrl: string, ctx: RunnerContext, prefix = "ass
     console.error(`[persistAsset] STORAGE FAILED for ${path}: ${msg}`);
     return remoteUrl;
   }
+}
+
+/** Persist a base64-encoded image (from a direct OpenAI image call) to Supabase
+ *  Storage and return its CDN URL. GPT Image output is PNG. */
+async function persistImageB64(b64: string, ctx: RunnerContext, prefix = "img"): Promise<string> {
+  const buf = Buffer.from(b64, "base64");
+  const path = buildStoragePath({
+    brandId: ctx.brandId,
+    projectId: ctx.projectId,
+    workflowId: ctx.workflowId,
+    runStepId: ctx.runStepId,
+    prefix,
+    ext: "png",
+  });
+  const { cdnUrl } = await uploadBytes(buf, path, "image/png");
+  return cdnUrl;
 }
 
 /** Helper: normalise an `images` multi-port input into a clean string[] of
@@ -207,6 +234,27 @@ export async function runNode(
       const refImages = [...userRefs, ...brandRefs].slice(0, 14);
       const hasRefs = refImages.length > 0;
 
+      // ─── Direct OpenAI image (GPT Image 2) ──────────────────────────
+      // Routed through the user's own OPENAI_API_KEY (OpenAI Images API)
+      // instead of fal. GPT Image returns base64, so we persist the bytes to
+      // Storage ourselves. When refs are wired we use the /edit endpoint.
+      if (model.startsWith("openai/")) {
+        const apiModel = model.split("/").slice(1).join("/"); // e.g. "gpt-image-2"
+        const size = ASPECT_TO_OPENAI_SIZE[aspect] ?? "1024x1024";
+        const quality = String(config.quality || "high");
+        const b64s = hasRefs
+          ? await editOpenAIImage(prompt, refImages, { model: apiModel, size, quality })
+          : await generateOpenAIImage(prompt, { model: apiModel, size, quality, n: numResults });
+        const persisted: string[] = [];
+        for (const b64 of b64s) persisted.push(await persistImageB64(b64, ctx, "img"));
+        return {
+          outputs: { image: persisted[0] },
+          results: persisted.map((url) => ({ value: url, mime: "image/png" })),
+          costUsd: estimateCost(model, { numImages: numResults }),
+          durationMs: Date.now() - t0,
+        };
+      }
+
       // Auto-switch model family to its image-editing variant when reference
       // images are connected. Both Nano Banana 2 and Nano Banana Pro have
       // dedicated /edit endpoints that accept image_urls[] (multi reference).
@@ -214,7 +262,6 @@ export async function runNode(
         if (model === "fal-ai/nano-banana-2") model = "fal-ai/nano-banana-2/edit";
         else if (model === "fal-ai/nano-banana-pro") model = "fal-ai/nano-banana-pro/edit";
         else if (model === "fal-ai/nano-banana") model = "fal-ai/nano-banana/edit";
-        else if (model === "openai/gpt-image-2") model = "openai/gpt-image-2/edit";
         // Other model families (Flux/Imagen/Ideogram/Recraft) don't accept
         // multi-image inputs at this endpoint — we log a warning and ignore
         // the references rather than error out, since the user might be
