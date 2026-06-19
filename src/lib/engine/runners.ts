@@ -278,7 +278,12 @@ export async function runNode(
         const quality = String(config.quality || "medium");
         let b64s: string[];
         if (hasRefs) {
-          b64s = await editOpenAIImage(prompt, refImages, { model: apiModel, size, quality });
+          // The /edit endpoint returns ONE image per call, so request N
+          // results as N sequential single-image edits — otherwise num_results
+          // is silently ignored whenever references (or brand kit) are present.
+          b64s = await gatherImages("openai-edit", numResults, () =>
+            editOpenAIImage(prompt, refImages, { model: apiModel, size, quality }),
+          );
         } else {
           // GPT Image 2 returns ONE image per call in practice (its "thinking"
           // pass produces a single reasoned image), so request N results as N
@@ -310,7 +315,10 @@ export async function runNode(
           b64s = await generateImagen(prompt, { model: apiModel, aspect: imagenAspect, n: numResults });
         } else if (hasRefs) {
           // Nano Banana edit/compose: references go in as inline image parts.
-          b64s = await generateGeminiImage(prompt, { model: apiModel, aspect, refImages });
+          // One image per call → N sequential calls so num_results is honored.
+          b64s = await gatherImages("gemini-edit", numResults, () =>
+            generateGeminiImage(prompt, { model: apiModel, aspect, refImages }),
+          );
         } else {
           // Nano Banana returns one image per call → N concurrent calls for N
           // results (tolerant of partial failures, logs the count).
