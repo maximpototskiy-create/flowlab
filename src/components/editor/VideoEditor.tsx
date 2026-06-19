@@ -7,7 +7,7 @@ import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
 
@@ -328,6 +328,28 @@ let _id = 0, _l = 0;
 const uid = () => `c${Date.now()}_${_id++}`;
 const fmt = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
 
+// Collapsible grouped section for the Properties panel (Apple/iOS-settings feel):
+// a rounded hairline group with a tappable header (title + chevron + optional
+// right slot) and a body that collapses. Presentational — open state lives in
+// the editor so it persists across re-renders.
+function Section({ id, title, open, onToggle, right, children }: {
+  id: string; title: string; open: boolean; onToggle: (id: string) => void;
+  right?: React.ReactNode; children: React.ReactNode;
+}) {
+  return (
+    <div className="surface r-md overflow-hidden" style={{ boxShadow: "none" }}>
+      <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+        <button type="button" onClick={() => onToggle(id)} className="flex items-center gap-1.5 text-fg font-medium text-[12px] min-w-0 flex-1 text-left">
+          <ChevronDown size={13} className={`shrink-0 text-fg-subtle transition-transform ${open ? "" : "-rotate-90"}`} />
+          <span className="truncate">{title}</span>
+        </button>
+        {right}
+      </div>
+      {open && <div className="px-2.5 pb-2.5 space-y-2">{children}</div>}
+    </div>
+  );
+}
+
 // Loads its video source only once the tile scrolls into view, so a picker with
 // dozens of clips doesn't fire dozens of parallel range requests at storage
 // (which Supabase resets — net::ERR_CONNECTION_RESET).
@@ -354,6 +376,8 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [srErr, setSrErr] = useState<string | null>(null);
   const [srPicker, setSrPicker] = useState(false);
   const [srTrackCache, setSrTrackCache] = useState<Record<string, { fps: number; w: number; h: number; quads: number[][][] } | "loading" | "error">>({});
+  const [openSec, setOpenSec] = useState<Record<string, boolean>>({ basic: true, timing: true, transform: true, background: true, sr: true, audio: true });
+  const toggleSec = (id: string) => setOpenSec((s) => ({ ...s, [id]: !s[id] }));
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selected = selectedIds.length ? selectedIds[selectedIds.length - 1] : null;
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -2090,15 +2114,15 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       {rightW === 0 && (
         <button onClick={() => setRightW(256)} title="Show Properties" className="shrink-0 w-5 border-l border-border text-fg-subtle hover:text-fg text-[10px]">‹</button>
       )}
-      <aside style={{ width: rightW, display: rightW === 0 ? "none" : undefined }} className="relative shrink-0 border-l border-border flex flex-col min-h-0">
-        <div onPointerDown={dragPanel("right")} className="absolute top-0 -left-1 w-2 h-full cursor-col-resize z-20" title="Drag to resize" />
-        <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 text-[12px] font-medium text-fg">Properties
-          <button onClick={() => setRightW(0)} title="Hide panel" className="text-fg-subtle hover:text-fg">›</button>
+      <aside style={{ width: rightW, display: rightW === 0 ? "none" : undefined }} className="relative shrink-0 flex flex-col min-h-0 border-l border-[rgb(var(--hairline)/var(--hairline-alpha))] bg-[rgb(var(--glass-tint)/0.82)] backdrop-blur-2xl">
+        <div onPointerDown={dragPanel("right")} className="absolute top-0 -left-1 w-2 h-full cursor-col-resize z-20 hover:bg-brand/30" title="Drag to resize" />
+        <div className="h-11 shrink-0 border-b border-[rgb(var(--hairline)/var(--hairline-alpha))] flex items-center justify-between px-3 text-[13px] font-semibold text-fg">Properties
+          <button onClick={() => setRightW(0)} title="Hide panel" className="text-fg-subtle hover:text-fg w-6 h-6 flex items-center justify-center rounded-md hover:bg-bg-hover">›</button>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-2 text-[11px]">
+        <div className="flex-1 min-h-0 overflow-y-auto p-2.5 text-[11px]">
           {!sel && <div className="text-fg-subtle p-2">Select a clip on the timeline or in the viewport to edit its properties.</div>}
           {sel && (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-fg-subtle uppercase tracking-wider text-[10px]">{sel.kind}</span>
                 <div className="flex gap-2">
@@ -2107,8 +2131,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <div className="text-fg-muted font-medium">Basic</div>
+              <Section id="basic" title="Basic" open={openSec.basic} onToggle={toggleSec}>
                 <input value={sel.label} onChange={(e) => update(sel.id, { label: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" placeholder="Name" />
                 {sel.kind === "text" && (<textarea value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} rows={2} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand resize-y" placeholder="Text" />)}
                 {sel.kind === "text" && (
@@ -2139,30 +2162,27 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                 )}
                 {sel.kind === "fx" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{FX.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
                 {sel.kind === "adjust" && (<select value={sel.fx} onChange={(e) => update(sel.id, { fx: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none">{ADJUST.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}</select>)}
-              </div>
+              </Section>
 
-              <div className="space-y-1.5">
-                <div className="text-fg-muted font-medium">Timing</div>
+              <Section id="timing" title="Timing" open={openSec.timing} onToggle={toggleSec}>
                 <div className="grid grid-cols-2 gap-1.5">
                   <label className="flex items-center gap-1 text-fg-muted">start<input type="number" min={0} step={0.1} value={sel.start} onChange={(e) => update(sel.id, { start: Math.max(0, Number(e.target.value) || 0) })} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none focus:border-brand" /></label>
                   <label className="flex items-center gap-1 text-fg-muted">dur<input type="number" min={MIN_DUR} step={0.1} value={sel.duration} onChange={(e) => update(sel.id, { duration: Math.max(MIN_DUR, Number(e.target.value) || MIN_DUR) })} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none focus:border-brand" /></label>
                   <label className="flex items-center gap-1 text-fg-muted">fade in<input type="number" min={0} step={0.1} value={sel.fadeIn} onChange={(e) => update(sel.id, { fadeIn: Math.max(0, Number(e.target.value) || 0) })} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none focus:border-brand" /></label>
                   <label className="flex items-center gap-1 text-fg-muted">fade out<input type="number" min={0} step={0.1} value={sel.fadeOut} onChange={(e) => update(sel.id, { fadeOut: Math.max(0, Number(e.target.value) || 0) })} className="flex-1 min-w-0 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none focus:border-brand" /></label>
                 </div>
-              </div>
+              </Section>
 
               {(sel.kind === "video" || sel.kind === "image" || sel.kind === "text") && (
-                <div className="space-y-1.5">
-                  <div className="text-fg-muted font-medium">Transform & motion</div>
+                <Section id="transform" title="Transform & motion" open={openSec.transform} onToggle={toggleSec}>
                   <label className="flex items-center gap-2 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => updateSel(sel.id, { scale: Number(e.target.value) })} className="flex-1" /><span className="w-9 text-right tabular-nums">{Math.round(sel.scale * 100)}%</span></label>
                   <label className="flex items-center gap-2 text-fg-muted">animation<select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
                   <button onClick={() => resetTransform(sel.id)} className="text-[10px] text-fg-subtle hover:text-fg underline underline-offset-2">Reset position & scale</button>
-                </div>
+                </Section>
               )}
 
               {(sel.kind === "video" || sel.kind === "image") && (
-                <div className="space-y-1.5">
-                  <div className="text-fg-muted font-medium">Blend & background</div>
+                <Section id="background" title="Background & chroma" open={openSec.background} onToggle={toggleSec}>
                   <label className="flex items-center gap-2 text-fg-muted">blend
                     <select value={sel.blend ?? ""} onChange={(e) => updateSel(sel.id, { blend: e.target.value })} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
                       <option value="">Normal</option>
@@ -2180,19 +2200,16 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                   {sel.keyColor && (
                     <label className="flex items-center gap-2 text-fg-muted">tolerance<input type="range" min={0.05} max={0.8} step={0.01} value={sel.keyTol ?? 0.3} onChange={(e) => updateSel(sel.id, { keyTol: Number(e.target.value) })} className="flex-1" /><span className="w-8 text-right tabular-nums">{Math.round((sel.keyTol ?? 0.3) * 100)}%</span></label>
                   )}
-                  <div className="text-[10px] text-fg-subtle">Transparent PNG and alpha WebM work as-is. For footage on a solid color use chroma key; for glows/fireworks on black use Screen.</div>
-                </div>
+                </Section>
               )}
               {sel.kind === "video" && (
-                <div className="space-y-1.5 border-t border-border pt-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-fg-muted font-medium">Screen replace</span>
-                    {!sel.sr ? (
-                      <button type="button" onClick={() => updateSel(sel.id, { sr: { green: sel.url || "", key: "#00FF00", sim: 0.3, fit: "fill" } })} className="px-2 py-0.5 rounded border border-border text-[10px] text-fg-muted hover:text-fg">Enable</button>
-                    ) : (
-                      <button type="button" onClick={() => updateSel(sel.id, { sr: undefined })} className="px-2 py-0.5 rounded border border-border text-[10px] text-fg-muted hover:text-fg">Off</button>
-                    )}
-                  </div>
+                <Section id="sr" title="Screen replace" open={openSec.sr} onToggle={toggleSec} right={
+                  !sel.sr ? (
+                    <button type="button" onClick={() => updateSel(sel.id, { sr: { green: sel.url || "", key: "#00FF00", sim: 0.3, fit: "fill" } })} className="px-2 py-0.5 rounded-md border border-border text-[10px] text-fg-muted hover:text-fg">Enable</button>
+                  ) : (
+                    <button type="button" onClick={() => updateSel(sel.id, { sr: undefined })} className="px-2 py-0.5 rounded-md border border-border text-[10px] text-fg-muted hover:text-fg">Off</button>
+                  )
+                }>
                   {sel.sr && (
                     <div className="space-y-1.5">
                       <div className="text-[10px] text-fg-subtle leading-snug">Replace this green-screen phone screen with content. Rendered on the server — node-quality keying, despill, matte and corner-pin tracking.</div>
@@ -2258,15 +2275,14 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                       <div className="text-[10px] text-fg-subtle leading-snug">After Render the clip plays the finished composite. Tweak the track / params and Render again to update.</div>
                     </div>
                   )}
-                </div>
+                </Section>
               )}
 
               {(sel.kind === "video" || sel.kind === "audio") && (
-                <div className="space-y-1.5">
-                  <div className="text-fg-muted font-medium">Audio</div>
+                <Section id="audio" title="Audio" open={openSec.audio} onToggle={toggleSec}>
                   <label className="flex items-center gap-2 text-fg-muted">volume<input type="range" min={0} max={2} step={0.05} value={sel.volume ?? 1} onChange={(e) => updateSel(sel.id, { volume: Number(e.target.value) })} disabled={!!sel.muted} className="flex-1 disabled:opacity-40" /><span className="w-10 text-right tabular-nums">{Math.round((sel.volume ?? 1) * 100)}%</span></label>
                   <label className="flex items-center gap-1.5 text-fg-muted"><input type="checkbox" checked={!!sel.muted} onChange={(e) => updateSel(sel.id, { muted: e.target.checked })} /> Mute</label>
-                </div>
+                </Section>
               )}
             </div>
           )}
