@@ -32,7 +32,7 @@ async function urlToInline(url: string): Promise<{ inline_data: { mime_type: str
  *  images are sent inline (edit/compose). Returns base64-encoded image(s). */
 export async function generateGeminiImage(
   prompt: string,
-  opts: { model: string; aspect: string; refImages?: string[] },
+  opts: { model: string; aspect?: string; refImages?: string[] },
 ): Promise<string[]> {
   const parts: unknown[] = [{ text: prompt }];
   for (const url of opts.refImages ?? []) parts.push(await urlToInline(url));
@@ -41,7 +41,9 @@ export async function generateGeminiImage(
     contents: [{ parts }],
     generationConfig: {
       responseModalities: ["TEXT", "IMAGE"],
-      imageConfig: { aspectRatio: opts.aspect },
+      // Only constrain the aspect ratio when asked. For edits/translations we
+      // omit it so the model preserves the source image's dimensions.
+      ...(opts.aspect ? { imageConfig: { aspectRatio: opts.aspect } } : {}),
     },
   };
   const res = await fetchWithRetry(`${BASE}/${opts.model}:generateContent?key=${apiKey()}`, {

@@ -451,6 +451,17 @@ export async function runNode(
       if (!instr) throw new Error("Provide an edit instruction");
       const model = String(config.model ?? "fal-ai/flux-pro/kontext");
 
+      // ─── Direct Google (Nano Banana edit via Gemini generateContent) ────
+      // Routed through the user's GEMINI_API_KEY: the source image goes in as
+      // an inline reference and we persist the returned base64 ourselves.
+      if (model.startsWith("google/")) {
+        const apiModel = model.split("/").slice(1).join("/");
+        const b64s = await generateGeminiImage(instr, { model: apiModel, refImages: [image] });
+        if (!b64s.length) throw new Error("No image returned");
+        const persisted = await persistImageB64(b64s[0], ctx, "edit");
+        return { outputs: { image: persisted }, costUsd: estimateCost(model), durationMs: Date.now() - t0 };
+      }
+
       // nano-banana edit endpoints expect image_urls array, not image_url
       const input: Record<string, unknown> = { prompt: instr };
       if (model.includes("nano-banana")) {
@@ -471,9 +482,20 @@ export async function runNode(
       if (!image) throw new Error("Connect an image");
       const lang = String(config.target_language ?? "Spanish");
       const model = String(config.model ?? "fal-ai/flux-pro/kontext/max");
+      const translatePrompt = `Translate all visible text to ${lang}. Preserve layout, fonts, colours, and visual style perfectly. Only change the text content.`;
+
+      // ─── Direct Google (Nano Banana via Gemini generateContent) ────
+      if (model.startsWith("google/")) {
+        const apiModel = model.split("/").slice(1).join("/");
+        const b64s = await generateGeminiImage(translatePrompt, { model: apiModel, refImages: [image] });
+        if (!b64s.length) throw new Error("No image returned");
+        const persisted = await persistImageB64(b64s[0], ctx, "translate");
+        return { outputs: { image: persisted }, costUsd: estimateCost(model), durationMs: Date.now() - t0 };
+      }
+
       const r = await falRun(model, {
         image_url: image,
-        prompt: `Translate all visible text to ${lang}. Preserve layout, fonts, colours, and visual style perfectly. Only change the text content.`,
+        prompt: translatePrompt,
       });
       const url = ((r.images as { url: string }[] | undefined) ?? [])[0]?.url;
       if (!url) throw new Error("No image returned");
