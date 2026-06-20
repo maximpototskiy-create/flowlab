@@ -544,7 +544,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     description: "Translate text in an image while keeping the visual style.",
     inputs: [{ name: "image", type: "image" }],
     outputs: [{ name: "image", type: "image" }],
-    defaults: { target_language: "Spanish", model: "fal-ai/flux-pro/kontext/max" },
+    defaults: { target_language: "Spanish", model: "google/gemini-3.1-flash-image" },
     fields: [
       {
         name: "target_language",
@@ -561,9 +561,6 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          { value: "fal-ai/flux-pro/kontext", label: "FLUX Kontext" },
-          { value: "fal-ai/flux-pro/kontext/max", label: "FLUX Kontext Max" },
-          { value: "fal-ai/nano-banana-2/edit", label: "Nano Banana Edit" },
           { value: "google/gemini-3.1-flash-image", label: "Nano Banana 2 (direct)" },
           { value: "google/gemini-3-pro-image-preview", label: "Nano Banana Pro (direct)" },
         ],
