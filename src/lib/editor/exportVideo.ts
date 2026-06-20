@@ -44,6 +44,7 @@ export type ExportClip = {
   scale: number;
   x: number;
   y: number;
+  fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
   fadeIn: number;
   fadeOut: number;
   anim?: string;
@@ -450,11 +451,25 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
             const mw = c.kind === "video" ? (el as HTMLVideoElement).videoWidth : (el as HTMLImageElement).naturalWidth;
             const mh = c.kind === "video" ? (el as HTMLVideoElement).videoHeight : (el as HTMLImageElement).naturalHeight;
             if (mw && mh) {
-              const fit = Math.min(W / mw, H / mh) * (c.scale || 1) * v.scaleMul;
+              // Fit mode drives how media adapts to THIS canvas aspect, so one
+              // layout renders correctly in every format. Default: video fills
+              // (cover), images fit whole (contain). x/y/scale are fine offsets.
+              const fitMode = c.fit ?? (c.kind === "video" ? "cover" : "contain");
+              const ratio = fitMode === "cover" ? Math.max(W / mw, H / mh) : Math.min(W / mw, H / mh);
+              const fit = ratio * (c.scale || 1) * v.scaleMul;
               const dw = mw * fit, dh = mh * fit;
               const dx = (W - dw) / 2 + (c.x || 0) * sx + v.offX * W;
               const dy = (H - dh) / 2 + (c.y || 0) * sx + v.offY * H;
               if (c.blend === "screen" || c.blend === "multiply") ctx.globalCompositeOperation = c.blend;
+              // "blur" fills the letterbox bars with a blurred cover copy behind.
+              if (fitMode === "blur") {
+                const cov = Math.max(W / mw, H / mh) * (c.scale || 1) * v.scaleMul;
+                const bw = mw * cov, bh = mh * cov;
+                ctx.save();
+                ctx.filter = `blur(${Math.max(8, Math.round(W / 50))}px)`;
+                try { ctx.drawImage(el, (W - bw) / 2 + (c.x || 0) * sx + v.offX * W, (H - bh) / 2 + (c.y || 0) * sx + v.offY * H, bw, bh); } catch { /* */ }
+                ctx.restore();
+              }
               if (c.keyColor) drawKeyed(ctx, el, c, dx, dy, dw, dh);
               else { try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ } }
               ctx.globalCompositeOperation = "source-over";

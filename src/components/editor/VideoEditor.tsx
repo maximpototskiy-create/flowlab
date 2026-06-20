@@ -271,6 +271,7 @@ type EditClip = {
   scale: number;
   x: number;
   y: number;
+  fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
   fadeIn: number;
   fadeOut: number;
   anim?: string;
@@ -1111,6 +1112,16 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
           if (Math.abs(el.currentTime - want) > 0.05) { try { el.currentTime = want; } catch { /* */ } }
         }
       }
+      // Keep the blurred-background video copy (if any) in sync with its clip.
+      const bg = mediaRefs.current.get(c.id + "::bg");
+      if (bg) {
+        if (active) {
+          const local = tt - c.start + (c.inset || 0);
+          if (Math.abs(bg.currentTime - local) > 0.3) { try { bg.currentTime = local; } catch { /* */ } }
+          if (playingRef.current && bg.paused) bg.play().catch(() => {});
+          if (!playingRef.current && !bg.paused) bg.pause();
+        } else if (!bg.paused) bg.pause();
+      }
     }
   }, []);
   const stop = useCallback(() => {
@@ -1188,7 +1199,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -1213,7 +1224,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -1881,18 +1892,29 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                       const active = isActive(c, t);
                       const isSel = selectedIds.includes(c.id);
                       const v = clipVisual(c as CompClip, t, clips as CompClip[]);
+                      const fitMode = c.fit ?? (c.kind === "video" ? "cover" : "contain");
+                      const objFit = fitMode === "cover" ? "object-cover" : "object-contain";
+                      const blurBg = fitMode === "blur";
                       return (
                         <div key={c.id} className="absolute inset-0"
                           style={{ ...styleFromVisual(c, v), mixBlendMode: (c.blend || undefined) as React.CSSProperties["mixBlendMode"], pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
                           onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}>
+                          {blurBg && c.kind === "image" && !c.keyColor && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={c.url} alt="" draggable={false} className="absolute inset-0 w-full h-full object-cover pointer-events-none" style={{ filter: "blur(22px)", transform: "scale(1.08)" }} />
+                          )}
                           {c.kind === "image" && !c.keyColor && (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={c.url} alt="" draggable={false} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                            <img src={c.url} alt="" draggable={false} className={`absolute inset-0 w-full h-full ${objFit} pointer-events-none`} />
                           )}
                           {c.kind === "image" && c.keyColor && <KeyedImage url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3} />}
+                          {blurBg && c.kind === "video" && !c.keyColor && (
+                            <video src={c.url} muted playsInline preload="metadata" ref={(el) => { if (el) mediaRefs.current.set(c.id + "::bg", el); else mediaRefs.current.delete(c.id + "::bg"); }}
+                              className="absolute inset-0 w-full h-full object-cover pointer-events-none" style={{ filter: "blur(22px)", transform: "scale(1.08)" }} />
+                          )}
                           {c.kind === "video" && !c.keyColor && (
                             <video src={c.url} playsInline preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
-                              className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+                              className={`absolute inset-0 w-full h-full ${objFit} pointer-events-none`} />
                           )}
                           {c.kind === "video" && c.keyColor && (
                             <KeyedVideo url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3}
@@ -2318,6 +2340,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
         if (!c) return null;
         const apply = (patch: Partial<EditClip>) => { update(menu.id, patch); setMenu(null); };
         const isMedia = c.kind === "video" || c.kind === "image" || c.kind === "text";
+        const isVisualMedia = c.kind === "video" || c.kind === "image";
         return (
           <div className="fixed z-50 w-52 glass r-md p-1.5 text-[11px]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.max(8, Math.min(menu.y, window.innerHeight - 500)) }} onClick={(e) => e.stopPropagation()}>
             {isMedia && (
@@ -2325,6 +2348,17 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                 <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Animation</div>
                 <div className="grid grid-cols-2 gap-1 px-1 pb-1.5">
                   {ANIMS.map((a) => (<button key={a.v} onClick={() => apply({ anim: a.v })} className={`px-1.5 py-1 rounded text-left ${(c.anim ?? "") === a.v ? "bg-brand/20 text-brand" : "hover:bg-white/5 text-fg-muted"}`}>{a.l}</button>))}
+                </div>
+              </>
+            )}
+            {isVisualMedia && (
+              <>
+                <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Fit (per format)</div>
+                <div className="grid grid-cols-3 gap-1 px-1 pb-1.5">
+                  {([["cover", "Fill"], ["contain", "Fit"], ["blur", "Blur bg"]] as const).map(([val, lbl]) => {
+                    const cur = c.fit ?? (c.kind === "video" ? "cover" : "contain");
+                    return <button key={val} onClick={() => apply({ fit: val })} className={`px-1.5 py-1 rounded ${cur === val ? "bg-brand/20 text-brand" : "hover:bg-white/5 text-fg-muted"}`}>{lbl}</button>;
+                  })}
                 </div>
               </>
             )}
