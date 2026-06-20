@@ -16,13 +16,15 @@ function apiKey(): string {
   return k;
 }
 
-// Fetch an image URL and return it as a Gemini inlineData part (base64 + mime).
-async function urlToInline(url: string): Promise<{ mimeType: string; data: string }> {
+// Fetch an image URL and return it as a Veo predict image part. The
+// predictLongRunning (predict) schema expects { bytesBase64Encoded, mimeType } —
+// NOT the generateContent-style inlineData (which the Fast model rejects).
+async function urlToImagePart(url: string): Promise<{ bytesBase64Encoded: string; mimeType: string }> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Veo: failed to fetch input image (${res.status})`);
   const mimeType = res.headers.get("content-type")?.split(";")[0] || "image/png";
-  const data = Buffer.from(await res.arrayBuffer()).toString("base64");
-  return { mimeType, data };
+  const bytesBase64Encoded = Buffer.from(await res.arrayBuffer()).toString("base64");
+  return { bytesBase64Encoded, mimeType };
 }
 
 export type VeoOpts = {
@@ -40,13 +42,13 @@ export type VeoOpts = {
 export async function generateVeoVideo(opts: VeoOpts): Promise<Buffer> {
   const key = apiKey();
 
-  // Gemini API uses inlineData ({ mimeType, data }) for image inputs — NOT
-  // Vertex's { bytesBase64Encoded, mimeType }.
+  // predictLongRunning uses { bytesBase64Encoded, mimeType } for image inputs.
   const instance: Record<string, unknown> = { prompt: opts.prompt };
-  if (opts.imageUrl) instance.image = { inlineData: await urlToInline(opts.imageUrl) };
-  if (opts.lastFrameUrl) instance.lastFrame = { inlineData: await urlToInline(opts.lastFrameUrl) };
+  if (opts.imageUrl) instance.image = await urlToImagePart(opts.imageUrl);
+  if (opts.lastFrameUrl) instance.lastFrame = await urlToImagePart(opts.lastFrameUrl);
 
-  const parameters: Record<string, unknown> = { numberOfVideos: 1 };
+  // Note: this model rejects `numberOfVideos`, so we don't send it (1 by default).
+  const parameters: Record<string, unknown> = {};
   if (opts.aspect) parameters.aspectRatio = opts.aspect;
   if (opts.resolution) parameters.resolution = opts.resolution;
   if (opts.negativePrompt) parameters.negativePrompt = opts.negativePrompt;
