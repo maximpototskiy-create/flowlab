@@ -405,6 +405,10 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [layouts, setLayouts] = useState<Record<string, Record<string, { x: number; y: number; scale: number }>>>({});
   const layoutsRef = useRef<Record<string, Record<string, { x: number; y: number; scale: number }>>>({});
   layoutsRef.current = layouts;
+  // Legacy projects stored x/y in preview px; migrate them to canvas fractions
+  // once the preview is measured (see the migration effect below).
+  const legacyPosRef = useRef(false);
+  const posMigratedRef = useRef(false);
   const [pxPerSec, setPxPerSec] = useState(60);
   const [laneH, setLaneH] = useState(48); // track height (vertical timeline zoom)
   const [leftW, setLeftW] = useState(240);   // library panel width (0 = collapsed)
@@ -707,8 +711,10 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     if (imported) return;
     try {
       const raw = localStorage.getItem(PROJECT_KEY); if (!raw) return;
-      const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>> };
+      const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; posMode?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>> };
       if (Array.isArray(j.clips) && j.clips.length && Array.isArray(j.layers) && j.layers.length) {
+        // Projects saved before fractional positions need a one-time migration.
+        legacyPosRef.current = j.posMode !== "frac";
         setClips(j.clips); setLayers(j.layers);
         if (j.layouts && typeof j.layouts === "object") setLayouts(j.layouts);
         if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
@@ -717,12 +723,12 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveProject = useCallback(() => {
-    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey, layouts: layoutsRef.current })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
+    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey, layouts: layoutsRef.current, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
   }, [resKey]);
   useEffect(() => {
     if (!restoredRef.current) return;
     setSaveState("saving");
-    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey, layouts })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
+    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey, layouts, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
     return () => clearTimeout(t);
   }, [clips, layers, resKey, layouts]);
   // Switch the active output format, remembering each format's own layout.
@@ -743,7 +749,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   }, [resKey]);
   const newProject = () => {
     if (!window.confirm("Start a new project? The current timeline will be cleared (last autosave is overwritten).")) return;
-    setClips([]); setSelectedIds([]); setLayers([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]); setLayouts({}); seek(0);
+    setClips([]); setSelectedIds([]); setLayers([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]); setLayouts({}); legacyPosRef.current = false; posMigratedRef.current = true; seek(0);
     try { localStorage.removeItem(PROJECT_KEY); } catch { /* */ }
   };
   // load caption webfonts + saved presets; redraw once fonts are ready
@@ -1090,6 +1096,22 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     compute(); const ro = new ResizeObserver(compute); ro.observe(c); return () => ro.disconnect();
   }, [res]);
 
+  // One-time migration of legacy px offsets -> canvas fractions (x/W, y/H),
+  // run as soon as the preview has been measured so positions stop drifting
+  // when the preview is resized or the format changes.
+  useEffect(() => {
+    if (posMigratedRef.current || !legacyPosRef.current) return;
+    const pw = previewSize.w, ph = previewSize.h;
+    if (pw < 2 || ph < 2) return;
+    posMigratedRef.current = true;
+    setClips((cs) => cs.map((c) => ({ ...c, x: (c.x || 0) / pw, y: (c.y || 0) / ph })));
+    setLayouts((ls) => {
+      const out: Record<string, Record<string, { x: number; y: number; scale: number }>> = {};
+      for (const f in ls) { out[f] = {}; for (const id in ls[f]) { const o = ls[f][id]; out[f][id] = { x: o.x / pw, y: o.y / ph, scale: o.scale }; } }
+      return out;
+    });
+  }, [previewSize.w, previewSize.h]);
+
   const layersRef = useRef<Layer[]>([]);
   layersRef.current = layers;
   const syncMedia = useCallback((tt: number) => {
@@ -1369,13 +1391,14 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     const move = (ev: PointerEvent) => {
       const z = viewZoomRef.current || 1; const dxr = (ev.clientX - s.sx) / z, dyr = (ev.clientY - s.sy) / z;
       if (mode === "move") {
+        const pw = previewSize.w || 1, ph = previewSize.h || 1;
         // snap based on the grabbed clip, apply the same (snapped) delta to the whole selection
-        let nx = s.ox + dxr, ny = s.oy + dyr;
-        const v = Math.abs(nx) < TH; if (v) nx = 0;
-        const h = Math.abs(ny) < TH; if (h) ny = 0;
+        let nx = s.ox + dxr / pw, ny = s.oy + dyr / ph;
+        const v = Math.abs(nx) * pw < TH; if (v) nx = 0;
+        const h = Math.abs(ny) * ph < TH; if (h) ny = 0;
         setSnap({ v, h });
         const ddx = nx - s.ox, ddy = ny - s.oy;
-        setClips((prev) => prev.map((x) => { const o = orig.get(x.id); return o ? { ...x, x: Math.round(o.x + ddx), y: Math.round(o.y + ddy) } : x; }));
+        setClips((prev) => prev.map((x) => { const o = orig.get(x.id); return o ? { ...x, x: o.x + ddx, y: o.y + ddy } : x; }));
       } else {
         let ns = +(s.os + (dxr + dyr) / 250).toFixed(2);
         const hit = STEPS.find((st) => Math.abs(ns - st) < 0.05); if (hit) ns = hit;
@@ -1400,8 +1423,9 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     const s = { sx: e.clientX, sy: e.clientY };
     const move = (ev: PointerEvent) => {
       const z = viewZoomRef.current || 1;
-      const dx = (ev.clientX - s.sx) / z, dy = (ev.clientY - s.sy) / z;
-      setClips((prev) => prev.map((x) => { const o = orig.get(x.id); return o ? { ...x, x: Math.round(o.x + dx), y: Math.round(o.y + dy) } : x; }));
+      const pw = previewSize.w || 1, ph = previewSize.h || 1;
+      const dx = (ev.clientX - s.sx) / z / pw, dy = (ev.clientY - s.sy) / z / ph;
+      setClips((prev) => prev.map((x) => { const o = orig.get(x.id); return o ? { ...x, x: o.x + dx, y: o.y + dy } : x; }));
     };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
@@ -1506,8 +1530,8 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
 
   const t = playhead;
   const styleFromVisual = (c: EditClip, v: ReturnType<typeof clipVisual>): React.CSSProperties => {
-    const tx = (c.x || 0) + v.offX * previewSize.w;
-    const ty = (c.y || 0) + v.offY * previewSize.h;
+    const tx = ((c.x || 0) + v.offX) * previewSize.w;
+    const ty = ((c.y || 0) + v.offY) * previewSize.h;
     return {
       opacity: v.opacity,
       transform: `translate(${tx}px, ${ty}px) scale(${(c.scale || 1) * v.scaleMul})`,

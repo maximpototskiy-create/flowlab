@@ -178,7 +178,7 @@ function easeOutCubic(p: number) { return 1 - Math.pow(1 - p, 3); }
 function easeOutBack(p: number) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
 
 // Draw a styled caption (plate / word-highlight / karaoke / stroke / shadow / enter animations).
-export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W: number, H: number, sx: number, v: { opacity: number; scaleMul: number; offX: number; offY: number }): { x: number; y: number; w: number; h: number } | null {
+export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: number, W: number, H: number, _sx: number, v: { opacity: number; scaleMul: number; offX: number; offY: number }): { x: number; y: number; w: number; h: number } | null {
   const st = c.tstyle || {};
   let text = c.text || ""; if (st.upper) text = text.toUpperCase();
   if (st.noPunct) text = text.replace(/[.,!?;:…"'„“”«»]/g, "");
@@ -256,14 +256,14 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   const lineH = fontPx * 1.22;
   const ascent = fontPx * 0.8, descent = fontPx * 0.2;
   const n = lines.length;
-  const cx = W / 2 + (c.x || 0) * sx + v.offX * W;
+  const cx = W / 2 + (c.x || 0) * W + v.offX * W;
   const pos = st.pos || "bottom";
   // last-line baseline so the text block matches the preview anchor
   let lastBaseline: number;
   if (pos === "top") lastBaseline = H * 0.10 + ascent + (n - 1) * lineH;
   else if (pos === "center") lastBaseline = H * 0.5 + (n * lineH) / 2 - descent;
   else lastBaseline = H * 0.85 - descent;
-  const cy = lastBaseline + (c.y || 0) * sx + v.offY * H;
+  const cy = lastBaseline + (c.y || 0) * H + v.offY * H;
 
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha * v.opacity));
@@ -458,8 +458,8 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
               const ratio = fitMode === "cover" ? Math.max(W / mw, H / mh) : Math.min(W / mw, H / mh);
               const fit = ratio * (c.scale || 1) * v.scaleMul;
               const dw = mw * fit, dh = mh * fit;
-              const dx = (W - dw) / 2 + (c.x || 0) * sx + v.offX * W;
-              const dy = (H - dh) / 2 + (c.y || 0) * sx + v.offY * H;
+              const dx = (W - dw) / 2 + (c.x || 0) * W + v.offX * W;
+              const dy = (H - dh) / 2 + (c.y || 0) * H + v.offY * H;
               if (c.blend === "screen" || c.blend === "multiply") ctx.globalCompositeOperation = c.blend;
               // "blur" fills the letterbox bars with a blurred cover copy behind.
               if (fitMode === "blur") {
@@ -467,7 +467,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
                 const bw = mw * cov, bh = mh * cov;
                 ctx.save();
                 ctx.filter = `blur(${Math.max(8, Math.round(W / 50))}px)`;
-                try { ctx.drawImage(el, (W - bw) / 2 + (c.x || 0) * sx + v.offX * W, (H - bh) / 2 + (c.y || 0) * sx + v.offY * H, bw, bh); } catch { /* */ }
+                try { ctx.drawImage(el, (W - bw) / 2 + (c.x || 0) * W + v.offX * W, (H - bh) / 2 + (c.y || 0) * H + v.offY * H, bw, bh); } catch { /* */ }
                 ctx.restore();
               }
               if (c.keyColor) drawKeyed(ctx, el, c, dx, dy, dw, dh);
