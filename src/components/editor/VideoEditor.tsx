@@ -1121,7 +1121,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       const active = tt >= c.start && tt < c.start + c.duration && !hidden.has(c.layer);
       if (active) {
         const local = tt - c.start + (c.inset || 0);
-        if (Math.abs(el.currentTime - local) > 0.3) { try { el.currentTime = local; } catch { /* */ } }
+        if (!el.seeking && Math.abs(el.currentTime - local) > 0.5) { try { el.currentTime = local; } catch { /* */ } }
         try { el.volume = Math.max(0, Math.min(1, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)))); } catch { /* */ }
         if (playingRef.current && el.paused) el.play().catch(() => {});
         if (!playingRef.current && !el.paused) el.pause();
@@ -1139,7 +1139,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
       if (bg) {
         if (active) {
           const local = tt - c.start + (c.inset || 0);
-          if (Math.abs(bg.currentTime - local) > 0.3) { try { bg.currentTime = local; } catch { /* */ } }
+          if (!bg.seeking && Math.abs(bg.currentTime - local) > 0.5) { try { bg.currentTime = local; } catch { /* */ } }
           if (playingRef.current && bg.paused) bg.play().catch(() => {});
           if (!playingRef.current && !bg.paused) bg.pause();
         } else if (!bg.paused) bg.pause();
@@ -1152,7 +1152,19 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     for (const el of mediaRefs.current.values()) { try { el.pause(); } catch { /* */ } }
   }, []);
   const loop = useCallback((now: number) => {
-    const dt = (now - lastTsRef.current) / 1000; lastTsRef.current = now;
+    const rawDt = (now - lastTsRef.current) / 1000; lastTsRef.current = now;
+    // Hold the clock while an active video is still buffering, so audio/video/
+    // playhead stay together instead of the playhead racing ahead (which would
+    // force corrective seeks and freeze the clip). Cap dt so a backgrounded tab
+    // can't jump the playhead far.
+    let buffering = false;
+    const tt0 = playheadRef.current;
+    for (const c of clipsRef.current) {
+      if (c.kind !== "video" || tt0 < c.start || tt0 >= c.start + c.duration) continue;
+      const el = mediaRefs.current.get(c.id);
+      if (el && el.readyState < 3 && !el.error) { buffering = true; break; }
+    }
+    const dt = buffering ? 0 : Math.min(0.25, rawDt);
     let tt = playheadRef.current + dt; const end = endOf(clipsRef.current);
     if (tt >= end) { tt = end; playheadRef.current = tt; setPlayhead(tt); syncMedia(tt); stop(); return; }
     playheadRef.current = tt; syncMedia(tt);
@@ -1919,6 +1931,9 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                       const fitMode = c.fit ?? (c.kind === "video" ? "cover" : "contain");
                       const objFit = fitMode === "cover" ? "object-cover" : "object-contain";
                       const blurBg = fitMode === "blur";
+                      // Only load a clip's video near its playback window, so the
+                      // whole timeline's videos don't buffer/decode all at once.
+                      const near = active || (c.start - t > 0 && c.start - t < 1.5) || (t >= c.start + c.duration && t - (c.start + c.duration) < 0.4);
                       return (
                         <div key={c.id} className="absolute inset-0"
                           style={{ ...styleFromVisual(c, v), mixBlendMode: (c.blend || undefined) as React.CSSProperties["mixBlendMode"], pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
@@ -1932,12 +1947,12 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                             <img src={c.url} alt="" draggable={false} className={`absolute inset-0 w-full h-full ${objFit} pointer-events-none`} />
                           )}
                           {c.kind === "image" && c.keyColor && <KeyedImage url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3} />}
-                          {blurBg && c.kind === "video" && !c.keyColor && (
+                          {blurBg && active && c.kind === "video" && !c.keyColor && (
                             <video src={c.url} muted playsInline preload="metadata" ref={(el) => { if (el) mediaRefs.current.set(c.id + "::bg", el); else mediaRefs.current.delete(c.id + "::bg"); }}
                               className="absolute inset-0 w-full h-full object-cover pointer-events-none" style={{ filter: "blur(22px)", transform: "scale(1.08)" }} />
                           )}
                           {c.kind === "video" && !c.keyColor && (
-                            <video src={c.url} playsInline preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
+                            <video src={near ? c.url : undefined} playsInline preload={active ? "auto" : "metadata"} onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
                               className={`absolute inset-0 w-full h-full ${objFit} pointer-events-none`} />
                           )}
                           {c.kind === "video" && c.keyColor && (
