@@ -398,6 +398,12 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [binLoading, setBinLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [resKey, setResKey] = useState("9:16");
+  // Per-format layout overrides: layouts[formatKey][clipId] = { x, y, scale }.
+  // The live `clips` hold the ACTIVE format's layout; `layouts` snapshots the
+  // other formats so switching remembers each one's framing.
+  const [layouts, setLayouts] = useState<Record<string, Record<string, { x: number; y: number; scale: number }>>>({});
+  const layoutsRef = useRef<Record<string, Record<string, { x: number; y: number; scale: number }>>>({});
+  layoutsRef.current = layouts;
   const [pxPerSec, setPxPerSec] = useState(60);
   const [laneH, setLaneH] = useState(48); // track height (vertical timeline zoom)
   const [leftW, setLeftW] = useState(240);   // library panel width (0 = collapsed)
@@ -700,26 +706,43 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     if (imported) return;
     try {
       const raw = localStorage.getItem(PROJECT_KEY); if (!raw) return;
-      const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string };
+      const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>> };
       if (Array.isArray(j.clips) && j.clips.length && Array.isArray(j.layers) && j.layers.length) {
         setClips(j.clips); setLayers(j.layers);
+        if (j.layouts && typeof j.layouts === "object") setLayouts(j.layouts);
         if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
       }
     } catch { /* ignore corrupt saves */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveProject = useCallback(() => {
-    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
+    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey, layouts: layoutsRef.current })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
   }, [resKey]);
   useEffect(() => {
     if (!restoredRef.current) return;
     setSaveState("saving");
-    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
+    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey, layouts })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
     return () => clearTimeout(t);
-  }, [clips, layers, resKey]);
+  }, [clips, layers, resKey, layouts]);
+  // Switch the active output format, remembering each format's own layout.
+  // Snapshot the current clips into the old format, then restore any saved
+  // layout for the new one (clips the new format hasn't seen keep their spot).
+  const switchFormat = useCallback((next: string) => {
+    if (next === resKey || !RESOLUTIONS.some((r) => r.key === next)) return;
+    const snap: Record<string, { x: number; y: number; scale: number }> = {};
+    for (const c of clipsRef.current) snap[c.id] = { x: c.x, y: c.y, scale: c.scale };
+    const saved = layoutsRef.current[next];
+    setLayouts((prev) => ({ ...prev, [resKey]: snap }));
+    if (saved) {
+      setClips((cs) =>
+        cs.map((c) => (saved[c.id] ? { ...c, x: saved[c.id].x, y: saved[c.id].y, scale: saved[c.id].scale } : c)),
+      );
+    }
+    setResKey(next);
+  }, [resKey]);
   const newProject = () => {
     if (!window.confirm("Start a new project? The current timeline will be cleared (last autosave is overwritten).")) return;
-    setClips([]); setSelectedIds([]); setLayers([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]); seek(0);
+    setClips([]); setSelectedIds([]); setLayers([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]); setLayouts({}); seek(0);
     try { localStorage.removeItem(PROJECT_KEY); } catch { /* */ }
   };
   // load caption webfonts + saved presets; redraw once fonts are ready
@@ -1824,7 +1847,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
             <span className="text-[10px] text-fg-subtle w-12 text-right">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : ""}</span>
             <button onClick={saveProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">Save</button>
             <button onClick={newProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">New</button>
-            <select value={resKey} onChange={(e) => setResKey(e.target.value)} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
+            <select value={resKey} onChange={(e) => switchFormat(e.target.value)} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
               {RESOLUTIONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
             <button onClick={exportMp4} disabled={exporting || !clips.length} className="px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
