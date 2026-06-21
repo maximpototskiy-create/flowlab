@@ -115,6 +115,105 @@ async function persistImageB64(b64: string, ctx: RunnerContext, prefix = "img"):
   return cdnUrl;
 }
 
+// ─── Product Screen Placement: device-frame mockup compositor ──────────
+// Screen aspect (aw/ah), corner radius + bezel as a fraction of screen width,
+// and the camera cutout style for each supported device.
+const PSP_DEVICES: Record<string, { aw: number; ah: number; radius: number; bezel: number; island: "dynamic" | "punch" | "none" }> = {
+  iphone15pro:    { aw: 1179, ah: 2556, radius: 0.135, bezel: 0.034, island: "dynamic" },
+  iphone16:       { aw: 1179, ah: 2556, radius: 0.130, bezel: 0.036, island: "dynamic" },
+  iphone16pro:    { aw: 1206, ah: 2622, radius: 0.140, bezel: 0.030, island: "dynamic" },
+  iphone16promax: { aw: 1320, ah: 2868, radius: 0.135, bezel: 0.028, island: "dynamic" },
+  iphone17pro:    { aw: 1206, ah: 2622, radius: 0.145, bezel: 0.028, island: "dynamic" },
+  pixel9pro:      { aw: 1280, ah: 2856, radius: 0.105, bezel: 0.032, island: "punch" },
+  pixel8pro:      { aw: 1344, ah: 2992, radius: 0.095, bezel: 0.034, island: "punch" },
+  galaxys24ultra: { aw: 1440, ah: 3120, radius: 0.050, bezel: 0.026, island: "punch" },
+  ipadpro13:      { aw: 2064, ah: 2752, radius: 0.055, bezel: 0.050, island: "none" },
+  android:        { aw: 1080, ah: 2340, radius: 0.100, bezel: 0.036, island: "punch" },
+};
+const PSP_GRADIENTS: Record<string, string> = {
+  "gradient-purple": `<stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#2563eb"/>`,
+  "gradient-blue": `<stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#1e3a8a"/>`,
+  "gradient-warm": `<stop offset="0" stop-color="#fb7185"/><stop offset="1" stop-color="#db2777"/>`,
+  "gradient-mint": `<stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0d9488"/>`,
+  "solid-dark": `<stop offset="0" stop-color="#0f172a"/><stop offset="1" stop-color="#0f172a"/>`,
+  "solid-light": `<stop offset="0" stop-color="#f1f5f9"/><stop offset="1" stop-color="#e2e8f0"/>`,
+};
+function pspEscapeXml(s: string): string {
+  return s.replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" }[c] as string));
+}
+// Headline as ≤2 balanced lines, font sized to fit the band (no truncation).
+function pspHeadline(text: string, x: number, y: number, w: number, h: number, color: string, overlay: boolean): string {
+  if (!text || !text.trim()) return "";
+  const t = text.trim().replace(/\s+/g, " ");
+  const words = t.split(" ");
+  let lines: string[];
+  if (words.length === 1 || t.length <= 16) lines = [t];
+  else {
+    let best: string[] = [t]; let bestDiff = Infinity;
+    for (let i = 1; i < words.length; i++) {
+      const a = words.slice(0, i).join(" "), b = words.slice(i).join(" ");
+      const d = Math.abs(a.length - b.length);
+      if (d < bestDiff) { bestDiff = d; best = [a, b]; }
+    }
+    lines = best;
+  }
+  const longest = Math.max(...lines.map((l) => l.length));
+  let fs = Math.min(Math.floor(h / (lines.length + 0.4)), Math.floor((w * 0.94) / (longest * 0.56)));
+  fs = Math.max(18, fs);
+  const lh = fs * 1.14, cx = x + w / 2, startY = y + h / 2 - ((lines.length - 1) * lh) / 2;
+  const scrim = overlay ? `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#000" opacity="0.32"/>` : "";
+  const tt = lines.map((l, i) => `<text x="${cx}" y="${startY + i * lh}" font-family="Inter, system-ui, sans-serif" font-weight="800" font-size="${fs}" fill="${color}" text-anchor="middle" dominant-baseline="middle">${pspEscapeXml(l)}</text>`).join("");
+  return scrim + tt;
+}
+// Composite an app screenshot into a device frame over a background with an
+// optional headline. Returns a PNG buffer.
+async function composeProductScreen(ssBuf: Buffer, opts: { device: string; background: string; headlinePos: string; headline: string }): Promise<Buffer> {
+  const sharp = (await import("sharp")).default;
+  const noFrame = opts.device === "no-frame";
+  const dev = PSP_DEVICES[opts.device] ?? PSP_DEVICES.iphone16pro;
+  const isLight = opts.background === "solid-light";
+  const textColor = isLight ? "#0f172a" : "#ffffff";
+  const grad = PSP_GRADIENTS[opts.background] ?? PSP_GRADIENTS["gradient-purple"];
+  const SCREEN_H = 1500;
+  const screenH = SCREEN_H;
+  let screenW: number, bezel: number, radius: number, bodyW: number, bodyH: number, bodyRadius: number;
+  if (noFrame) {
+    const meta = await sharp(ssBuf).metadata();
+    screenW = Math.round(SCREEN_H * ((meta.width || 1080) / (meta.height || 1920)));
+    radius = Math.round(Math.min(screenW, screenH) * 0.05); bezel = 0; bodyW = screenW; bodyH = screenH; bodyRadius = radius;
+  } else {
+    screenW = Math.round(SCREEN_H * dev.aw / dev.ah);
+    bezel = Math.max(8, Math.round(screenW * dev.bezel));
+    radius = Math.round(screenW * dev.radius);
+    bodyW = screenW + bezel * 2; bodyH = screenH + bezel * 2; bodyRadius = radius + Math.round(bezel * 0.8);
+  }
+  const margin = Math.round(bodyW * 0.16);
+  const band = (opts.headlinePos === "top" || opts.headlinePos === "bottom") && opts.headline ? Math.round(bodyH * 0.13) : 0;
+  const W = bodyW + margin * 2, H = bodyH + margin * 2 + band;
+  const bodyX = Math.round((W - bodyW) / 2), bodyY = (opts.headlinePos === "top" ? band : 0) + margin;
+  const screenX = bodyX + bezel, screenY = bodyY + bezel;
+  const mask = Buffer.from(`<svg width="${screenW}" height="${screenH}"><rect width="${screenW}" height="${screenH}" rx="${radius}" ry="${radius}"/></svg>`);
+  const shot = await sharp(ssBuf).resize(screenW, screenH, { fit: "cover" }).composite([{ input: mask, blend: "dest-in" }]).png().toBuffer();
+  const bodyRect = noFrame ? "" : `<rect x="${bodyX}" y="${bodyY}" width="${bodyW}" height="${bodyH}" rx="${bodyRadius}" ry="${bodyRadius}" fill="#0b0b0d"/>`;
+  const bgSvg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">${grad}</linearGradient></defs><rect width="${W}" height="${H}" fill="url(#g)"/>${bodyRect}</svg>`;
+  let island = "";
+  if (!noFrame && dev.island === "dynamic") {
+    const iw = Math.round(screenW * 0.30), ih = Math.round(screenW * 0.082);
+    island = `<rect x="${screenX + (screenW - iw) / 2}" y="${screenY + Math.round(screenH * 0.016)}" width="${iw}" height="${ih}" rx="${Math.round(ih / 2)}" fill="#000"/>`;
+  } else if (!noFrame && dev.island === "punch") {
+    const r = Math.round(screenW * 0.030);
+    island = `<circle cx="${screenX + screenW / 2}" cy="${screenY + Math.round(screenH * 0.038)}" r="${r}" fill="#000"/>`;
+  }
+  let hl = "";
+  if (opts.headline) {
+    if (opts.headlinePos === "top") hl = pspHeadline(opts.headline, margin, 0, W - margin * 2, band, textColor, false);
+    else if (opts.headlinePos === "bottom") hl = pspHeadline(opts.headline, margin, H - band, W - margin * 2, band, textColor, false);
+    else if (opts.headlinePos === "overlay-bottom") hl = pspHeadline(opts.headline, screenX, screenY + screenH - Math.round(screenH * 0.20), screenW, Math.round(screenH * 0.20), "#ffffff", true);
+  }
+  const topSvg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">${island}${hl}</svg>`;
+  return sharp(Buffer.from(bgSvg)).composite([{ input: shot, left: screenX, top: screenY }, { input: Buffer.from(topSvg), left: 0, top: 0 }]).png().toBuffer();
+}
+
 /** Run N image-generating calls concurrently, tolerating partial failures
  *  (e.g. provider rate limits) so the user still gets whatever succeeded.
  *  Logs requested-vs-succeeded for diagnosis. Throws only if ALL calls fail. */
@@ -504,11 +603,18 @@ export async function runNode(
     }
 
     case "productScreenPlacement": {
-      // Placeholder: real composition would use sharp + canvas on server.
-      // For now we pass through the screenshot.
       const screenshot = inputs.screenshot as string;
       if (!screenshot) throw new Error("Connect a screenshot");
-      return { outputs: { composed: screenshot }, costUsd: 0, durationMs: Date.now() - t0 };
+      const ssBuf = Buffer.from(await (await fetch(screenshot)).arrayBuffer());
+      const headline = String((inputs.headline as string) ?? config.headline ?? "").trim();
+      const out = await composeProductScreen(ssBuf, {
+        device: String(config.device ?? "iphone16pro"),
+        background: String(config.background ?? "gradient-purple"),
+        headlinePos: String(config.headline_position ?? "top"),
+        headline,
+      });
+      const composed = await persistImageB64(out.toString("base64"), ctx, "psp");
+      return { outputs: { composed }, costUsd: 0, durationMs: Date.now() - t0 };
     }
 
     case "characterGen": {
