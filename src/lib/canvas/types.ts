@@ -1387,7 +1387,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     description: "Generate background music or jingles from a text prompt.",
     inputs: [{ name: "description", type: "text", optional: true }],
     outputs: [{ name: "audio", type: "audio" }],
-    defaults: { instructions: "", model: "fal-ai/stable-audio", duration: 10 },
+    defaults: { instructions: "", model: "fal-ai/elevenlabs/music", duration: 10 },
     fields: [
       {
         name: "model",
@@ -1395,11 +1395,11 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          { value: "fal-ai/stable-audio", label: "Stable Audio" },
-          { value: "fal-ai/cassetteai/music-generator", label: "Cassette AI" },
+          { value: "fal-ai/elevenlabs/music", label: "ElevenLabs Music \u2b50 (best, commercial-safe)" },
+          { value: "fal-ai/stable-audio", label: "Stable Audio (cheaper)" },
         ],
       },
-      { name: "duration", label: "Duration (s)", type: "number", min: 1, max: 60, step: 1 },
+      { name: "duration", label: "Duration (s)", type: "number", min: 3, max: 60, step: 1 },
     ],
     primaryField: "instructions",
     primaryLabel: "Music description",

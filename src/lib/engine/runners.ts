@@ -1350,11 +1350,21 @@ export async function runNode(
     case "sfxGen": {
       const prompt = String(config.instructions || inputs.description || "").trim();
       if (!prompt) throw new Error("Provide a description");
-      const model = String(
-        config.model ?? (type === "sfxGen" ? "fal-ai/elevenlabs/sound-effects" : "fal-ai/stable-audio"),
+      let model = String(
+        config.model ?? (type === "sfxGen" ? "fal-ai/elevenlabs/sound-effects/v2" : "fal-ai/elevenlabs/music"),
       );
+      if (model.includes("cassetteai")) model = "fal-ai/elevenlabs/music"; // dead fal endpoint -> heal to a working one
       const duration = Number(config.duration ?? (type === "sfxGen" ? 3 : 10));
-      const r = await falRun(model, { prompt, duration, seconds_total: duration });
+      // Each provider expects a different input schema.
+      let input: Record<string, unknown>;
+      if (model.includes("elevenlabs/sound-effects")) {
+        input = { text: prompt, duration_seconds: Math.min(30, Math.max(0.5, duration)) };
+      } else if (model.includes("elevenlabs/music")) {
+        input = { prompt, music_length_ms: Math.min(600000, Math.max(3000, Math.round(duration * 1000))) };
+      } else {
+        input = { prompt, seconds_total: duration }; // stable-audio and similar
+      }
+      const r = await falRun(model, input);
       const url =
         ((r.audio as { url: string } | undefined)?.url) ??
         ((r.audio_file as { url: string } | undefined)?.url) ??
