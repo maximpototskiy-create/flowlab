@@ -173,7 +173,7 @@ function drawFx(ctx: CanvasRenderingContext2D, fx: string | undefined, W: number
   }
 }
 
-function fontPxBase(W: number, st: TextStyle, c: ExportClip, v: { scaleMul: number }) { return Math.max(14, W / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul; }
+function fontPxBase(W: number, H: number, st: TextStyle, c: ExportClip, v: { scaleMul: number }) { return Math.max(14, Math.min(W, H) / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul; }
 function easeOutCubic(p: number) { return 1 - Math.pow(1 - p, 3); }
 function easeOutBack(p: number) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
 
@@ -184,7 +184,7 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   if (st.noPunct) text = text.replace(/[.,!?;:…"'„“”«»]/g, "");
   if (!text.trim()) return null;
   const local = tt - c.start;
-  const fontPx = Math.max(14, W / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul;
+  const fontPx = Math.max(14, Math.min(W, H) / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul;
   const family = st.font || "sans-serif";
   const weight = st.weight ?? 800;
   ctx.font = `${weight} ${Math.round(fontPx)}px ${family}`;
@@ -202,8 +202,8 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   else if (st.enter === "wipeRight") { wipe = "r"; wipeProgress = eo; }
   else if (st.enter === "wipeLeft") { wipe = "l"; wipeProgress = eo; }
   else if (st.enter === "blurIn") { blurPx = (1 - eo) * 10; alpha = Math.max(0.2, ep); }
-  else if (st.enter === "slideUp") { alpha = ep; slideY = (1 - eo) * fontPxBase(W, st, c, v) * 1.4; }
-  else if (st.enter === "slideDown") { alpha = ep; slideY = -(1 - eo) * fontPxBase(W, st, c, v) * 1.4; }
+  else if (st.enter === "slideUp") { alpha = ep; slideY = (1 - eo) * fontPxBase(W, H, st, c, v) * 1.4; }
+  else if (st.enter === "slideDown") { alpha = ep; slideY = -(1 - eo) * fontPxBase(W, H, st, c, v) * 1.4; }
   else if (st.enter === "typewriter") { const td = Math.min(0.9, c.duration * 0.6); typeChars = Math.max(1, Math.floor((Math.min(1, local / td)) * text.length)); }
   const wordsUp = st.enter === "wordsUp";
   // exit (last 0.28s of the clip) — mirrors the entrances
@@ -214,8 +214,8 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
       if (st.exit === "fade") alpha *= eq;
       else if (st.exit === "scale") { scl *= 0.6 + 0.4 * eq; alpha *= eq; }
       else if (st.exit === "zoomOut") { scl *= 1 + 0.7 * op; alpha *= eq; }
-      else if (st.exit === "slideUp") { slideY -= op * fontPxBase(W, st, c, v) * 1.4; alpha *= eq; }
-      else if (st.exit === "slideDown") { slideY += op * fontPxBase(W, st, c, v) * 1.4; alpha *= eq; }
+      else if (st.exit === "slideUp") { slideY -= op * fontPxBase(W, H, st, c, v) * 1.4; alpha *= eq; }
+      else if (st.exit === "slideDown") { slideY += op * fontPxBase(W, H, st, c, v) * 1.4; alpha *= eq; }
       else if (st.exit === "wipeLeft") wipe = wipe || "r"; // shrink from the right edge
       else if (st.exit === "wipeRight") wipe = wipe || "l";
       else if (st.exit === "blurOut") { blurPx = Math.max(blurPx, op * 10); alpha *= Math.max(0.2, eq); }
@@ -227,7 +227,7 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   }
   // loop — continuous subtle motion for the whole clip
   if (st.loop === "pulse") scl *= 1 + 0.035 * Math.sin(local * 4);
-  else if (st.loop === "float") slideY += Math.sin(local * 2.2) * fontPxBase(W, st, c, v) * 0.12;
+  else if (st.loop === "float") slideY += Math.sin(local * 2.2) * fontPxBase(W, H, st, c, v) * 0.12;
   else if (st.loop === "wiggle") rot += 0.035 * Math.sin(local * 3);
 
   // words (for word plate / karaoke); fall back to splitting evenly

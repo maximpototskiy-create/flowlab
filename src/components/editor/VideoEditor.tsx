@@ -1626,7 +1626,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                 <option value="generated">Generated</option>
               </select>
             </div>
-            <div className="flex items-center gap-1 text-[10px]">
+            <div className="flex flex-wrap items-center gap-1 text-[10px]">
               {(["all", "video", "image", "audio"] as const).map((f) => (
                 <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
               ))}
@@ -1682,7 +1682,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
                 </select>
               </label>
             )}
-            <div className="flex items-center gap-1 text-[10px]">
+            <div className="flex flex-wrap items-center gap-1 text-[10px]">
               {(["all", "video", "image", "audio"] as const).map((f) => (
                 <button key={f} onClick={() => setBinFilter(f)} className={`px-2 py-0.5 rounded ${binFilter === f ? "bg-brand/15 text-brand" : "text-fg-subtle hover:text-fg"}`}>{f}</button>
               ))}
