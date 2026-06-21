@@ -635,6 +635,9 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
+          { value: "google/gemini-3.1-flash-image", label: "Nano Banana 2 (direct) \u2b50" },
+          { value: "google/gemini-3-pro-image-preview", label: "Nano Banana Pro (direct)" },
+          { value: "openai/gpt-image-2", label: "GPT Image 2 (direct)" },
           { value: "fal-ai/flux/schnell", label: "FLUX Schnell" },
           { value: "fal-ai/flux/dev", label: "FLUX Dev" },
           { value: "fal-ai/flux-pro/v1.1", label: "FLUX Pro 1.1" },

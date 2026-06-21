@@ -517,12 +517,44 @@ export async function runNode(
       const model = String(config.model ?? "fal-ai/flux/dev");
       const style = String(config.style ?? "photorealistic");
       const aspect = String(config.aspect ?? "3:4");
-      const r = await falRun(model, {
-        prompt: `Character, ${style} style, ${desc}, centered composition, clean background`,
-        image_size: ASPECT_TO_SIZE[aspect] ?? "portrait_4_3",
-        num_images: 1,
-        enable_safety_checker: false,
-      });
+      const prompt = `Character, ${style} style, ${desc}, centered composition, clean background`;
+
+      // ─── Direct OpenAI (GPT Image) via the user's OPENAI_API_KEY ───
+      if (model.startsWith("openai/")) {
+        const apiModel = model.split("/").slice(1).join("/");
+        const size = ASPECT_TO_OPENAI_SIZE[aspect] ?? "1024x1024";
+        const b64s = await generateOpenAIImage(prompt, { model: apiModel, size, quality: String(config.quality || "medium"), n: 1 });
+        const persisted = await persistImageB64(b64s[0], ctx, "char");
+        return { outputs: { character: persisted }, costUsd: estimateCost(model), durationMs: Date.now() - t0 };
+      }
+      // ─── Direct Google (Nano Banana via Gemini, or Imagen) ───
+      if (model.startsWith("google/")) {
+        const apiModel = model.split("/").slice(1).join("/");
+        let b64s: string[];
+        if (model.includes("imagen")) {
+          const imagenAspect = aspect === "4:5" ? "3:4" : aspect;
+          b64s = await generateImagen(prompt, { model: apiModel, aspect: imagenAspect, n: 1 });
+        } else {
+          b64s = await generateGeminiImage(prompt, { model: apiModel, aspect });
+        }
+        const persisted = await persistImageB64(b64s[0], ctx, "char");
+        return { outputs: { character: persisted }, costUsd: estimateCost(model), durationMs: Date.now() - t0 };
+      }
+
+      // fal models — each family takes different fields (Imagen uses
+      // aspect_ratio, FLUX uses image_size). Sending image_size to Imagen was
+      // why its aspect came out wrong.
+      const input: Record<string, unknown> = { prompt, num_images: 1 };
+      if (model.includes("nano-banana")) {
+        input.aspect_ratio = aspect;
+        input.limit_generations = false;
+      } else if (model.includes("imagen") || model.includes("ideogram") || model.includes("recraft") || model.includes("flux-2")) {
+        input.aspect_ratio = aspect;
+      } else {
+        input.image_size = ASPECT_TO_SIZE[aspect] ?? "portrait_4_3";
+        input.enable_safety_checker = false;
+      }
+      const r = await falRun(model, input);
       const url = ((r.images as { url: string }[] | undefined) ?? [])[0]?.url;
       if (!url) throw new Error("No image returned");
       const persisted = await persistAsset(url, ctx, "char");
