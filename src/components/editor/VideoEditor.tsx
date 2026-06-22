@@ -7,7 +7,7 @@ import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, Tag, X,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, Tag, X, Layers,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
 
@@ -272,6 +272,9 @@ type EditClip = {
   x: number;
   y: number;
   fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
+  // Alternatives for batch "versions": extra options beyond this clip's base
+  // value. Each version swaps in one option's text (captions) or url (media).
+  variants?: { id: string; text?: string; url?: string }[];
   fadeIn: number;
   fadeOut: number;
   anim?: string;
@@ -310,6 +313,29 @@ const DEFAULTS = { image: 4, audio: 6, video: 4, text: 3, fx: 1.5, adjust: 3 };
 const NAMING_KEY = "flowlab.editor.naming";
 const NAMING_DEFAULT = { template: "{project}_{type}_{version}__{resolution}_{duration}_{lang}_{initials}", version: "v1", lang: "en", initials: "" };
 const NAMING_TOKENS = ["project", "type", "version", "resolution", "duration", "lang", "initials"] as const;
+// Versions = cartesian product of each variant slot's options (option 0 = base).
+function enumerateCombos(slots: EditClip[]): number[][] {
+  let combos: number[][] = [[]];
+  for (const s of slots) {
+    const opts = 1 + (s.variants?.length ?? 0);
+    const next: number[][] = [];
+    for (const combo of combos) for (let i = 0; i < opts; i++) next.push([...combo, i]);
+    combos = next;
+  }
+  return combos;
+}
+// Apply one combo: swap each slot clip's text/url to the chosen option.
+function applyCombo(base: EditClip[], slots: EditClip[], combo: number[]): EditClip[] {
+  const pick = new Map<string, number>();
+  slots.forEach((s, i) => pick.set(s.id, combo[i] ?? 0));
+  return base.map((c) => {
+    const idx = pick.get(c.id);
+    if (idx == null || idx === 0) return c;
+    const v = c.variants?.[idx - 1];
+    if (!v) return c;
+    return { ...c, ...(v.text != null ? { text: v.text } : {}), ...(v.url != null ? { url: v.url } : {}) };
+  });
+}
 const MIN_DUR = 0.3;
 const ANIMS = [
   { v: "", l: "None" }, { v: "kenBurns", l: "Ken Burns" }, { v: "zoomIn", l: "Zoom In" },
@@ -445,6 +471,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     return NAMING_DEFAULT;
   });
   useEffect(() => { try { localStorage.setItem(NAMING_KEY, JSON.stringify(naming)); } catch { /* */ } }, [naming]);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchFormats, setBatchFormats] = useState<Set<string>>(() => new Set(["9:16"]));
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
   const [railTab, setRailTab] = useState<"media" | "brand" | "audio" | "text" | "subs" | "effects" | "filters">("media");
@@ -1237,13 +1266,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   }, [menu, transMenu]);
 
   // Build the export filename from the naming template + live values.
-  const buildFileName = useCallback((ext: string) => {
-    const r = RESOLUTIONS.find((x) => x.key === resKey) ?? RESOLUTIONS[0];
+  // versionOverride / formatKey let the batch renderer set per-version values.
+  const buildFileName = useCallback((ext: string, versionOverride?: string, formatKey?: string) => {
+    const r = RESOLUTIONS.find((x) => x.key === (formatKey ?? resKey)) ?? RESOLUTIONS[0];
     const dur = Math.max(1, Math.round(endOf(clipsRef.current)));
     const tokens: Record<string, string> = {
       project: (projectName || "creative").trim(),
       type: "video",
-      version: naming.version || "v1",
+      version: versionOverride || naming.version || "v1",
       resolution: `${r.w}x${r.h}`,
       duration: `${dur}s`,
       lang: naming.lang || "en",
@@ -1254,6 +1284,64 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const name = raw.split("__").map((seg) => seg.split("_").filter(Boolean).join("_")).filter(Boolean).join("__");
     return `${name || `creative-${Date.now()}`}.${ext}`;
   }, [naming, projectName, resKey]);
+
+  // One clip -> the export-clip shape (shared by single + batch export).
+  const toExportClip = useCallback((c: EditClip) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr }), []);
+
+  // Render every version (variant combo) x every chosen format, each downloaded
+  // with its own templated name (version token = v1..vN per combo).
+  const renderAllVersions = useCallback(async () => {
+    if (batchRunning || exporting || !clipsRef.current.length) return;
+    const fmts = RESOLUTIONS.filter((r) => batchFormats.has(r.key));
+    if (!fmts.length) { setStatus("Pick at least one format to render."); return; }
+    setVersionsOpen(false); setBatchRunning(true); setProgress(0); stop();
+    try {
+      const { exportTimeline } = await import("@/lib/editor/exportVideo");
+      const slots = clipsRef.current.filter((c) => (c.variants?.length ?? 0) > 0);
+      const combos = enumerateCombos(slots);
+      const total = combos.length * fmts.length;
+      let done = 0;
+      for (let vi = 0; vi < combos.length; vi++) {
+        const verClips = applyCombo(clipsRef.current, slots, combos[vi]);
+        const vis = layersRef.current.filter((l) => l.type !== "audio");
+        const hiddenIds = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
+        const z: EditClip[] = [];
+        for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...verClips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
+        const ordered = [...z, ...verClips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
+        for (const r of fmts) {
+          setStatus(`Rendering v${vi + 1} ${r.label} (${done + 1}/${total})\u2026`); setProgress(0);
+          const { blob, ext } = await exportTimeline({
+            clips: ordered.map(toExportClip),
+            width: r.w, height: r.h, previewWidth: previewSize.w || r.w,
+            onProgress: (p) => setProgress(Math.round(p * 100)),
+          });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, `v${vi + 1}`, r.key);
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 4000);
+          done++;
+          await new Promise((res) => setTimeout(res, 500)); // stagger downloads
+        }
+      }
+      setStatus(`Done \u2014 ${total} file(s) downloaded.`);
+    } catch (e) { console.error(e); setStatus(`Batch failed: ${e instanceof Error ? e.message : "see console"}`); }
+    finally { setBatchRunning(false); }
+  }, [batchRunning, exporting, batchFormats, previewSize, stop, buildFileName, toExportClip]);
+
+  // ── Variant-slot management for the Versions panel ──
+  const makeSlot = useCallback((id: string) => { setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: c.variants ?? [] } : c))); setVersionsOpen(true); }, []);
+  const clearSlot = useCallback((id: string) => setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: undefined } : c))), []);
+  const addOption = useCallback((id: string) => setClips((cs) => cs.map((c) => {
+    if (c.id !== id) return c;
+    const vid = `vr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const opt = c.kind === "text" ? { id: vid, text: "" } : { id: vid, url: "" };
+    return { ...c, variants: [...(c.variants || []), opt] };
+  })), []);
+  const setOption = useCallback((id: string, vId: string, patch: { text?: string; url?: string }) =>
+    setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).map((v) => (v.id === vId ? { ...v, ...patch } : v)) } : c))), []);
+  const removeOption = useCallback((id: string, vId: string) =>
+    setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).filter((v) => v.id !== vId) } : c))), []);
+  const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
 
   const exportMp4 = useCallback(async () => {
     if (exporting || !clips.length) return;
@@ -1961,6 +2049,70 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 </div>
               )}
             </div>
+            <div className="relative">
+              <button onClick={() => setVersionsOpen((o) => !o)} title="Variants & batch render"
+                className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand inline-flex items-center gap-1">
+                <Layers size={12} /> Versions
+              </button>
+              {versionsOpen && (() => {
+                const slots = clips.filter((c) => c.variants !== undefined);
+                const versionCount = slots.reduce((n, c) => n * (1 + (c.variants?.length ?? 0)), 1);
+                return (
+                  <div className="absolute right-0 top-full mt-1 z-50 w-[420px] max-h-[70vh] overflow-auto rounded-lg border border-border bg-bg-card p-3 shadow-xl text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-fg font-medium">Versions &amp; batch render</span>
+                      <button onClick={() => setVersionsOpen(false)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
+                    </div>
+                    {slots.length === 0 ? (
+                      <div className="text-fg-subtle leading-relaxed">No variant slots yet.<br />Right-click a clip on the timeline -&gt; <span className="text-fg-muted">Use in versions</span>, then add hook/element options here. Every combination renders as its own version (v1, v2, …).</div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {slots.map((c) => {
+                          const mediaAssets = assets.filter((a) => a.kind === c.kind);
+                          return (
+                            <div key={c.id} className="rounded-md border border-border p-2">
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="text-fg truncate">{clipLabel(c)} <span className="text-fg-subtle">· {c.kind}</span></span>
+                                <button onClick={() => clearSlot(c.id)} title="Remove from versions" className="text-fg-subtle hover:text-red-400"><X size={12} /></button>
+                              </div>
+                              <div className="flex items-center gap-1.5 mb-1 text-fg-subtle"><span className="w-6 text-brand">v1</span><span className="truncate">{c.kind === "text" ? `"${(c.text || "").slice(0, 30)}"` : (clipLabel(c) + " (base)")}</span></div>
+                              {(c.variants || []).map((v, i) => (
+                                <div key={v.id} className="flex items-center gap-1.5 mb-1">
+                                  <span className="w-6 text-fg-subtle">v{i + 2}</span>
+                                  {c.kind === "text" ? (
+                                    <input value={v.text ?? ""} onChange={(e) => setOption(c.id, v.id, { text: e.target.value })} placeholder="alternative hook text" className="flex-1 bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" />
+                                  ) : (
+                                    <select value={v.url ?? ""} onChange={(e) => setOption(c.id, v.id, { url: e.target.value })} className="flex-1 bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand">
+                                      <option value="">— pick asset —</option>
+                                      {mediaAssets.map((a) => <option key={a.id} value={a.url}>{a.label}</option>)}
+                                    </select>
+                                  )}
+                                  <button onClick={() => removeOption(c.id, v.id)} className="text-fg-subtle hover:text-red-400"><X size={12} /></button>
+                                </div>
+                              ))}
+                              <button onClick={() => addOption(c.id)} className="mt-1 px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> add option</button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div className="mt-3 mb-1.5 text-fg">Versions: <span className="text-brand font-medium">{versionCount}</span> × formats</div>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {RESOLUTIONS.map((r) => (
+                        <label key={r.key} className="inline-flex items-center gap-1 text-fg-muted cursor-pointer">
+                          <input type="checkbox" checked={batchFormats.has(r.key)} onChange={(e) => setBatchFormats((s) => { const n = new Set(s); if (e.target.checked) n.add(r.key); else n.delete(r.key); return n; })} />
+                          {r.key}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="text-fg-subtle mb-2 text-[10px]">Total files: {versionCount * RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length}. Named by the template (version = v1…vN).</div>
+                    <button onClick={renderAllVersions} disabled={batchRunning || exporting || !clips.length} className="w-full px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center justify-center gap-1.5">
+                      {batchRunning ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{batchRunning ? `${progress}%` : "Render all versions"}
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
             <button onClick={exportMp4} disabled={exporting || !clips.length} className="px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
               {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{exporting ? `${progress}%` : "Export MP4"}
             </button>
@@ -2462,6 +2614,16 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     const cur = c.fit ?? (c.kind === "video" ? "cover" : "contain");
                     return <button key={val} onClick={() => apply({ fit: val })} className={`px-1.5 py-1 rounded ${cur === val ? "bg-brand/20 text-brand" : "hover:bg-white/5 text-fg-muted"}`}>{lbl}</button>;
                   })}
+                </div>
+              </>
+            )}
+            {isMedia && (
+              <>
+                <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Versions</div>
+                <div className="px-1 pb-1.5">
+                  <button onClick={() => { makeSlot(menu.id); setMenu(null); }} className="w-full px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">
+                    {c.variants !== undefined ? "Manage variants\u2026" : "Use in versions (add variants)"}
+                  </button>
                 </div>
               </>
             )}
