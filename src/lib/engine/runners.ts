@@ -620,10 +620,21 @@ export async function runNode(
     case "characterGen": {
       const desc = String(config.instructions || inputs.description || "").trim();
       if (!desc) throw new Error("Provide a description");
-      const model = String(config.model ?? "fal-ai/flux/dev");
+      const model = String(config.model ?? "google/gemini-3.1-flash-image");
       const style = String(config.style ?? "photorealistic");
       const aspect = String(config.aspect ?? "3:4");
-      const prompt = `Character, ${style} style, ${desc}, centered composition, clean background`;
+      // Strong, style-specific conditioning. FLUX in particular drifts to anime
+      // for "girl/character" prompts unless photoreal is stated explicitly with
+      // negative-style cues, so we spell it out.
+      const STYLE_PROMPTS: Record<string, string> = {
+        photorealistic: "photorealistic portrait photograph, real human person, natural skin texture and pores, shot on a DSLR with an 85mm lens, soft realistic lighting, sharp focus, ultra-detailed and lifelike. Absolutely NOT anime, NOT manga, NOT illustration, NOT cartoon, NOT 3D render, NOT a painting",
+        "3d render": "high-quality 3D character render, Octane / Unreal Engine style, subsurface scattering, cinematic studio lighting, detailed materials",
+        illustration: "polished digital illustration, clean line art, professional concept-art shading",
+        cartoon: "modern cartoon style, bold clean outlines, flat vibrant colors, expressive",
+        anime: "high-quality anime style, clean cel shading, detailed eyes, studio anime production quality",
+      };
+      const styleText = STYLE_PROMPTS[style] ?? `${style} style`;
+      const prompt = `${desc}. ${styleText}. Single character, centered composition, clean simple background.`;
 
       // ─── Direct OpenAI (GPT Image) via the user's OPENAI_API_KEY ───
       if (model.startsWith("openai/")) {
@@ -698,8 +709,20 @@ export async function runNode(
       const source = inputs.source as string;
       const face = inputs.face as string;
       if (!source || !face) throw new Error("Connect both source and face images");
-      const model = String(config.model ?? "fal-ai/face-swap");
-      const r = await falRun(model, { target_image: source, source_image: face });
+      const model = String(config.model ?? "easel-ai/advanced-face-swap");
+      // Nano Banana: compose the swap via the direct Gemini image-edit path.
+      if (model.startsWith("google/")) {
+        const apiModel = model.split("/").slice(1).join("/");
+        const prompt = "Replace the face of the person in the FIRST image with the face from the SECOND image. Keep the first image's pose, body, hair, clothing, lighting and background unchanged. Photorealistic and seamless, matching skin tone and lighting.";
+        const b64s = await generateGeminiImage(prompt, { model: apiModel, refImages: [source, face] });
+        const persisted = await persistImageB64(b64s[0], ctx, "faceswap");
+        return { outputs: { image: persisted }, costUsd: estimateCost(model), durationMs: Date.now() - t0 };
+      }
+      // Each fal face-swap model uses different field names.
+      const input: Record<string, unknown> = model.includes("advanced-face-swap")
+        ? { face_image_0: face, target_image: source, workflow_type: "user_hair", upscale: true }
+        : { base_image_url: source, swap_image_url: face };
+      const r = await falRun(model, input);
       const url =
         ((r.image as { url: string } | undefined)?.url) ??
         ((r.images as { url: string }[] | undefined) ?? [])[0]?.url;
@@ -1499,6 +1522,11 @@ export async function runNode(
         input = { text: prompt, duration_seconds: Math.min(30, Math.max(0.5, duration)) };
       } else if (model.includes("elevenlabs/music")) {
         input = { prompt, music_length_ms: Math.min(600000, Math.max(3000, Math.round(duration * 1000))) };
+      } else if (model.includes("minimax-music")) {
+        // Instrumental from the style prompt (no lyrics field on this node).
+        input = { prompt, is_instrumental: true };
+      } else if (model.includes("ace-step")) {
+        input = { prompt, instrumental: true, duration };
       } else {
         input = { prompt, seconds_total: duration }; // stable-audio and similar
       }

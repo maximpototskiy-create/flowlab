@@ -634,7 +634,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     description: "Generate a character image from description.",
     inputs: [{ name: "description", type: "text", optional: true }],
     outputs: [{ name: "character", type: "image" }],
-    defaults: { instructions: "", model: "fal-ai/flux/dev", style: "photorealistic", aspect: "3:4" },
+    defaults: { instructions: "", model: "google/gemini-3.1-flash-image", style: "photorealistic", aspect: "3:4" },
     fields: [
       {
         name: "model",
@@ -887,7 +887,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "face", type: "image", label: "Face image" },
     ],
     outputs: [{ name: "image", type: "image" }],
-    defaults: { model: "fal-ai/face-swap" },
+    defaults: { model: "easel-ai/advanced-face-swap" },
     fields: [
       {
         name: "model",
@@ -895,8 +895,9 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          { value: "fal-ai/face-swap", label: "Face Swap" },
-          { value: "fal-ai/photomaker", label: "PhotoMaker" },
+          { value: "easel-ai/advanced-face-swap", label: "Advanced Face Swap \u2b50 (best)" },
+          { value: "fal-ai/face-swap", label: "Face Swap (fast)" },
+          { value: "google/gemini-3.1-flash-image", label: "Nano Banana (AI compose)" },
         ],
       },
     ],
@@ -1406,7 +1407,9 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         icon: "settings",
         options: [
           { value: "fal-ai/elevenlabs/music", label: "ElevenLabs Music \u2b50 (best, commercial-safe)" },
-          { value: "fal-ai/stable-audio", label: "Stable Audio (cheaper)" },
+          { value: "fal-ai/minimax-music/v2.6", label: "MiniMax Music 2.6 (rich, songs)" },
+          { value: "fal-ai/stable-audio", label: "Stable Audio" },
+          { value: "fal-ai/ace-step/prompt-to-audio", label: "ACE-Step (cheapest)" },
         ],
       },
       { name: "duration", label: "Duration (s)", type: "number", min: 3, max: 60, step: 1 },

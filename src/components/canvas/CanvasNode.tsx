@@ -1323,6 +1323,29 @@ function QuickField({
       </label>
     );
   }
+  if (field.type === "number") {
+    const num = Number(value ?? field.min ?? 0);
+    return (
+      <div
+        className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-bg-subtle text-[10px] text-fg-muted"
+        onMouseDown={(e) => e.stopPropagation()}
+        title={field.help ?? field.label}
+      >
+        <span className="truncate max-w-[78px]">{field.label}</span>
+        <input
+          type="number"
+          min={field.min}
+          max={field.max}
+          step={field.step}
+          value={num}
+          onChange={(e) => onChange(Number(e.target.value))}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="w-12 bg-transparent text-fg tabular-nums outline-none border-b border-border focus:border-brand"
+        />
+      </div>
+    );
+  }
   if (field.type !== "select") return null;
   const disabled = Boolean(disabledReason);
   return (
