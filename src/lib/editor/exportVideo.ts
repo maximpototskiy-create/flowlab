@@ -173,7 +173,7 @@ function drawFx(ctx: CanvasRenderingContext2D, fx: string | undefined, W: number
   }
 }
 
-function fontPxBase(W: number, H: number, st: TextStyle, c: ExportClip, v: { scaleMul: number }) { return Math.max(14, Math.min(W, H) / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul; }
+function fontPxBase(W: number, H: number, st: TextStyle, c: ExportClip, v: { scaleMul: number }) { return Math.max(14, (H * 9) / 256) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul; }
 function easeOutCubic(p: number) { return 1 - Math.pow(1 - p, 3); }
 function easeOutBack(p: number) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
 
@@ -184,7 +184,7 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   if (st.noPunct) text = text.replace(/[.,!?;:…"'„“”«»]/g, "");
   if (!text.trim()) return null;
   const local = tt - c.start;
-  const fontPx = Math.max(14, Math.min(W, H) / 16) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul;
+  const fontPx = Math.max(14, (H * 9) / 256) * (st.size ?? 1) * (c.scale || 1) * v.scaleMul;
   const family = st.font || "sans-serif";
   const weight = st.weight ?? 800;
   ctx.font = `${weight} ${Math.round(fontPx)}px ${family}`;
