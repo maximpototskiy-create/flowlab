@@ -7,7 +7,7 @@ import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, Tag, X,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
 
@@ -304,6 +304,12 @@ const RESOLUTIONS = [
   { key: "1:1", label: "Square 1:1", w: 1080, h: 1080 },
 ];
 const DEFAULTS = { image: 4, audio: 6, video: 4, text: 3, fx: 1.5, adjust: 3 };
+// Export filename templating. Tokens: {project} {type} {version} {resolution}
+// {duration} {lang} {initials}. "__" separates the concept block from render
+// specs (matches the team's CCA naming convention). Persisted per browser.
+const NAMING_KEY = "flowlab.editor.naming";
+const NAMING_DEFAULT = { template: "{project}_{type}_{version}__{resolution}_{duration}_{lang}_{initials}", version: "v1", lang: "en", initials: "" };
+const NAMING_TOKENS = ["project", "type", "version", "resolution", "duration", "lang", "initials"] as const;
 const MIN_DUR = 0.3;
 const ANIMS = [
   { v: "", l: "None" }, { v: "kenBurns", l: "Ken Burns" }, { v: "zoomIn", l: "Zoom In" },
@@ -367,7 +373,7 @@ function LazyVideo({ src, className }: { src: string; className?: string }) {
   return <video ref={ref} src={show ? src : undefined} muted playsInline preload="metadata" className={className} />;
 }
 
-export default function VideoEditor({ assets, workflowId, projectId }: { assets: EditorAsset[]; workflowId?: string; projectId?: string }) {
+export default function VideoEditor({ assets, workflowId, projectId, projectName }: { assets: EditorAsset[]; workflowId?: string; projectId?: string; projectName?: string }) {
   const [layers, setLayers] = useState<Layer[]>([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]);
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
@@ -431,6 +437,14 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
   const [status, setStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [namingOpen, setNamingOpen] = useState(false);
+  const [naming, setNaming] = useState<{ template: string; version: string; lang: string; initials: string }>(() => {
+    if (typeof window !== "undefined") {
+      try { const raw = localStorage.getItem(NAMING_KEY); if (raw) return { ...NAMING_DEFAULT, ...JSON.parse(raw) }; } catch { /* */ }
+    }
+    return NAMING_DEFAULT;
+  });
+  useEffect(() => { try { localStorage.setItem(NAMING_KEY, JSON.stringify(naming)); } catch { /* */ } }, [naming]);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
   const [railTab, setRailTab] = useState<"media" | "brand" | "audio" | "text" | "subs" | "effects" | "filters">("media");
@@ -1222,6 +1236,25 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
     return () => { window.removeEventListener("click", close); window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
   }, [menu, transMenu]);
 
+  // Build the export filename from the naming template + live values.
+  const buildFileName = useCallback((ext: string) => {
+    const r = RESOLUTIONS.find((x) => x.key === resKey) ?? RESOLUTIONS[0];
+    const dur = Math.max(1, Math.round(endOf(clipsRef.current)));
+    const tokens: Record<string, string> = {
+      project: (projectName || "creative").trim(),
+      type: "video",
+      version: naming.version || "v1",
+      resolution: `${r.w}x${r.h}`,
+      duration: `${dur}s`,
+      lang: naming.lang || "en",
+      initials: naming.initials || "",
+    };
+    const raw = (naming.template || NAMING_DEFAULT.template).replace(/\{(\w+)\}/g, (_m, k) => tokens[k] ?? "");
+    // Drop empty token gaps while preserving the "__" concept/spec separator.
+    const name = raw.split("__").map((seg) => seg.split("_").filter(Boolean).join("_")).filter(Boolean).join("__");
+    return `${name || `creative-${Date.now()}`}.${ext}`;
+  }, [naming, projectName, resKey]);
+
   const exportMp4 = useCallback(async () => {
     if (exporting || !clips.length) return;
     setExporting(true); setProgress(0); setStatus("Recording…"); stop();
@@ -1238,7 +1271,7 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `flowlab-${Date.now()}.${ext}`;
+      const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext);
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
       setStatus(mp4 ? "Done — MP4 downloaded." : "Done — WebM downloaded (browser doesn\u2019t support MP4 recording).");
     } catch (e) { console.error(e); setStatus(`Export failed: ${e instanceof Error ? e.message : "see console"}`); }
@@ -1897,6 +1930,37 @@ export default function VideoEditor({ assets, workflowId, projectId }: { assets:
             <select value={resKey} onChange={(e) => switchFormat(e.target.value)} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
               {RESOLUTIONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
+            <div className="relative">
+              <button onClick={() => setNamingOpen((o) => !o)} title="Export file name"
+                className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand inline-flex items-center gap-1">
+                <Tag size={12} /> Name
+              </button>
+              {namingOpen && (
+                <div className="absolute right-0 top-full mt-1 z-50 w-[360px] rounded-lg border border-border bg-bg-card p-3 shadow-xl text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-fg font-medium">Export file name</span>
+                    <button onClick={() => setNamingOpen(false)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
+                  </div>
+                  <label className="block text-fg-subtle mb-1">Template</label>
+                  <input value={naming.template} onChange={(e) => setNaming((n) => ({ ...n, template: e.target.value }))}
+                    className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand mb-1 font-mono text-[10px]" />
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {NAMING_TOKENS.map((tk) => (
+                      <button key={tk} onClick={() => setNaming((n) => ({ ...n, template: n.template + `{${tk}}` }))}
+                        className="px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand text-[10px] font-mono">{`{${tk}}`}</button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mb-2">
+                    <div><label className="block text-fg-subtle mb-0.5">Version</label><input value={naming.version} onChange={(e) => setNaming((n) => ({ ...n, version: e.target.value }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
+                    <div><label className="block text-fg-subtle mb-0.5">Lang</label><input value={naming.lang} onChange={(e) => setNaming((n) => ({ ...n, lang: e.target.value }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
+                    <div><label className="block text-fg-subtle mb-0.5">Initials</label><input value={naming.initials} onChange={(e) => setNaming((n) => ({ ...n, initials: e.target.value }))} placeholder="AA" className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
+                  </div>
+                  <div className="text-fg-subtle mb-0.5">Preview</div>
+                  <div className="rounded bg-bg-subtle border border-border px-2 py-1.5 text-brand font-mono text-[10px] break-all">{buildFileName("mp4")}</div>
+                  <div className="text-fg-subtle mt-2 text-[10px]">{projectName ? <>Base <span className="text-fg-muted">{`{project}`}</span> = {projectName}</> : "Open from a project so {project} fills in automatically."}</div>
+                </div>
+              )}
+            </div>
             <button onClick={exportMp4} disabled={exporting || !clips.length} className="px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
               {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{exporting ? `${progress}%` : "Export MP4"}
             </button>

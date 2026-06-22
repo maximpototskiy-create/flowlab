@@ -4,6 +4,7 @@
 // is WebCodecs-based and browser-only, so it's imported lazily inside the
 // client component (never during SSR).
 import { requireUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import TopNav from "@/components/TopNav";
 import { queryAssets } from "@/lib/assetsQuery";
 import VideoEditor, { type EditorAsset } from "@/components/editor/VideoEditor";
@@ -14,6 +15,9 @@ export default async function EditorPage({ searchParams }: { searchParams: Promi
   await requireUser();
   const { wf, proj } = await searchParams;
   const { assets } = await queryAssets({ limit: 120 });
+  const project = proj
+    ? await prisma.project.findUnique({ where: { id: proj }, select: { name: true } })
+    : null;
   const bin: EditorAsset[] = assets
     .filter((a) => a.kind === "video" || a.kind === "image" || a.kind === "audio")
     .map((a) => ({
@@ -27,7 +31,7 @@ export default async function EditorPage({ searchParams }: { searchParams: Promi
   return (
     <div className="h-screen overflow-hidden bg-bg flex flex-col">
       <TopNav activeNav="editor" />
-      <VideoEditor assets={bin} workflowId={wf} projectId={proj} />
+      <VideoEditor assets={bin} workflowId={wf} projectId={proj} projectName={project?.name ?? undefined} />
     </div>
   );
 }
