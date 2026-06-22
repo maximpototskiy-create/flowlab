@@ -887,7 +887,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "face", type: "image", label: "Face image" },
     ],
     outputs: [{ name: "image", type: "image" }],
-    defaults: { model: "easel-ai/advanced-face-swap" },
+    defaults: { model: "google/gemini-3.1-flash-image" },
     fields: [
       {
         name: "model",
@@ -895,9 +895,8 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          { value: "easel-ai/advanced-face-swap", label: "Advanced Face Swap \u2b50 (best)" },
+          { value: "google/gemini-3.1-flash-image", label: "Nano Banana \u2b50 (best)" },
           { value: "fal-ai/face-swap", label: "Face Swap (fast)" },
-          { value: "google/gemini-3.1-flash-image", label: "Nano Banana (AI compose)" },
         ],
       },
     ],

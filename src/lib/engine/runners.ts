@@ -709,7 +709,10 @@ export async function runNode(
       const source = inputs.source as string;
       const face = inputs.face as string;
       if (!source || !face) throw new Error("Connect both source and face images");
-      const model = String(config.model ?? "easel-ai/advanced-face-swap");
+      let model = String(config.model ?? "google/gemini-3.1-flash-image");
+      // Advanced Face Swap requires a gender_0 we can't infer, so legacy nodes
+      // pointing at it heal to Nano Banana (no gender needed, better quality).
+      if (model.includes("advanced-face-swap")) model = "google/gemini-3.1-flash-image";
       // Nano Banana: compose the swap via the direct Gemini image-edit path.
       if (model.startsWith("google/")) {
         const apiModel = model.split("/").slice(1).join("/");
@@ -718,11 +721,8 @@ export async function runNode(
         const persisted = await persistImageB64(b64s[0], ctx, "faceswap");
         return { outputs: { image: persisted }, costUsd: estimateCost(model), durationMs: Date.now() - t0 };
       }
-      // Each fal face-swap model uses different field names.
-      const input: Record<string, unknown> = model.includes("advanced-face-swap")
-        ? { face_image_0: face, target_image: source, workflow_type: "user_hair", upscale: true }
-        : { base_image_url: source, swap_image_url: face };
-      const r = await falRun(model, input);
+      // fal-ai/face-swap: base = scene, swap = the face to apply.
+      const r = await falRun(model, { base_image_url: source, swap_image_url: face });
       const url =
         ((r.image as { url: string } | undefined)?.url) ??
         ((r.images as { url: string }[] | undefined) ?? [])[0]?.url;
