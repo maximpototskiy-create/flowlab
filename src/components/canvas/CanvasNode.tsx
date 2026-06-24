@@ -780,18 +780,31 @@ function CanvasNodeImpl({
                 <span className="text-[8px] uppercase tracking-wider text-brand/80 font-medium">
                   ← {portDef.label ?? port}
                 </span>
-                <button
-                  type="button"
-                  className="text-[9px] text-fg-muted hover:text-fg"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void navigator.clipboard.writeText(value);
-                  }}
-                  title="Copy to clipboard"
-                >
-                  Copy
-                </button>
+                <div className="flex items-center gap-2">
+                  {port === "prompt" && (
+                    <button
+                      type="button"
+                      className="text-[9px] text-brand hover:underline"
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); onConfigChange("instructions", value); }}
+                      title="Copy into the editable prompt field so you can tweak it"
+                    >
+                      Edit
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="text-[9px] text-fg-muted hover:text-fg"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void navigator.clipboard.writeText(value);
+                    }}
+                    title="Copy to clipboard"
+                  >
+                    Copy
+                  </button>
+                </div>
               </div>
               <div className="text-fg text-[11px] leading-snug whitespace-pre-wrap break-words max-h-[80px] overflow-y-auto nodrag">
                 {value}

@@ -2166,12 +2166,17 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           onWheel={onViewWheel} onPointerDown={onPanDown}>
           {(() => {
             const hooks = brandLib.filter((a) => a.category === "hook" && (a.kind === "video" || a.kind === "image"));
+            const hookUrls = new Set(hooks.map((h) => h.url));
+            const placedHook = clips.find((c) => c.url != null && hookUrls.has(c.url));
+            const others = hooks.filter((h) => h.url !== placedHook?.url).length;
             const hasSlot = clips.some((c) => c.variants !== undefined);
-            const hasVisual = clips.some((c) => c.kind === "video" || c.kind === "image");
-            if (hooks.length < 2 || hasSlot || hookBannerDismissed || !hasVisual) return null;
+            // Only nudge when the user has actually placed a hook on the timeline
+            // AND there are other hooks to turn into versions. Avoids popping up
+            // at random moments.
+            if (!placedHook || others < 1 || hasSlot || hookBannerDismissed) return null;
             return (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-card border border-brand/40 shadow-xl text-[12px]">
-                <span className="text-fg"><span className="text-brand font-medium">{hooks.length} hooks</span> in your library \u2014 build versions automatically?</span>
+                <span className="text-fg"><span className="text-brand font-medium">{others + 1} hook versions</span> available \u2014 build them automatically?</span>
                 <button onClick={buildHookVersions} className="px-2.5 py-1 rounded-md bg-brand text-black font-medium text-[11px] whitespace-nowrap">Build versions</button>
                 <button onClick={() => setHookBannerDismissed(true)} className="text-fg-subtle hover:text-fg" aria-label="Dismiss"><X size={14} /></button>
               </div>

@@ -1013,11 +1013,11 @@ export async function runNode(
         }));
 
       if (mode === "multi-shot") {
-        const supportsMultiShot =
-          model.includes("/v3/") || model.includes("/o3/");
-        if (!supportsMultiShot) {
+        const isKlingMulti = model.includes("/v3/") || model.includes("/o3/");
+        const isSeedanceMulti = model.includes("seedance");
+        if (!isKlingMulti && !isSeedanceMulti) {
           throw new Error(
-            `Model ${model} doesn't support multi-shot. Pick a Kling V3 or O3 model (any tier) for Multi-shot mode.`,
+            `Model ${model} doesn't support multi-shot. Pick a Kling V3/O3 model or Seedance 2.0.`,
           );
         }
         if (scenes.length === 0) {
@@ -1036,7 +1036,8 @@ export async function runNode(
       }
 
       const payload: Record<string, unknown> = {};
-      if (mode === "multi-shot") {
+      const klingMultiShot = mode === "multi-shot" && (model.includes("/v3/") || model.includes("/o3/"));
+      if (klingMultiShot) {
         // multi_prompt + prompt are MUTUALLY EXCLUSIVE on Kling endpoints
         // (docs: "Either prompt or multi_prompt must be provided, but not
         // both"). Don't include `prompt` at all in this branch.
@@ -1047,7 +1048,11 @@ export async function runNode(
         // [Image1] tokens by hand. Only for ref-using modes, only when the user
         // hasn't already referenced inputs themselves. Seedance uses [Image1] /
         // [Video1] (square brackets); Kling uses @Image1.
-        let promptOut = prompt;
+        // Seedance multi-shot: express the shots as a shot list inside the
+        // prompt ("Shot 1: …") — Seedance has no multi_prompt param.
+        let promptOut = mode === "multi-shot"
+          ? scenes.map((s, i) => `Shot ${i + 1}: ${s.prompt}`).join("\n")
+          : prompt;
         if (
           (mode === "references" || mode === "video-to-video") &&
           referencesArr.length > 0 &&
@@ -1267,7 +1272,12 @@ export async function runNode(
 
         // Aspect: only auto / 16:9 / 9:16 supported.
         payload.aspect_ratio = ["auto", "16:9", "9:16"].includes(aspect) ? aspect : "auto";
-        if (resolution) payload.resolution = resolution; // Veo 3.1 accepts 720p / 1080p
+        if (resolution) {
+          payload.resolution = resolution; // Veo 3.1 accepts 720p / 1080p
+          // fal Veo: 1080p output is only valid at 8s. Keep the user's quality
+          // choice and bump duration to 8s rather than returning a 422.
+          if (resolution === "1080p" && pickedDur !== 8) payload.duration = "8s";
+        }
 
         // Audio param: Veo 3.1 uses `audio`; older Veo 3 uses `generate_audio`.
         if (isVeo31) {

@@ -2350,6 +2350,19 @@ export default function Canvas({
             return "";
           })()}
           cachedTrackUrl={(expandedNode.outputs?.track_url as string) || undefined}
+          incomingPrompt={(() => {
+            const d = NODE_TYPES[expandedNode.type];
+            const parts: string[] = [];
+            for (const edge of graph.edges) {
+              if (edge.to.nodeId !== expandedNode.id) continue;
+              const pd = d?.inputs?.find((p) => p.name === edge.to.port);
+              if (!pd || pd.type !== "text") continue;
+              const src = graph.nodes.find((n) => n.id === edge.from.nodeId);
+              const v = src?.outputs ? (src.outputs as Record<string, unknown>)[edge.from.port] : undefined;
+              if (typeof v === "string" && v.trim()) parts.push(v);
+            }
+            return parts.join("\n\n");
+          })()}
           onClose={() => setExpandedNodeId(null)}
           onConfigChange={(k, v) => updateNodeConfig(expandedNode.id, k, v)}
           onRun={() => {

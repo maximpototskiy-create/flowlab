@@ -141,6 +141,12 @@ input, textarea, select {
   color: rgb(var(--fg));
   caret-color: rgb(var(--fg));
 }
+/* Native dropdown options: solid card background + readable text (otherwise
+   they render low-contrast / faded on the dark theme). */
+option {
+  background-color: rgb(var(--bg-card));
+  color: rgb(var(--fg));
+}
 input::placeholder, textarea::placeholder {
   color: rgb(var(--fg-subtle));
   opacity: 1;

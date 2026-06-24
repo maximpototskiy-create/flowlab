@@ -18,6 +18,7 @@ export default function NodeExpandedModal({
   onRun,
   sourceVideoUrl,
   cachedTrackUrl,
+  incomingPrompt,
 }: {
   node: GraphNode;
   isRunning: boolean;
@@ -26,6 +27,7 @@ export default function NodeExpandedModal({
   onRun: () => void;
   sourceVideoUrl?: string;
   cachedTrackUrl?: string;
+  incomingPrompt?: string;
 }) {
   const [mounted, setMounted] = useState(false);
   const [trackOpen, setTrackOpen] = useState(false);
@@ -99,6 +101,21 @@ export default function NodeExpandedModal({
             ) : (
               def.primaryField && (
                 <div>
+                  {incomingPrompt && incomingPrompt.trim() && (
+                    <div className="rounded-md bg-brand/5 border border-brand/30 px-3 py-2 mb-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[9px] uppercase tracking-wider text-brand/80 font-medium">← incoming prompt</span>
+                        <button
+                          onClick={() => def.primaryField && onConfigChange(def.primaryField, incomingPrompt)}
+                          className="text-[10px] text-brand hover:underline"
+                          title="Copy into the editable field below so you can tweak it"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                      <div className="text-fg text-[12px] leading-snug whitespace-pre-wrap break-words max-h-[120px] overflow-y-auto">{incomingPrompt}</div>
+                    </div>
+                  )}
                   <label className="block text-[10px] uppercase tracking-wider text-fg-muted font-medium mb-2">
                     {def.primaryLabel ?? "Instructions"}
                   </label>

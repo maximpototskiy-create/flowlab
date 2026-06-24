@@ -58,10 +58,10 @@ export const VIDEO_MODELS: VideoModelDef[] = [
   { id: "fal-ai/kling-video/o1/standard/video-to-video/reference", label: "Kling O1 Standard — Restyle", family: "Kling O1", modes: ["video-to-video"], duration: RANGE_3_15 },
 
   // ─── Seedance 2.0 (ByteDance) — 4–15s, native audio, multi-modal refs ───
-  { id: "bytedance/seedance-2.0/image-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["image", "keyframes"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"], recommended: true },
-  { id: "bytedance/seedance-2.0/fast/image-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["image", "keyframes"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
-  { id: "bytedance/seedance-2.0/text-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["text"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
-  { id: "bytedance/seedance-2.0/fast/text-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["text"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "bytedance/seedance-2.0/image-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["image", "keyframes", "multi-shot"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"], recommended: true },
+  { id: "bytedance/seedance-2.0/fast/image-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["image", "keyframes", "multi-shot"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "bytedance/seedance-2.0/text-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["text", "multi-shot"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "bytedance/seedance-2.0/fast/text-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["text", "multi-shot"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
   { id: "bytedance/seedance-2.0/reference-to-video", label: "Seedance 2.0", family: "Seedance 2.0", modes: ["references"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
   { id: "bytedance/seedance-2.0/fast/reference-to-video", label: "Seedance 2.0 Fast", family: "Seedance 2.0", modes: ["references"], duration: RANGE_4_15, audio: true, resolutions: ["720p", "1080p"] },
 
