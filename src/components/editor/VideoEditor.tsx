@@ -2094,7 +2094,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     ) : (
                       <div className="space-y-2.5">
                         {slots.map((c) => {
-                          const mediaAssets = assets.filter((a) => a.kind === c.kind);
+                          const mediaAssets = Array.from(new Map([...assets, ...brandLib].filter((a) => a.kind === c.kind).map((a) => [a.url, a])).values());
                           return (
                             <div key={c.id} className="rounded-md border border-border p-2">
                               <div className="flex items-center justify-between mb-1.5">
@@ -2117,13 +2117,16 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                                 </div>
                               ))}
                               <button onClick={() => addOption(c.id)} className="mt-1 px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> add option</button>
-                              {c.kind !== "text" && (
-                                <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
-                                  <span className="text-fg-subtle">bulk from bin:</span>
-                                  {libCats.includes("hook") && <button onClick={() => addAllFromBin(c.id, "hook")} className="px-1.5 py-0.5 rounded border border-dashed border-border text-brand hover:border-brand">+ all hooks</button>}
-                                  <button onClick={() => addAllFromBin(c.id, "all")} className="px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand">+ all {c.kind}</button>
-                                </div>
-                              )}
+                              {c.kind !== "text" && (() => {
+                                const cats = Array.from(new Set(brandLib.filter((a) => a.kind === c.kind && a.category).map((a) => a.category as string)));
+                                return (
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
+                                    <span className="text-fg-subtle">bulk from bin:</span>
+                                    {cats.map((cat) => <button key={cat} onClick={() => addAllFromBin(c.id, cat)} className="px-1.5 py-0.5 rounded border border-dashed border-border text-brand hover:border-brand">+ all {cat}</button>)}
+                                    <button onClick={() => addAllFromBin(c.id, "all")} className="px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand">+ all {c.kind}</button>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         })}
@@ -2663,7 +2666,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 </div>
               </>
             )}
-            {isMedia && (
+            {(isMedia || c.kind === "audio") && (
               <>
                 <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Versions</div>
                 <div className="px-1 pb-1.5">
