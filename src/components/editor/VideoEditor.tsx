@@ -474,6 +474,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchFormats, setBatchFormats] = useState<Set<string>>(() => new Set(["9:16"]));
+  const [hookBannerDismissed, setHookBannerDismissed] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
   const [railTab, setRailTab] = useState<"media" | "brand" | "audio" | "text" | "subs" | "effects" | "filters">("media");
@@ -1354,6 +1355,19 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       return { ...c, variants: [...(c.variants || []), ...add] };
     }));
   }, [library, brandLib]);
+  // One-tap auto-versions: pick the opening clip as the hook slot and fill it
+  // with every Hook asset from the library.
+  const buildHookVersions = useCallback(() => {
+    const hooks = brandLib.filter((a) => a.category === "hook" && (a.kind === "video" || a.kind === "image"));
+    if (hooks.length < 2) return;
+    const hookUrls = new Set(hooks.map((h) => h.url));
+    const slot = clipsRef.current.find((c) => c.url != null && hookUrls.has(c.url)) ||
+      clipsRef.current.filter((c) => c.kind === "video" || c.kind === "image").sort((a, b) => a.start - b.start)[0];
+    if (!slot) return;
+    addAllFromBin(slot.id, "hook");
+    setVersionsOpen(true);
+    setHookBannerDismissed(true);
+  }, [brandLib, addAllFromBin]);
 
   const exportMp4 = useCallback(async () => {
     if (exporting || !clips.length) return;
@@ -2147,6 +2161,19 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         {/* Preview */}
         <div ref={containerRef} className="flex-1 min-h-0 bg-black flex items-center justify-center overflow-hidden relative"
           onWheel={onViewWheel} onPointerDown={onPanDown}>
+          {(() => {
+            const hooks = brandLib.filter((a) => a.category === "hook" && (a.kind === "video" || a.kind === "image"));
+            const hasSlot = clips.some((c) => c.variants !== undefined);
+            const hasVisual = clips.some((c) => c.kind === "video" || c.kind === "image");
+            if (hooks.length < 2 || hasSlot || hookBannerDismissed || !hasVisual) return null;
+            return (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-card border border-brand/40 shadow-xl text-[12px]">
+                <span className="text-fg"><span className="text-brand font-medium">{hooks.length} hooks</span> in your library \u2014 build versions automatically?</span>
+                <button onClick={buildHookVersions} className="px-2.5 py-1 rounded-md bg-brand text-black font-medium text-[11px] whitespace-nowrap">Build versions</button>
+                <button onClick={() => setHookBannerDismissed(true)} className="text-fg-subtle hover:text-fg" aria-label="Dismiss"><X size={14} /></button>
+              </div>
+            );
+          })()}
           {clips.length > 0 ? (
             <div className="absolute inset-0 flex items-center justify-center" style={{ overflow: "visible" }}>
               <div style={{ transform: `translate(${viewPan.x}px, ${viewPan.y}px) scale(${viewZoom})`, transformOrigin: "center" }}>
