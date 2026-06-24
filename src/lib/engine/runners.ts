@@ -1299,7 +1299,7 @@ export async function runNode(
         const persisted = await persistAsset(url, ctx, "vid");
         return {
           outputs: { video: persisted },
-          costUsd: estimateCost(actualModel, { duration: pickedDur }),
+          costUsd: estimateCost(actualModel, { duration: pickedDur, resolution }),
           durationMs: Date.now() - t0,
         };
       } else {
@@ -1323,7 +1323,7 @@ export async function runNode(
       const persisted = await persistAsset(url, ctx, "vid");
       return {
         outputs: { video: persisted },
-        costUsd: estimateCost(model, { duration: Number(duration) }),
+        costUsd: estimateCost(model, { duration: Number(duration), resolution }),
         durationMs: Date.now() - t0,
       };
     }

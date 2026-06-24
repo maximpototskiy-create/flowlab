@@ -419,7 +419,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [library, setLibrary] = useState<EditorAsset[]>(assets.filter((a) => !/\.(json|txt|srt|vtt|csv)(\?|$)/i.test(a.url)));
   const [binQuery, setBinQuery] = useState("");
   const [binBrand, setBinBrand] = useState("");
-  const [binProject, setBinProject] = useState("");
+  const [binProject, setBinProject] = useState(projectId ?? "");
   const [binSource, setBinSource] = useState("");
   const [binCategory, setBinCategory] = useState("all");
   const [binSub, setBinSub] = useState("all");

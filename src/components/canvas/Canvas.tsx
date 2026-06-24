@@ -21,6 +21,7 @@ import NodeExpandedModal from "./NodeExpandedModal";
 import CanvasToolbar from "./CanvasToolbar";
 import WorkflowBuilderPanel from "./WorkflowBuilderPanel";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
+import { estimateCost } from "@/lib/fal/pricing";
 import ActiveRunsBar from "./ActiveRunsBar";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
@@ -77,6 +78,7 @@ export default function Canvas({
   workflowMeta,
   initialGraph,
   initialActiveRun,
+  projectSpentUsd = 0,
 }: {
   workflowId: string;
   workflowName: string;
@@ -92,6 +94,7 @@ export default function Canvas({
       errorMessage: string | null;
     }[];
   } | null;
+  projectSpentUsd?: number;
 }) {
   // ─────────────────────────────── Graph state
   const [graph, setGraph] = useState<Graph>(() => {
@@ -127,6 +130,20 @@ export default function Canvas({
   // member when exactly one node is selected — used by actions that only
   // make sense for one node (copy/duplicate/run/expand).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Estimated cost of one full run of the currently-built workflow (sum of
+  // each generation node's estimated cost). Updates live as the graph changes.
+  const workflowEstimateUsd = useMemo(() => {
+    let sum = 0;
+    for (const n of graph.nodes) {
+      const cfg = (n.config ?? {}) as Record<string, unknown>;
+      const model = String(cfg.model ?? "");
+      if (!model) continue;
+      const duration = Number(cfg.duration) || undefined;
+      const numImages = Number(cfg.numResults ?? cfg.numImages ?? cfg.num_images) || undefined;
+      sum += estimateCost(model, { duration, numImages, resolution: String(cfg.resolution ?? "") });
+    }
+    return sum;
+  }, [graph.nodes]);
   const selected = selectedIds.size === 1 ? [...selectedIds][0] : null;
   // Ref mirror so group ops can read the current selection without nesting
   // setGraph inside a setSelectedIds updater (that double-fires in strict
@@ -2229,7 +2246,7 @@ export default function Canvas({
             />
           )}
 
-          <RunsPanel runs={runs} />
+          <RunsPanel runs={runs} projectSpentUsd={projectSpentUsd} workflowEstimateUsd={workflowEstimateUsd} />
         </div>
       </div>
 

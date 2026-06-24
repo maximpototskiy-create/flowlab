@@ -23,9 +23,13 @@ export type RunSummary = {
 export default function RunsPanel({
   runs,
   onClick,
+  projectSpentUsd = 0,
+  workflowEstimateUsd = 0,
 }: {
   runs: RunSummary[];
   onClick?: (runId: string) => void;
+  projectSpentUsd?: number;
+  workflowEstimateUsd?: number;
 }) {
   const [collapsed, setCollapsed] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -75,7 +79,8 @@ export default function RunsPanel({
     });
   }
 
-  if (runs.length === 0) return null;
+  if (runs.length === 0 && workflowEstimateUsd <= 0) return null;
+  const fmtUsd = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(n >= 0.1 ? 2 : 3)}`);
 
   return (
     <div
@@ -104,6 +109,19 @@ export default function RunsPanel({
           {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </button>
       </div>
+
+      {/* Cost summary — project spend (actual) + this workflow's per-run
+          estimate. Always visible (not gated by the collapse toggle). */}
+      <div className="px-3.5 py-2 border-b border-border flex items-center justify-between text-[10px]">
+        <span className="text-fg-subtle">Project spent</span>
+        <span className="text-fg-muted tabular-nums">{fmtUsd(projectSpentUsd)}</span>
+      </div>
+      {workflowEstimateUsd > 0 && (
+        <div className="px-3.5 py-2 border-b border-border flex items-center justify-between text-[10px]">
+          <span className="text-fg-subtle">This workflow (est. / run)</span>
+          <span className="text-brand tabular-nums">~{fmtUsd(workflowEstimateUsd)}</span>
+        </div>
+      )}
 
       {!collapsed && (
         <div className="max-h-80 overflow-y-auto">

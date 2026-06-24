@@ -23,6 +23,13 @@ export default async function WorkflowPage({
 
   if (!workflow || workflow.projectId !== id) notFound();
 
+  // Total actually spent across the whole project (all its workflows' runs).
+  const spentAgg = await prisma.run.aggregate({
+    _sum: { totalCostUsd: true },
+    where: { workflow: { projectId: id } },
+  });
+  const projectSpentUsd = spentAgg._sum.totalCostUsd ?? 0;
+
   // If there's already a Run in flight for this workflow (because the user
   // started a generation, navigated away, and just came back), grab it.
   // Canvas will use it to immediately paint spinners on the right nodes
@@ -86,6 +93,7 @@ export default async function WorkflowPage({
         }}
         initialGraph={graph}
         initialActiveRun={initialActiveRun}
+        projectSpentUsd={projectSpentUsd}
       />
     </div>
   );
