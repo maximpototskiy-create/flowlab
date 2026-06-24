@@ -607,9 +607,20 @@ export default function Canvas({
         newNodes.push(nn);
       }
       if (newNodes.length === 0) return g;
-      const newEdges = g.edges
-        .filter((e) => idMap.has(e.from.nodeId) && idMap.has(e.to.nodeId))
-        .map((e) => makeEdge(idMap.get(e.from.nodeId)!, e.from.port, idMap.get(e.to.nodeId)!, e.to.port));
+      // Internal edges (both ends duplicated) are remapped to the copies.
+      // Incoming edges from OUTSIDE the selection are replicated so each
+      // duplicate is fed by the same upstream sources as its original
+      // (duplicate a node and it stays wired to its inputs).
+      const newEdges = [] as ReturnType<typeof makeEdge>[];
+      for (const e of g.edges) {
+        const fromDup = idMap.has(e.from.nodeId);
+        const toDup = idMap.has(e.to.nodeId);
+        if (fromDup && toDup) {
+          newEdges.push(makeEdge(idMap.get(e.from.nodeId)!, e.from.port, idMap.get(e.to.nodeId)!, e.to.port));
+        } else if (toDup) {
+          newEdges.push(makeEdge(e.from.nodeId, e.from.port, idMap.get(e.to.nodeId)!, e.to.port));
+        }
+      }
       requestAnimationFrame(() => setSelectedIds(new Set(newNodes.map((n) => n.id))));
       return { ...g, nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] };
     });
@@ -1236,22 +1247,41 @@ export default function Canvas({
         return;
       }
 
-      // Cmd/Ctrl+C → copy selected node to clipboard
-      if (meta && e.key.toLowerCase() === "c" && selected) {
+      // Cmd/Ctrl+C → copy selected node(s) + their internal edges to a
+      // persistent clipboard (localStorage) so they can be pasted into ANY
+      // project's canvas, not just this one.
+      if (meta && e.key.toLowerCase() === "c" && selectedIds.size > 0) {
         e.preventDefault();
-        const n = graph.nodes.find((x) => x.id === selected);
-        if (n) clipboard.current = n;
+        const ids = selectedIds;
+        const nodes = graph.nodes.filter((x) => ids.has(x.id));
+        const edges = graph.edges.filter((ed) => ids.has(ed.from.nodeId) && ids.has(ed.to.nodeId));
+        try { localStorage.setItem("flowlab.clipboard.v1", JSON.stringify({ nodes, edges })); } catch { /* quota */ }
+        clipboard.current = nodes[0] ?? null;
         return;
       }
 
-      // Cmd/Ctrl+V → paste clipboard node at offset
-      if (meta && e.key.toLowerCase() === "v" && clipboard.current) {
+      // Cmd/Ctrl+V → paste clipboard (nodes + internal edges) at an offset.
+      if (meta && e.key.toLowerCase() === "v") {
         e.preventDefault();
-        const src = clipboard.current;
-        const newNode = makeNode(src.type, { x: src.position.x + 30, y: src.position.y + 30 });
-        newNode.config = JSON.parse(JSON.stringify(src.config));
-        setGraph((g) => ({ ...g, nodes: [...g.nodes, newNode] }));
-        setSelected(newNode.id);
+        let payload: { nodes: GraphNode[]; edges: { from: { nodeId: string; port: string }; to: { nodeId: string; port: string } }[] } | null = null;
+        try { const raw = localStorage.getItem("flowlab.clipboard.v1"); if (raw) payload = JSON.parse(raw); } catch { /* */ }
+        if ((!payload || !payload.nodes?.length) && clipboard.current) payload = { nodes: [clipboard.current], edges: [] };
+        if (!payload || !payload.nodes?.length) return;
+        const OFFSET = 40;
+        setGraph((g) => {
+          const idMap = new Map<string, string>();
+          const newNodes = payload!.nodes.map((src) => {
+            const nn = makeNode(src.type, { x: (src.position?.x ?? 0) + OFFSET, y: (src.position?.y ?? 0) + OFFSET });
+            nn.config = JSON.parse(JSON.stringify(src.config ?? {}));
+            idMap.set(src.id, nn.id);
+            return nn;
+          });
+          const newEdges = (payload!.edges ?? [])
+            .filter((ed) => idMap.has(ed.from.nodeId) && idMap.has(ed.to.nodeId))
+            .map((ed) => makeEdge(idMap.get(ed.from.nodeId)!, ed.from.port, idMap.get(ed.to.nodeId)!, ed.to.port));
+          requestAnimationFrame(() => setSelectedIds(new Set(newNodes.map((n) => n.id))));
+          return { ...g, nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] };
+        });
         return;
       }
 
@@ -1265,16 +1295,8 @@ export default function Canvas({
         );
         if (grp) {
           duplicateGroup(grp.id);
-        } else if (selectedIds.size > 1) {
+        } else {
           duplicateSelection();
-        } else if (selected) {
-          const src = graph.nodes.find((x) => x.id === selected);
-          if (src) {
-            const newNode = makeNode(src.type, { x: src.position.x + 30, y: src.position.y + 30 });
-            newNode.config = JSON.parse(JSON.stringify(src.config));
-            setGraph((g) => ({ ...g, nodes: [...g.nodes, newNode] }));
-            setSelected(newNode.id);
-          }
         }
         return;
       }
@@ -1296,7 +1318,7 @@ export default function Canvas({
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, groupSelected, ungroupSelected, duplicateGroup, duplicateSelection, undo, redo, graph.nodes, graph.groups, ]);
+  }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, groupSelected, ungroupSelected, duplicateGroup, duplicateSelection, undo, redo, graph.nodes, graph.edges, graph.groups, ]);
 
   // ─────────────────────────────── Pan & background interaction
   function onCanvasPointerDown(e: React.PointerEvent) {

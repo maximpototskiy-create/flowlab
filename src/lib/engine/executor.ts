@@ -6,6 +6,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { runNode, type RunnerContext, type RunnerResult } from "./runners";
+import { falRealCost } from "@/lib/fal/client";
 import { kindFromMime } from "@/lib/storage";
 import type { Graph, GraphNode } from "@/lib/canvas/types";
 import { NODE_TYPES } from "@/lib/canvas/types";
@@ -255,7 +256,21 @@ async function executeOne(
 
     state.outputs.set(node.id, result.outputs);
     if (result.results) state.results.set(node.id, result.results);
-    state.costByNode.set(node.id, result.costUsd);
+    // Real cost: re-price the step against fal's official unit prices (cached)
+    // so the recorded spend matches fal billing. Direct Google/OpenAI (corp
+    // keys) resolve to 0; unknown endpoints fall back to the local estimate.
+    let cost = result.costUsd;
+    const stepModel = (node.config?.model as string) ?? "";
+    if (stepModel) {
+      try {
+        cost = await falRealCost(stepModel, {
+          numImages: Number(node.config?.numResults ?? node.config?.numImages) || 1,
+          duration: Number(node.config?.duration) || 1,
+          resolution: String(node.config?.resolution ?? ""),
+        });
+      } catch { cost = result.costUsd; }
+    }
+    state.costByNode.set(node.id, cost);
     state.durationByNode.set(node.id, result.durationMs);
     state.status.set(node.id, "done");
 
@@ -327,7 +342,7 @@ async function executeOne(
       data: {
         status: "done",
         finishedAt: new Date(),
-        costUsd: result.costUsd,
+        costUsd: cost,
         outputData: result.outputs as never,
       },
     });

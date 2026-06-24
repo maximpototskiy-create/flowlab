@@ -270,4 +270,48 @@ async function falLLMVision(
 // Cost estimation — rough per-model pricing in USD.
 // Values are approximations; used only for display.
 // ─────────────────────────────────────────────
-export { estimateCost } from "./pricing";
+import { estimateCost } from "./pricing";
+export { estimateCost };
+
+// ── Real fal pricing ──────────────────────────────────────────────────────
+// fal exposes official per-endpoint unit prices at GET /v1/models/pricing.
+// We fetch on demand and cache for 6h, then price each request against it.
+const _falPriceCache = new Map<string, { price: number; unit: string; at: number }>();
+async function getFalPrice(endpointId: string): Promise<{ price: number; unit: string } | null> {
+  const c = _falPriceCache.get(endpointId);
+  if (c && Date.now() - c.at < 6 * 3600 * 1000) return { price: c.price, unit: c.unit };
+  const keys = getFalKeys();
+  if (keys.length === 0) return null;
+  try {
+    const res = await fetch(`https://api.fal.ai/v1/models/pricing?endpoint_ids=${encodeURIComponent(endpointId)}`, {
+      headers: { Authorization: `Key ${keys[0]}` },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { prices?: { endpoint_id: string; unit_price: number; unit: string }[] };
+    const p = data.prices?.find((x) => x.endpoint_id === endpointId) ?? data.prices?.[0];
+    if (!p || typeof p.unit_price !== "number") return null;
+    _falPriceCache.set(endpointId, { price: p.unit_price, unit: p.unit ?? "", at: Date.now() });
+    return { price: p.unit_price, unit: p.unit ?? "" };
+  } catch { return null; }
+}
+
+/** Real per-request cost. Uses fal's official unit price where available, but
+ *  never below the local estimate (fal's single per-endpoint price doesn't
+ *  capture video resolution, so the resolution-aware estimate guards against
+ *  undercounting 1080p/4K). Direct Google/OpenAI corp-key models resolve to 0. */
+export async function falRealCost(
+  model: string,
+  params: { numImages?: number; duration?: number; resolution?: string } = {},
+): Promise<number> {
+  if (model.startsWith("google/") || model.startsWith("openai/")) return 0;
+  const est = estimateCost(model, params);
+  const info = await getFalPrice(model);
+  if (info && info.price > 0) {
+    const unit = info.unit.toLowerCase();
+    let falCost = info.price;
+    if (unit.includes("second")) falCost = info.price * (params.duration ?? 1);
+    else if (unit.includes("image") || unit.includes("megapixel") || unit.includes("frame") || unit === "mp") falCost = info.price * (params.numImages ?? 1);
+    return Math.max(falCost, est);
+  }
+  return est;
+}
