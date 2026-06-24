@@ -962,6 +962,16 @@ function CanvasNodeImpl({
                 fname === "aspect" && isKlingV3I2V
                   ? "Kling V3 inherits aspect from the start image — this field is ignored."
                   : undefined;
+              if (node.type === "voiceover" && fname === "voice") {
+                return (
+                  <VoicePreviewField
+                    key={fname}
+                    field={f}
+                    voice={String(node.config.voice ?? "")}
+                    onChange={(v) => onConfigChange("voice", v)}
+                  />
+                );
+              }
               return (
                 <QuickField
                   key={fname}
@@ -1273,6 +1283,65 @@ const KIND_ICON: Record<string, typeof Circle> = {
   audio: Music,
   any: Circle,
 };
+
+// Voiceover voice picker: the catalog <select> plus a play button that
+// previews the selected voice. The preview is generated once via fal and the
+// resulting audio URL cached in localStorage, so replays are instant + free.
+function VoicePreviewField({
+  field,
+  voice,
+  onChange,
+}: {
+  field: FieldDef;
+  voice: string;
+  onChange: (v: unknown) => void;
+}) {
+  const [playing, setPlaying] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => () => audioRef.current?.pause(), []);
+
+  const preview = async () => {
+    if (playing) { audioRef.current?.pause(); setPlaying(false); return; }
+    if (!voice) return;
+    const cacheKey = `flowlab.voicePreview.${voice}`;
+    let url = "";
+    try { url = localStorage.getItem(cacheKey) || ""; } catch { /* */ }
+    if (!url) {
+      setLoading(true);
+      try {
+        const r = await fetch(`/api/voice-preview?voice=${encodeURIComponent(voice)}`);
+        const j = (await r.json()) as { url?: string };
+        url = j.url || "";
+        if (url) { try { localStorage.setItem(cacheKey, url); } catch { /* */ } }
+      } catch { /* */ } finally { setLoading(false); }
+    }
+    if (!url) return;
+    audioRef.current?.pause();
+    const a = new Audio(url);
+    a.volume = 0.9;
+    a.onended = () => setPlaying(false);
+    audioRef.current = a;
+    setPlaying(true);
+    a.play().catch(() => setPlaying(false));
+  };
+
+  return (
+    <div className="inline-flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
+      <QuickField field={field} value={voice} onChange={onChange} />
+      <button
+        type="button"
+        disabled={!voice || loading}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); preview(); }}
+        title={loading ? "Generating preview…" : "Preview voice"}
+        className="w-7 h-7 rounded-md border border-border grid place-items-center text-[11px] text-fg-muted hover:text-fg disabled:opacity-30 shrink-0"
+      >
+        {loading ? "…" : playing ? "\u23f8" : "\u25b6"}
+      </button>
+    </div>
+  );
+}
 
 function QuickField({
   field,
