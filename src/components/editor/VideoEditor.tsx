@@ -1342,6 +1342,18 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const removeOption = useCallback((id: string, vId: string) =>
     setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).filter((v) => v.id !== vId) } : c))), []);
   const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
+  // Bulk-add every matching bin asset as a variant in one click (e.g. all 10
+  // generated hooks -> 10 versions, no per-item clicking).
+  const addAllFromBin = useCallback((id: string, category: string) => {
+    setClips((cs) => cs.map((c) => {
+      if (c.id !== id) return c;
+      const pool = (category === "all" ? [...library, ...brandLib] : brandLib.filter((a) => a.category === category)).filter((a) => a.kind === c.kind && a.url);
+      const existing = new Set<string>([c.url, ...(c.variants || []).map((v) => v.url)].filter((u): u is string => !!u));
+      const add: { id: string; url: string }[] = [];
+      for (const a of pool) { if (existing.has(a.url)) continue; existing.add(a.url); add.push({ id: `vr-${a.id}`, url: a.url }); }
+      return { ...c, variants: [...(c.variants || []), ...add] };
+    }));
+  }, [library, brandLib]);
 
   const exportMp4 = useCallback(async () => {
     if (exporting || !clips.length) return;
@@ -2091,6 +2103,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                                 </div>
                               ))}
                               <button onClick={() => addOption(c.id)} className="mt-1 px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> add option</button>
+                              {c.kind !== "text" && (
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
+                                  <span className="text-fg-subtle">bulk from bin:</span>
+                                  {libCats.includes("hook") && <button onClick={() => addAllFromBin(c.id, "hook")} className="px-1.5 py-0.5 rounded border border-dashed border-border text-brand hover:border-brand">+ all hooks</button>}
+                                  <button onClick={() => addAllFromBin(c.id, "all")} className="px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand">+ all {c.kind}</button>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
