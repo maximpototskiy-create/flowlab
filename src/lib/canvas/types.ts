@@ -265,7 +265,7 @@ function llmNode(opts: {
       temperature: opts.defaultTemp ?? 0.7,
       // Brand kit voice + screenshots auto-attached by default. User can
       // flip OFF in expanded settings for off-brand experiments.
-      useBrandKit: true,
+      useBrandKit: false,
     },
     fields: llmFields(),
     primaryField: "instructions",
@@ -431,7 +431,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       // having to delete the brand or its kit. Has no effect when the
       // workflow isn't inside a brand, or when Brand Assets node is
       // wired upstream (explicit takes precedence).
-      useBrandKit: true,
+      useBrandKit: false,
     },
     fields: [
       {

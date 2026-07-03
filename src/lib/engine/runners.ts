@@ -299,7 +299,7 @@ export async function runNode(
       //   1. user hasn't wired their own references AND
       //   2. "Use brand kit" toggle is on (default true; old nodes lacking
       //      the field also default true for backwards compatibility).
-      const useBrandKit = config.useBrandKit !== false;
+      const useBrandKit = config.useBrandKit === true; // default OFF - attach brand kit only when explicitly enabled
       const brandImages =
         useBrandKit && userImages.length === 0
           ? (ctx.brandUiScreenshots ?? [])
@@ -360,7 +360,7 @@ export async function runNode(
       //   2. user disabled "Use brand kit" toggle on this node.
       // For old workflows without the toggle (config.useBrandKit undefined),
       // we default to TRUE so behaviour matches what was working before.
-      const useBrandKit = config.useBrandKit !== false; // default true
+      const useBrandKit = config.useBrandKit === true; // default OFF - attach brand kit only when explicitly enabled
       const brandRefs =
         useBrandKit && userRefs.length === 0
           ? (ctx.brandUiScreenshots ?? [])

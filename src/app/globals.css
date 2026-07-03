@@ -146,6 +146,18 @@ input, textarea, select {
 option {
   background-color: rgb(var(--bg-card));
   color: rgb(var(--fg));
+  /* keep dropdown item text off the plate edges */
+  padding: 6px 10px;
+}
+
+/* Safe-zone padding for text fields that don't set their own horizontal
+   padding (Tailwind px-*/p-* classes win by specificity where present), so
+   text and placeholders never hug rounded borders or focus rings. */
+input[type="text"]:not([class*="px-"]):not([class*="p-"]),
+input:not([type]):not([class*="px-"]):not([class*="p-"]),
+input[type="search"]:not([class*="px-"]):not([class*="p-"]),
+textarea:not([class*="px-"]):not([class*="p-"]) {
+  padding-inline: 10px;
 }
 input::placeholder, textarea::placeholder {
   color: rgb(var(--fg-subtle));

@@ -356,186 +356,356 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
   const tctx = tcanvas.getContext("2d");
   if (!tctx) throw new Error("no 2d context");
 
-  // audio graph — each element goes through its own GainNode so volumes above
-  // 100% actually work (HTMLMediaElement.volume is clamped to 1 by browsers).
-  let audioStream: MediaStream | null = null;
-  let audioCtx: AudioContext | null = null;
-  const gains = new Map<string, GainNode>();
-  try {
-    const AC: typeof AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    audioCtx = new AC();
-    await audioCtx.resume();
-    const dest = audioCtx.createMediaStreamDestination();
-    let any = false;
+  // One draw pass shared by both render paths (offline WebCodecs + realtime).
+  const drawFrame = (tt: number) => {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, W, H);
     for (const c of clips) {
-      const el = c.kind === "video" ? videos.get(c.id) : c.kind === "audio" ? audios.get(c.id) : undefined;
+      if (c.kind === "audio") continue;
+      if (!(tt >= c.start && tt < c.start + c.duration)) continue;
+
+      if (c.kind === "adjust") {
+        if (!c.fx) continue;
+        // filter only what's already drawn below this layer
+        tctx.clearRect(0, 0, W, H);
+        tctx.drawImage(canvas, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+        ctx.filter = c.fx;
+        ctx.drawImage(tcanvas, 0, 0);
+        ctx.filter = "none";
+        continue;
+      }
+      if (c.kind === "fx") {
+        ctx.save();
+        ctx.globalAlpha = alphaAt(c, tt) || 1;
+        drawFx(ctx, c.fx, W, H);
+        ctx.restore();
+        continue;
+      }
+
+      const v = clipVisual(c as CompClip, tt, clips as CompClip[]);
+      if (v.opacity <= 0.001) continue;
+      ctx.save();
+      ctx.globalAlpha = v.opacity;
+      if (v.reveal != null) { ctx.beginPath(); ctx.rect(0, 0, W * v.reveal, H); ctx.clip(); }
+      if (c.kind === "video" || c.kind === "image") {
+        const el: HTMLVideoElement | HTMLImageElement | undefined = c.kind === "video" ? videos.get(c.id) : images.get(c.id);
+        if (el) {
+          const mw = c.kind === "video" ? (el as HTMLVideoElement).videoWidth : (el as HTMLImageElement).naturalWidth;
+          const mh = c.kind === "video" ? (el as HTMLVideoElement).videoHeight : (el as HTMLImageElement).naturalHeight;
+          if (mw && mh) {
+            // Fit mode drives how media adapts to THIS canvas aspect, so one
+            // layout renders correctly in every format. Default: video fills
+            // (cover), images fit whole (contain). x/y/scale are fine offsets.
+            const fitMode = c.fit ?? (c.kind === "video" ? "cover" : "contain");
+            const ratio = fitMode === "cover" ? Math.max(W / mw, H / mh) : Math.min(W / mw, H / mh);
+            const fit = ratio * (c.scale || 1) * v.scaleMul;
+            const dw = mw * fit, dh = mh * fit;
+            const dx = (W - dw) / 2 + (c.x || 0) * W + v.offX * W;
+            const dy = (H - dh) / 2 + (c.y || 0) * H + v.offY * H;
+            if (c.blend === "screen" || c.blend === "multiply") ctx.globalCompositeOperation = c.blend;
+            // "blur" fills the letterbox bars with a blurred cover copy behind.
+            if (fitMode === "blur") {
+              const cov = Math.max(W / mw, H / mh) * (c.scale || 1) * v.scaleMul;
+              const bw = mw * cov, bh = mh * cov;
+              ctx.save();
+              ctx.filter = `blur(${Math.max(8, Math.round(W / 50))}px)`;
+              try { ctx.drawImage(el, (W - bw) / 2 + (c.x || 0) * W + v.offX * W, (H - bh) / 2 + (c.y || 0) * H + v.offY * H, bw, bh); } catch { /* */ }
+              ctx.restore();
+            }
+            if (c.keyColor) drawKeyed(ctx, el, c, dx, dy, dw, dh);
+            else { try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ } }
+            ctx.globalCompositeOperation = "source-over";
+          }
+        }
+      } else if (c.kind === "text") {
+        drawCaption(ctx, c, tt, W, H, sx, { opacity: v.opacity, scaleMul: 1, offX: 0, offY: 0 });
+      }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  const cleanupMedia = () => {
+    for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
+    for (const a of audios.values()) { try { a.pause(); } catch { /* */ } }
+  };
+
+  // ---- Path 1: OFFLINE frame-by-frame render via WebCodecs ------------------
+  // Deterministic (each frame is seeked, drawn and encoded explicitly), does
+  // not depend on wall-clock playback, usually faster than realtime and keeps
+  // working when the tab is in the background (no requestAnimationFrame).
+  const wc = typeof window !== "undefined"
+    && typeof (window as unknown as { VideoEncoder?: unknown }).VideoEncoder === "function"
+    && typeof (window as unknown as { AudioEncoder?: unknown }).AudioEncoder === "function";
+  if (wc) {
+    try {
+      const res = await exportOffline();
+      cleanupMedia();
+      return res;
+    } catch (e) {
+      console.warn("[export] WebCodecs render failed - falling back to realtime capture:", e);
+    }
+  }
+  const res = await exportRealtime();
+  cleanupMedia();
+  return res;
+
+  // Seek every video that is active at tt and wait for the frames to be ready.
+  function seekActiveVideos(tt: number, fps: number): Promise<void> {
+    const waits: Promise<void>[] = [];
+    for (const c of clips) {
+      if (c.kind !== "video") continue;
+      const el = videos.get(c.id);
       if (!el) continue;
+      if (!(tt >= c.start && tt < c.start + c.duration)) continue;
+      const loc = Math.min(tt - c.start + (c.inset || 0), Math.max(0, (el.duration || 1e9) - 0.001));
+      if (!el.seeking && Math.abs(el.currentTime - loc) <= 1 / (fps * 2)) continue;
+      waits.push(new Promise<void>((res2) => {
+        let done = false;
+        const fin = () => { if (done) return; done = true; el.removeEventListener("seeked", fin); clearTimeout(tm); res2(); };
+        const tm = setTimeout(fin, 2000); // safety net - never hang on a bad seek
+        el.addEventListener("seeked", fin);
+        try { el.currentTime = loc; } catch { fin(); }
+      }));
+    }
+    return Promise.all(waits).then(() => undefined);
+  }
+
+  // Mix the whole audio track deterministically with OfflineAudioContext,
+  // reproducing the preview volume curve (fades, transitions, gain > 100%).
+  async function mixAudioOffline(): Promise<AudioBuffer | null> {
+    const audible = clips.filter((c) => (c.kind === "video" || c.kind === "audio") && c.url && !c.muted && (c.volume ?? 1) > 0);
+    if (!audible.length) return null;
+    const sr = 48000;
+    const octx = new OfflineAudioContext(2, Math.max(1, Math.ceil(total * sr)), sr);
+    let any = false;
+    for (const c of audible) {
       try {
-        const src = audioCtx.createMediaElementSource(el);
-        const g = audioCtx.createGain();
-        g.gain.value = 0;
-        src.connect(g); g.connect(dest);
-        gains.set(c.id, g);
+        const resp = await fetch(corsUrl(c.url!));
+        if (!resp.ok) continue;
+        const buf = await octx.decodeAudioData(await resp.arrayBuffer());
+        const src = octx.createBufferSource();
+        src.buffer = buf;
+        const g = octx.createGain();
+        const base = c.volume ?? 1;
+        const t0 = Math.max(0, c.start), t1 = c.start + c.duration;
+        g.gain.setValueAtTime(0, 0);
+        g.gain.setValueAtTime(Math.max(0, alphaAt(c, t0) * base), t0);
+        for (let t = t0 + 0.05; t < t1; t += 0.05) g.gain.linearRampToValueAtTime(Math.max(0, alphaAt(c, t) * base), t);
+        g.gain.linearRampToValueAtTime(0, t1);
+        src.connect(g); g.connect(octx.destination);
+        src.start(t0, Math.max(0, c.inset || 0), Math.max(0.01, c.duration));
         any = true;
+      } catch { /* clip without decodable audio - skip */ }
+    }
+    if (!any) return null;
+    return await octx.startRendering();
+  }
+
+  async function exportOffline(): Promise<{ blob: Blob; ext: string; mp4: boolean }> {
+    const fps = 30;
+    const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
+
+    // pick a supported H.264 encoder config (highest profile/level first)
+    const codecs = ["avc1.640033", "avc1.640028", "avc1.4d0028", "avc1.42001f"];
+    let codec = "";
+    for (const cdc of codecs) {
+      try {
+        const sup = await VideoEncoder.isConfigSupported({ codec: cdc, width: W, height: H, framerate: fps, bitrate: 10_000_000 });
+        if (sup.supported) { codec = cdc; break; }
       } catch { /* */ }
     }
-    if (any) audioStream = dest.stream;
-  } catch (e) { console.warn("[export] audio routing failed", e); }
+    if (!codec) throw new Error("no supported H.264 encoder config");
 
-  const fps = 30;
-  const vStream = canvas.captureStream(fps);
-  const tracks = [...vStream.getVideoTracks(), ...(audioStream ? audioStream.getAudioTracks() : [])];
-  const stream = new MediaStream(tracks);
+    const audioBuf = await mixAudioOffline();
 
-  const { type, mp4 } = pickMime();
-  const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
-  const chunks: BlobPart[] = [];
-  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-  const stopped = new Promise<Blob>((resolve) => { rec.onstop = () => resolve(new Blob(chunks, { type: type || "video/webm" })); });
+    const muxer = new Muxer({
+      target: new ArrayBufferTarget(),
+      video: { codec: "avc", width: W, height: H },
+      ...(audioBuf ? { audio: { codec: "aac" as const, numberOfChannels: 2, sampleRate: 48000 } } : {}),
+      fastStart: "in-memory",
+    });
 
-  // reset media to 0
-  for (const v of videos.values()) { try { v.currentTime = 0; } catch { /* */ } }
-  for (const a of audios.values()) { try { a.currentTime = 0; } catch { /* */ } }
+    let encError: Error | null = null;
+    const venc = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (e) => { encError = e as Error; },
+    });
+    venc.configure({ codec, width: W, height: H, framerate: fps, bitrate: 10_000_000 });
 
-  rec.start(100);
-  const startTs = performance.now();
-
-  // Browsers throttle requestAnimationFrame to ~0 in background tabs while
-  // MediaRecorder keeps recording wall-clock time. That produced frozen
-  // stretches, overlong files, and skipped tail clips (e.g. the packshot)
-  // whenever the tab lost focus mid-render. Mitigation: freeze the whole
-  // export (recorder, media, and the virtual clock) while the tab is hidden
-  // and resume seamlessly when it is visible again.
-  let hiddenAccum = 0;
-  let hiddenSince = 0;
-  const onVis = () => {
-    if (document.hidden) {
-      hiddenSince = performance.now();
-      try { if (rec.state === "recording") rec.pause(); } catch { /* */ }
-      for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
-      for (const a of audios.values()) { try { a.pause(); } catch { /* */ } }
-    } else {
-      if (hiddenSince) { hiddenAccum += performance.now() - hiddenSince; hiddenSince = 0; }
-      try { if (rec.state === "paused") rec.resume(); } catch { /* */ }
+    if (audioBuf) {
+      let aErr: Error | null = null;
+      const aenc = new AudioEncoder({
+        output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+        error: (e) => { aErr = e as Error; },
+      });
+      aenc.configure({ codec: "mp4a.40.2", sampleRate: 48000, numberOfChannels: 2, bitrate: 192_000 });
+      const step = 24_000; // 0.5s per AudioData packet
+      const ch0 = audioBuf.getChannelData(0);
+      const ch1 = audioBuf.numberOfChannels > 1 ? audioBuf.getChannelData(1) : ch0;
+      for (let off = 0; off < audioBuf.length; off += step) {
+        const n = Math.min(step, audioBuf.length - off);
+        const data = new Float32Array(n * 2);
+        data.set(ch0.subarray(off, off + n), 0);
+        data.set(ch1.subarray(off, off + n), n);
+        const ad = new AudioData({ format: "f32-planar", sampleRate: 48000, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round((off / 48000) * 1e6), data });
+        aenc.encode(ad);
+        ad.close();
+      }
+      await aenc.flush();
+      aenc.close();
+      if (aErr) throw aErr;
     }
-  };
-  document.addEventListener("visibilitychange", onVis);
 
-  // verify the canvas isn't tainted (cross-origin) early — draw 1 frame then read
-  await new Promise<void>((resolve, reject) => {
-    const draw = () => {
-      if (document.hidden) { requestAnimationFrame(draw); return; }
-      const tt = (performance.now() - startTs - hiddenAccum) / 1000;
-      p.onProgress?.(Math.min(1, tt / total));
-      if (tt >= total) { resolve(); return; }
+    // offline path drives videos purely by seeking - make sure nothing plays
+    for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
 
-      // drive media playback
+    const totalFrames = Math.max(1, Math.round(total * fps));
+    for (let f = 0; f < totalFrames; f++) {
+      if (encError) throw encError;
+      const tt = f / fps;
+      await seekActiveVideos(tt, fps);
+      drawFrame(tt);
+      if (f === 0) {
+        try { ctx!.getImageData(0, 0, 1, 1); }
+        catch { throw new Error("canvas tainted (SecurityError) - CORS on the media bucket"); }
+      }
+      const frame = new VideoFrame(canvas, { timestamp: Math.round(tt * 1e6), duration: Math.round(1e6 / fps) });
+      venc.encode(frame, { keyFrame: f % (fps * 2) === 0 });
+      frame.close();
+      // Backpressure via the encoder's dequeue event: timers are throttled in
+      // background tabs, encoder callbacks are not.
+      if (venc.encodeQueueSize > 8) {
+        await new Promise<void>((res2) => venc.addEventListener("dequeue", () => res2(), { once: true }));
+      }
+      p.onProgress?.(f / totalFrames);
+    }
+    await venc.flush();
+    venc.close();
+    muxer.finalize();
+    p.onProgress?.(1);
+    const buffer = muxer.target.buffer;
+    return { blob: new Blob([buffer], { type: "video/mp4" }), ext: "mp4", mp4: true };
+  }
+
+  // ---- Path 2 (fallback): realtime capture via MediaRecorder ----------------
+  async function exportRealtime(): Promise<{ blob: Blob; ext: string; mp4: boolean }> {
+    // audio graph - each element goes through its own GainNode so volumes above
+    // 100% actually work (HTMLMediaElement.volume is clamped to 1 by browsers).
+    let audioStream: MediaStream | null = null;
+    let audioCtx: AudioContext | null = null;
+    const gains = new Map<string, GainNode>();
+    try {
+      const AC: typeof AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      audioCtx = new AC();
+      await audioCtx.resume();
+      const dest = audioCtx.createMediaStreamDestination();
+      let any = false;
       for (const c of clips) {
         const el = c.kind === "video" ? videos.get(c.id) : c.kind === "audio" ? audios.get(c.id) : undefined;
         if (!el) continue;
-        const active = tt >= c.start && tt < c.start + c.duration;
-        if (active) {
-          const loc = tt - c.start + (c.inset || 0);
-          if (Math.abs(el.currentTime - loc) > 0.35) { try { el.currentTime = loc; } catch { /* */ } }
-          const vol = Math.max(0, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)));
-          const g = gains.get(c.id);
-          if (g) g.gain.value = vol; // GainNode supports >1 (volume boost)
-          else { try { (el as HTMLMediaElement).volume = Math.min(1, vol); } catch { /* */ } }
-          if (el.paused) el.play().catch(() => {});
-        } else {
-          if (!el.paused) el.pause();
-          const ahead = c.start - tt;
-          if (ahead > 0 && ahead < 2) {
-            const want = c.inset || 0;
-            if (Math.abs(el.currentTime - want) > 0.05) { try { el.currentTime = want; } catch { /* */ } }
-          }
-        }
+        try {
+          const src = audioCtx.createMediaElementSource(el);
+          const g = audioCtx.createGain();
+          g.gain.value = 0;
+          src.connect(g); g.connect(dest);
+          gains.set(c.id, g);
+          any = true;
+        } catch { /* */ }
       }
+      if (any) audioStream = dest.stream;
+    } catch (e) { console.warn("[export] audio routing failed", e); }
 
-      // draw frame — single bottom→top pass (clips arrive z-ordered)
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, W, H);
-      for (const c of clips) {
-        if (c.kind === "audio") continue;
-        if (!(tt >= c.start && tt < c.start + c.duration)) continue;
+    const fps = 30;
+    const vStream = canvas.captureStream(fps);
+    const tracks = [...vStream.getVideoTracks(), ...(audioStream ? audioStream.getAudioTracks() : [])];
+    const stream = new MediaStream(tracks);
 
-        if (c.kind === "adjust") {
-          if (!c.fx) continue;
-          // filter only what's already drawn below this layer
-          tctx.clearRect(0, 0, W, H);
-          tctx.drawImage(canvas, 0, 0);
-          ctx.clearRect(0, 0, W, H);
-          ctx.filter = c.fx;
-          ctx.drawImage(tcanvas, 0, 0);
-          ctx.filter = "none";
-          continue;
-        }
-        if (c.kind === "fx") {
-          ctx.save();
-          ctx.globalAlpha = alphaAt(c, tt) || 1;
-          drawFx(ctx, c.fx, W, H);
-          ctx.restore();
-          continue;
-        }
+    const { type, mp4 } = pickMime();
+    const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    const chunks: BlobPart[] = [];
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    const stopped = new Promise<Blob>((resolve) => { rec.onstop = () => resolve(new Blob(chunks, { type: type || "video/webm" })); });
 
-        const v = clipVisual(c as CompClip, tt, clips as CompClip[]);
-        if (v.opacity <= 0.001) continue;
-        ctx.save();
-        ctx.globalAlpha = v.opacity;
-        if (v.reveal != null) { ctx.beginPath(); ctx.rect(0, 0, W * v.reveal, H); ctx.clip(); }
-        if (c.kind === "video" || c.kind === "image") {
-          const el: HTMLVideoElement | HTMLImageElement | undefined = c.kind === "video" ? videos.get(c.id) : images.get(c.id);
-          if (el) {
-            const mw = c.kind === "video" ? (el as HTMLVideoElement).videoWidth : (el as HTMLImageElement).naturalWidth;
-            const mh = c.kind === "video" ? (el as HTMLVideoElement).videoHeight : (el as HTMLImageElement).naturalHeight;
-            if (mw && mh) {
-              // Fit mode drives how media adapts to THIS canvas aspect, so one
-              // layout renders correctly in every format. Default: video fills
-              // (cover), images fit whole (contain). x/y/scale are fine offsets.
-              const fitMode = c.fit ?? (c.kind === "video" ? "cover" : "contain");
-              const ratio = fitMode === "cover" ? Math.max(W / mw, H / mh) : Math.min(W / mw, H / mh);
-              const fit = ratio * (c.scale || 1) * v.scaleMul;
-              const dw = mw * fit, dh = mh * fit;
-              const dx = (W - dw) / 2 + (c.x || 0) * W + v.offX * W;
-              const dy = (H - dh) / 2 + (c.y || 0) * H + v.offY * H;
-              if (c.blend === "screen" || c.blend === "multiply") ctx.globalCompositeOperation = c.blend;
-              // "blur" fills the letterbox bars with a blurred cover copy behind.
-              if (fitMode === "blur") {
-                const cov = Math.max(W / mw, H / mh) * (c.scale || 1) * v.scaleMul;
-                const bw = mw * cov, bh = mh * cov;
-                ctx.save();
-                ctx.filter = `blur(${Math.max(8, Math.round(W / 50))}px)`;
-                try { ctx.drawImage(el, (W - bw) / 2 + (c.x || 0) * W + v.offX * W, (H - bh) / 2 + (c.y || 0) * H + v.offY * H, bw, bh); } catch { /* */ }
-                ctx.restore();
-              }
-              if (c.keyColor) drawKeyed(ctx, el, c, dx, dy, dw, dh);
-              else { try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ } }
-              ctx.globalCompositeOperation = "source-over";
+    // reset media to 0
+    for (const v of videos.values()) { try { v.currentTime = 0; } catch { /* */ } }
+    for (const a of audios.values()) { try { a.currentTime = 0; } catch { /* */ } }
+
+    rec.start(100);
+    const startTs = performance.now();
+
+    // Browsers throttle requestAnimationFrame to ~0 in background tabs while
+    // MediaRecorder keeps recording wall-clock time. That produced frozen
+    // stretches, overlong files, and skipped tail clips (e.g. the packshot)
+    // whenever the tab lost focus mid-render. Mitigation: freeze the whole
+    // export (recorder, media, and the virtual clock) while the tab is hidden
+    // and resume seamlessly when it is visible again.
+    let hiddenAccum = 0;
+    let hiddenSince = 0;
+    const onVis = () => {
+      if (document.hidden) {
+        hiddenSince = performance.now();
+        try { if (rec.state === "recording") rec.pause(); } catch { /* */ }
+        for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
+        for (const a of audios.values()) { try { a.pause(); } catch { /* */ } }
+      } else {
+        if (hiddenSince) { hiddenAccum += performance.now() - hiddenSince; hiddenSince = 0; }
+        try { if (rec.state === "paused") rec.resume(); } catch { /* */ }
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    // verify the canvas isn't tainted (cross-origin) early - draw 1 frame then read
+    await new Promise<void>((resolve, reject) => {
+      const draw = () => {
+        if (document.hidden) { requestAnimationFrame(draw); return; }
+        const tt = (performance.now() - startTs - hiddenAccum) / 1000;
+        p.onProgress?.(Math.min(1, tt / total));
+        if (tt >= total) { resolve(); return; }
+
+        // drive media playback
+        for (const c of clips) {
+          const el = c.kind === "video" ? videos.get(c.id) : c.kind === "audio" ? audios.get(c.id) : undefined;
+          if (!el) continue;
+          const active = tt >= c.start && tt < c.start + c.duration;
+          if (active) {
+            const loc = tt - c.start + (c.inset || 0);
+            if (Math.abs(el.currentTime - loc) > 0.35) { try { el.currentTime = loc; } catch { /* */ } }
+            const vol = Math.max(0, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)));
+            const g = gains.get(c.id);
+            if (g) g.gain.value = vol; // GainNode supports >1 (volume boost)
+            else { try { (el as HTMLMediaElement).volume = Math.min(1, vol); } catch { /* */ } }
+            if (el.paused) el.play().catch(() => {});
+          } else {
+            if (!el.paused) el.pause();
+            const ahead = c.start - tt;
+            if (ahead > 0 && ahead < 2) {
+              const want = c.inset || 0;
+              if (Math.abs(el.currentTime - want) > 0.05) { try { el.currentTime = want; } catch { /* */ } }
             }
           }
-        } else if (c.kind === "text") {
-          drawCaption(ctx, c, tt, W, H, sx, { opacity: v.opacity, scaleMul: 1, offX: 0, offY: 0 });
         }
-        ctx.restore();
-      }
-      ctx.globalAlpha = 1;
 
-      // taint check on first frame
-      if (tt < 0.1) {
-        try { ctx.getImageData(0, 0, 1, 1); }
-        catch { reject(new Error("canvas tainted (SecurityError) — нужен CORS на Supabase-бакете")); return; }
-      }
+        drawFrame(tt);
+
+        // taint check on first frame
+        if (tt < 0.1) {
+          try { ctx!.getImageData(0, 0, 1, 1); }
+          catch { reject(new Error("canvas tainted (SecurityError) - CORS on the media bucket")); return; }
+        }
+        requestAnimationFrame(draw);
+      };
       requestAnimationFrame(draw);
-    };
-    requestAnimationFrame(draw);
-  });
+    });
 
-  document.removeEventListener("visibilitychange", onVis);
-  rec.stop();
-  for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
-  for (const a of audios.values()) { try { a.pause(); } catch { /* */ } }
-  try { await audioCtx?.close(); } catch { /* */ }
+    document.removeEventListener("visibilitychange", onVis);
+    rec.stop();
+    for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
+    for (const a of audios.values()) { try { a.pause(); } catch { /* */ } }
+    try { await audioCtx?.close(); } catch { /* */ }
 
-  const blob = await stopped;
-  return { blob, ext: mp4 ? "mp4" : "webm", mp4 };
+    const blob = await stopped;
+    return { blob, ext: mp4 ? "mp4" : "webm", mp4 };
+  }
 }

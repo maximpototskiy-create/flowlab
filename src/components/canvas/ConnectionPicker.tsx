@@ -66,7 +66,7 @@ export default function ConnectionPicker({
           placeholder="Filter…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="w-full bg-transparent border-none outline-none mt-1 text-[12px] text-fg placeholder:text-fg-subtle"
+          className="w-full mt-1 px-2.5 py-1.5 rounded-md bg-bg-subtle/60 border border-border outline-none focus:border-brand text-[12px] text-fg placeholder:text-fg-subtle"
         />
       </div>
       <div className="flex-1 overflow-y-auto py-1">
