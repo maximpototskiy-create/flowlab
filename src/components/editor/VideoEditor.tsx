@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
 import type { TextStyle, CapWord } from "@/lib/editor/exportVideo";
 import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, Tag, X, Layers,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
 
@@ -557,6 +557,22 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   clipsRef.current = clips;
   selectedRef.current = selectedIds;
 
+  // ---- Version preview -----------------------------------------------------
+  // previewVer selects which version combo is DISPLAYED in the viewport
+  // (0 = v1 = base). The timeline and properties always edit the BASE clips;
+  // viewClips is a derived, non-destructive substitution used only for
+  // rendering the preview (and for "export what I see").
+  const [previewVer, setPreviewVer] = useState(0);
+  const verSlots = useMemo(() => clips.filter((c) => c.variants !== undefined), [clips]);
+  const verCombos = useMemo(() => enumerateCombos(verSlots), [verSlots]);
+  useEffect(() => { if (previewVer >= verCombos.length) setPreviewVer(0); }, [verCombos.length, previewVer]);
+  const viewClips = useMemo(
+    () => (previewVer > 0 && verCombos[previewVer] ? applyCombo(clips, verSlots, verCombos[previewVer]) : clips),
+    [clips, previewVer, verSlots, verCombos],
+  );
+  const viewClipsRef = useRef<EditClip[]>([]);
+  viewClipsRef.current = viewClips;
+
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
   const sortBin = (arr: EditorAsset[]) => {
     if (binSort === "newest") return arr;
@@ -829,7 +845,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     ctx.clearRect(0, 0, W, H);
     const rects: { id: string; x: number; y: number; w: number; h: number }[] = [];
     const hiddenL = new Set(layers.filter((l) => l.hidden).map((l) => l.id));
-    for (const c of clips) {
+    for (const c of viewClips) {
       if (c.kind !== "text" || hiddenL.has(c.layer)) continue;
       if (playhead < c.start || playhead >= c.start + c.duration) continue;
       const r = drawCaption(ctx, c as unknown as ExportClip, playhead, W, H, 1, { opacity: alphaAt(c as CompClip, playhead) || 1, scaleMul: 1, offX: 0, offY: 0 });
@@ -837,7 +853,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     }
     // interactive handles only when paused (kept light during playback)
     setCapRects((prev) => (playing ? (prev.length ? [] : prev) : rects));
-  }, [clips, layers, playhead, previewSize.w, previewSize.h, playing, fontsTick]);
+  }, [viewClips, layers, playhead, previewSize.w, previewSize.h, playing, fontsTick]);
   const runSearch = async () => {
     const q = binQuery.trim();
     if (!q) { loadLibrary(); return; }
@@ -1199,7 +1215,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   }, []);
   const syncMedia = useCallback((tt: number) => {
     const hidden = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
-    for (const c of clipsRef.current) {
+    for (const c of viewClipsRef.current) {
       const el = mediaRefs.current.get(c.id); if (!el) continue;
       const active = tt >= c.start && tt < c.start + c.duration && !hidden.has(c.layer);
       if (active) {
@@ -1337,7 +1353,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
   // Render every version (variant combo) x every chosen format, each downloaded
   // with its own templated name (version token = v1..vN per combo).
-  const renderAllVersions = useCallback(async () => {
+  const renderVersions = useCallback(async (only: number | null) => {
     if (batchRunning || exporting || !clipsRef.current.length) return;
     const fmts = RESOLUTIONS.filter((r) => batchFormats.has(r.key));
     if (!fmts.length) { setStatus("Pick at least one format to render."); return; }
@@ -1346,9 +1362,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const slots = clipsRef.current.filter((c) => (c.variants?.length ?? 0) > 0);
       const combos = enumerateCombos(slots);
-      const total = combos.length * fmts.length;
+      const indices = only != null && combos[only] ? [only] : combos.map((_, i) => i);
+      const total = indices.length * fmts.length;
       let done = 0;
-      for (let vi = 0; vi < combos.length; vi++) {
+      for (const vi of indices) {
         const verClips = applyCombo(clipsRef.current, slots, combos[vi]);
         const vis = layersRef.current.filter((l) => l.type !== "audio");
         const hiddenIds = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
@@ -1374,6 +1391,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     } catch (e) { console.error(e); setStatus(`Batch failed: ${e instanceof Error ? e.message : "see console"}`); }
     finally { setBatchRunning(false); }
   }, [batchRunning, exporting, batchFormats, previewSize, stop, buildFileName, toExportClip]);
+  const renderAllVersions = useCallback(() => renderVersions(null), [renderVersions]);
+  const renderOneVersion = useCallback((vi: number) => renderVersions(vi), [renderVersions]);
 
   // ── Variant-slot management for the Versions panel ──
   const makeSlot = useCallback((id: string) => { setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: c.variants ?? [] } : c))); setVersionsOpen(true); }, []);
@@ -1390,6 +1409,28 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const removeOption = useCallback((id: string, vId: string) =>
     setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).filter((v) => v.id !== vId) } : c))), []);
   const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
+  // Human-readable label for an asset URL (bin label, else the file name).
+  const urlLabel = useCallback((u?: string) => {
+    if (!u) return "?";
+    const a = assets.find((x) => x.url === u) || brandLib.find((x) => x.url === u);
+    if (a) return a.label;
+    try { return decodeURIComponent(u.split("/").pop()!.split("?")[0]).slice(0, 26); } catch { return "asset"; }
+  }, [assets, brandLib]);
+  // What a given version swaps relative to the base assembly, e.g.
+  // "hook: giphy(2).gif · text: "Alt hook"" — v1 (index 0) is the base.
+  const describeVer = useCallback((vi: number): string => {
+    const combo = verCombos[vi];
+    if (!combo) return "";
+    const parts: string[] = [];
+    verSlots.forEach((s, si) => {
+      const k = combo[si] ?? 0;
+      if (k === 0) return;
+      const v = s.variants?.[k - 1];
+      if (!v) return;
+      parts.push(`${clipLabel(s)}: ${s.kind === "text" ? `"${(v.text || "").slice(0, 22)}"` : urlLabel(v.url)}`);
+    });
+    return parts.length ? parts.join(" \u00b7 ") : "base (as assembled)";
+  }, [verCombos, verSlots, clipLabel, urlLabel]);
   // Bulk-add every matching bin asset as a variant in one click (e.g. all 10
   // generated hooks -> 10 versions, no per-item clicking).
   const addAllFromBin = useCallback((id: string, category: string) => {
@@ -1420,11 +1461,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     if (exporting || !clips.length) return;
     setExporting(true); setProgress(0); setStatus("Recording…"); stop();
     try {
+      // Export exactly what the preview shows: the currently previewed version.
+      const src = viewClipsRef.current;
       const vis = layers.filter((l) => l.type !== "audio");
       const hiddenIds = new Set(layers.filter((l) => l.hidden).map((l) => l.id));
       const z: EditClip[] = [];
-      for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...clips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
-      const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
+      for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...src.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
+      const ordered = [...z, ...src.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
         clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
@@ -1432,12 +1475,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext);
+      const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, previewVer > 0 ? `v${previewVer + 1}` : undefined);
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
       setStatus(mp4 ? "Done — MP4 downloaded." : "Done — WebM downloaded (browser doesn\u2019t support MP4 recording).");
     } catch (e) { console.error(e); setStatus(`Export failed: ${e instanceof Error ? e.message : "see console"}`); }
     finally { setExporting(false); }
-  }, [exporting, clips, layers, res, previewSize, stop]);
+  }, [exporting, clips.length, layers, res, previewSize, stop, buildFileName, previewVer]);
 
   // Reverse bridge: render + upload + hand the URL to the canvas Editor node
   const [sendingToCanvas, setSendingToCanvas] = useState(false);
@@ -1789,9 +1832,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     : kind === "bottomShade" ? { background: "linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 40%)" }
     : { background: "radial-gradient(ellipse at center, rgba(0,0,0,0) 40%, rgba(0,0,0,0.78) 100%)" };
 
-  // z-order (bottom → top) of all visual-layer clips
+  // z-order (bottom → top) of all visual-layer clips — from viewClips so the
+  // viewport shows the previewed VERSION (timeline lanes stay on base clips)
+  const onLayerView = (id: string) => viewClips.filter((c) => c.layer === id).sort((a, b) => a.start - b.start);
   const zClips: EditClip[] = [];
-  for (let i = visualLayers.length - 1; i >= 0; i--) { if (visualLayers[i].hidden) continue; zClips.push(...onLayer(visualLayers[i].id)); }
+  for (let i = visualLayers.length - 1; i >= 0; i--) { if (visualLayers[i].hidden) continue; zClips.push(...onLayerView(visualLayers[i].id)); }
 
   return (
     <div className="flex-1 flex min-h-0">
@@ -2160,8 +2205,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 <Layers size={12} /> Versions
               </button>
               {versionsOpen && (() => {
-                const slots = clips.filter((c) => c.variants !== undefined);
-                const versionCount = slots.reduce((n, c) => n * (1 + (c.variants?.length ?? 0)), 1);
+                const slots = verSlots;
+                const versionCount = verCombos.length;
                 return (
                   <div className="absolute right-0 top-full mt-1 z-50 w-[420px] max-h-[70vh] overflow-auto rounded-lg border border-border bg-bg-card p-3 shadow-xl text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-between mb-2">
@@ -2223,6 +2268,21 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         })}
                       </div>
                     )}
+                    {versionCount > 1 && (
+                      <div className="mt-3">
+                        <div className="text-fg mb-1.5">All versions ({versionCount}) <span className="text-fg-subtle">{"\u2014"} click to preview in the viewport</span></div>
+                        <div className="max-h-44 overflow-y-auto space-y-0.5 pr-1">
+                          {verCombos.map((_, vi) => (
+                            <div key={vi} onClick={() => setPreviewVer(vi)}
+                              className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer border ${previewVer === vi ? "bg-brand/10 border-brand/40" : "border-transparent hover:bg-bg-subtle"}`}>
+                              <span className={`w-7 shrink-0 ${previewVer === vi ? "text-brand font-medium" : "text-fg-subtle"}`}>v{vi + 1}</span>
+                              <span className="flex-1 truncate text-fg-muted" title={describeVer(vi)}>{describeVer(vi)}</span>
+                              <button title="Render only this version (in the checked formats)" onClick={(e) => { e.stopPropagation(); renderOneVersion(vi); }} className="text-fg-subtle hover:text-brand shrink-0"><Download size={12} /></button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div className="mt-3 mb-1.5 text-fg">Formats to render:</div>
                     <div className="flex flex-wrap gap-2 mb-2">
                       {RESOLUTIONS.map((r) => (
@@ -2235,10 +2295,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     {(() => {
                       const fmts = RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length;
                       const total = versionCount * fmts;
+                      const exFmt = RESOLUTIONS.find((r) => batchFormats.has(r.key))?.key;
                       return (
                         <div className={`mb-2 text-[10px] leading-relaxed ${total > 24 ? "text-amber-400" : "text-fg-subtle"}`}>
                           This renders <span className="font-medium">{total}</span> separate file{total === 1 ? "" : "s"} ({versionCount} version{versionCount === 1 ? "" : "s"} &times; {fmts} format{fmts === 1 ? "" : "s"}), named by your template (v1&hellip;v{versionCount}).
                           {total > 24 && <span> That is a lot &mdash; trim options or formats if you only need a few.</span>}
+                          {exFmt && <div className="mt-1 truncate text-fg-subtle">Name example: <span className="text-fg-muted">{buildFileName("mp4", `v${previewVer + 1}`, exFmt)}</span></div>}
                         </div>
                       );
                     })()}
@@ -2276,12 +2338,23 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             if (!placedHook || others < 1 || hasSlot || hookBannerDismissed) return null;
             return (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-card border border-brand/40 shadow-xl text-[12px]">
-                <span className="text-fg"><span className="text-brand font-medium">{others + 1} hook versions</span> available \u2014 build them automatically?</span>
+                <span className="text-fg"><span className="text-brand font-medium">{others + 1} hook versions</span> available {"\u2014"} build them automatically?</span>
                 <button onClick={buildHookVersions} className="px-2.5 py-1 rounded-md bg-brand text-black font-medium text-[11px] whitespace-nowrap">Build versions</button>
                 <button onClick={() => setHookBannerDismissed(true)} className="text-fg-subtle hover:text-fg" aria-label="Dismiss"><X size={14} /></button>
               </div>
             );
           })()}
+          {verCombos.length > 1 && (
+            <div className="absolute top-3 right-3 z-30 flex items-center gap-1 px-1.5 py-1 rounded-lg bg-bg-card/95 border border-border shadow-lg text-[11px]" title={previewVer > 0 ? "Previewing a version - timeline edits still apply to the base" : "Base assembly"}>
+              <button onClick={() => setPreviewVer((v) => (v - 1 + verCombos.length) % verCombos.length)} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Previous version"><ChevronLeft size={13} /></button>
+              <button onClick={() => setVersionsOpen(true)} className="px-1.5 py-0.5 rounded hover:bg-bg-subtle" title={describeVer(previewVer)}>
+                <span className="text-brand font-medium">v{previewVer + 1}</span>
+                <span className="text-fg-subtle">/{verCombos.length}</span>
+              </button>
+              <button onClick={() => setPreviewVer((v) => (v + 1) % verCombos.length)} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Next version"><ChevronRight size={13} /></button>
+              {previewVer > 0 && <span className="max-w-[200px] truncate text-fg-subtle pr-1">{describeVer(previewVer)}</span>}
+            </div>
+          )}
           {clips.length > 0 ? (
             <div className="absolute inset-0 flex items-center justify-center" style={{ overflow: "visible" }}>
               <div style={{ transform: `translate(${viewPan.x}px, ${viewPan.y}px) scale(${viewZoom})`, transformOrigin: "center" }}>
@@ -2358,7 +2431,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                   {snap.h && <div className="absolute top-1/2 left-0 right-0 h-px -translate-y-1/2 bg-fuchsia-400 pointer-events-none z-20" />}
                 </div>
               </div>
-              {clips.filter((c) => c.kind === "audio").map((c) => (
+              {viewClips.filter((c) => c.kind === "audio").map((c) => (
                 <audio key={c.id} src={c.url} preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }} />
               ))}
             </div>
