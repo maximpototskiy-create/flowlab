@@ -151,7 +151,7 @@ option {
 }
 
 /* Safe-zone padding for text fields that don't set their own horizontal
-   padding (Tailwind px-*/p-* classes win by specificity where present), so
+   padding (Tailwind px- and p- classes win by specificity where present), so
    text and placeholders never hug rounded borders or focus rings. */
 input[type="text"]:not([class*="px-"]):not([class*="p-"]),
 input:not([type]):not([class*="px-"]):not([class*="p-"]),
