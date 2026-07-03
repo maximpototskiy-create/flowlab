@@ -26,6 +26,7 @@ export type TextStyle = {
   radius?: number;                     // plate corner radius as fraction of font size (default 0.22)
   highlight?: string;                  // active-word text color (karaoke)
   pos?: "bottom" | "center" | "top";
+  align?: "left" | "center" | "right"; // line alignment inside the text block (default center)
   enter?: "" | "scale" | "bounce" | "fade" | "typewriter" | "slideUp" | "slideDown" | "zoomIn" | "spin" | "wipeRight" | "wipeLeft" | "blurIn" | "wordsUp";
   exit?: "" | "fade" | "scale" | "zoomOut" | "slideUp" | "slideDown" | "wipeLeft" | "wipeRight" | "blurOut";
   loop?: "" | "pulse" | "float" | "wiggle";
@@ -285,7 +286,10 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
 
   lines.forEach((ln, li) => {
     const lw = ln.words.reduce((s, w, i) => s + w.width + (i ? space : 0), 0);
-    let x = cx - lw / 2;
+    // Line alignment inside the block: center (default) / left / right.
+    const blockW = Math.max(...lines.map((l) => l.words.reduce((s, w, i) => s + w.width + (i ? space : 0), 0)), 1);
+    const align = st.align || "center";
+    let x = align === "left" ? cx - blockW / 2 : align === "right" ? cx + blockW / 2 - lw : cx - lw / 2;
     const yBottom = cy - (lines.length - 1 - li) * lineH;
     if (st.plate === "full") {
       ctx.save(); ctx.shadowColor = "transparent";
@@ -352,9 +356,11 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
   const tctx = tcanvas.getContext("2d");
   if (!tctx) throw new Error("no 2d context");
 
-  // audio graph
+  // audio graph — each element goes through its own GainNode so volumes above
+  // 100% actually work (HTMLMediaElement.volume is clamped to 1 by browsers).
   let audioStream: MediaStream | null = null;
   let audioCtx: AudioContext | null = null;
+  const gains = new Map<string, GainNode>();
   try {
     const AC: typeof AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     audioCtx = new AC();
@@ -364,7 +370,14 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
     for (const c of clips) {
       const el = c.kind === "video" ? videos.get(c.id) : c.kind === "audio" ? audios.get(c.id) : undefined;
       if (!el) continue;
-      try { const src = audioCtx.createMediaElementSource(el); src.connect(dest); any = true; } catch { /* */ }
+      try {
+        const src = audioCtx.createMediaElementSource(el);
+        const g = audioCtx.createGain();
+        g.gain.value = 0;
+        src.connect(g); g.connect(dest);
+        gains.set(c.id, g);
+        any = true;
+      } catch { /* */ }
     }
     if (any) audioStream = dest.stream;
   } catch (e) { console.warn("[export] audio routing failed", e); }
@@ -387,10 +400,32 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
   rec.start(100);
   const startTs = performance.now();
 
+  // Browsers throttle requestAnimationFrame to ~0 in background tabs while
+  // MediaRecorder keeps recording wall-clock time. That produced frozen
+  // stretches, overlong files, and skipped tail clips (e.g. the packshot)
+  // whenever the tab lost focus mid-render. Mitigation: freeze the whole
+  // export (recorder, media, and the virtual clock) while the tab is hidden
+  // and resume seamlessly when it is visible again.
+  let hiddenAccum = 0;
+  let hiddenSince = 0;
+  const onVis = () => {
+    if (document.hidden) {
+      hiddenSince = performance.now();
+      try { if (rec.state === "recording") rec.pause(); } catch { /* */ }
+      for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
+      for (const a of audios.values()) { try { a.pause(); } catch { /* */ } }
+    } else {
+      if (hiddenSince) { hiddenAccum += performance.now() - hiddenSince; hiddenSince = 0; }
+      try { if (rec.state === "paused") rec.resume(); } catch { /* */ }
+    }
+  };
+  document.addEventListener("visibilitychange", onVis);
+
   // verify the canvas isn't tainted (cross-origin) early — draw 1 frame then read
   await new Promise<void>((resolve, reject) => {
     const draw = () => {
-      const tt = (performance.now() - startTs) / 1000;
+      if (document.hidden) { requestAnimationFrame(draw); return; }
+      const tt = (performance.now() - startTs - hiddenAccum) / 1000;
       p.onProgress?.(Math.min(1, tt / total));
       if (tt >= total) { resolve(); return; }
 
@@ -402,7 +437,10 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         if (active) {
           const loc = tt - c.start + (c.inset || 0);
           if (Math.abs(el.currentTime - loc) > 0.35) { try { el.currentTime = loc; } catch { /* */ } }
-          try { (el as HTMLMediaElement).volume = Math.max(0, Math.min(1, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)))); } catch { /* */ }
+          const vol = Math.max(0, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)));
+          const g = gains.get(c.id);
+          if (g) g.gain.value = vol; // GainNode supports >1 (volume boost)
+          else { try { (el as HTMLMediaElement).volume = Math.min(1, vol); } catch { /* */ } }
           if (el.paused) el.play().catch(() => {});
         } else {
           if (!el.paused) el.pause();
@@ -492,6 +530,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
     requestAnimationFrame(draw);
   });
 
+  document.removeEventListener("visibilitychange", onVis);
   rec.stop();
   for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
   for (const a of audios.values()) { try { a.pause(); } catch { /* */ } }

@@ -31,7 +31,7 @@ export default function ProjectCard({ project }: { project: ProjectCardData }) {
         </StopPropagation>
       </div>
 
-      <h3 className="font-display text-xl leading-tight mb-1 group-hover:text-brand transition">
+      <h3 className="font-display text-xl leading-tight mb-1 group-hover:text-brand transition line-clamp-2 [overflow-wrap:anywhere]">
         {project.name}
       </h3>
 

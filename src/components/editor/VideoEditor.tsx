@@ -694,8 +694,22 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [saveState, setSaveState] = useState<"" | "saved" | "saving">("");
   useEffect(() => {
     if (restoredRef.current) return; restoredRef.current = true;
-    // Canvas hand-off first: a send from the Editor node REPLACES this
-    // workflow's project, so when it exists the regular restore is skipped.
+    // Restore the saved project first (if any) — a canvas hand-off is MERGED
+    // on top of it as new layers instead of wiping the whole assembly.
+    let savedClips: EditClip[] = [];
+    let savedLayers: Layer[] = [];
+    try {
+      const raw = localStorage.getItem(PROJECT_KEY);
+      if (raw) {
+        const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; posMode?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>> };
+        if (Array.isArray(j.clips) && j.clips.length && Array.isArray(j.layers) && j.layers.length) {
+          legacyPosRef.current = j.posMode !== "frac";
+          savedClips = j.clips; savedLayers = j.layers;
+          if (j.layouts && typeof j.layouts === "object") setLayouts(j.layouts);
+          if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
+        }
+      }
+    } catch { /* ignore corrupt saves */ }
     let imported = false;
     try {
       const rawImp = localStorage.getItem(IMPORT_KEY);
@@ -742,28 +756,26 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               newClips.push({ id: uid(), kind, layer: lid, url: t.value, label: t.label || kind, start: 0, duration: DEFAULTS[kind], fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, ...(kind === "video" || kind === "audio" ? { autoDur: true } : {}), ...sec });
             }
           });
-          if (!newLayers.some((l) => l.type === "video")) newLayers.push({ id: `vimp_${Date.now()}_${_l++}`, type: "video" });
-          if (!newLayers.some((l) => l.type === "audio")) newLayers.push({ id: `aimp_${Date.now()}_${_l++}`, type: "audio" });
-          setLayers(newLayers);
-          setClips(newClips);
+          if (savedClips.length) {
+            // MERGE: keep the existing assembly, stack the hand-off on top as
+            // fresh layers. Sequential section auto-layout is skipped here —
+            // the user positions imported clips relative to their edit.
+            setLayers([...newLayers, ...savedLayers]);
+            setClips([...savedClips, ...newClips]);
+          } else {
+            if (!newLayers.some((l) => l.type === "video")) newLayers.push({ id: `vimp_${Date.now()}_${_l++}`, type: "video" });
+            if (!newLayers.some((l) => l.type === "audio")) newLayers.push({ id: `aimp_${Date.now()}_${_l++}`, type: "audio" });
+            setLayers(newLayers);
+            setClips(newClips);
+            if (newClips.some((c) => c.section)) sectionLayoutRef.current = true; // lay out sequentially once real durations arrive
+          }
           setSelectedIds([]);
-          if (newClips.some((c) => c.section)) sectionLayoutRef.current = true; // lay out sequentially once real durations arrive
           imported = true;
         }
       }
     } catch { /* malformed hand-off — ignore */ }
     if (imported) return;
-    try {
-      const raw = localStorage.getItem(PROJECT_KEY); if (!raw) return;
-      const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; posMode?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>> };
-      if (Array.isArray(j.clips) && j.clips.length && Array.isArray(j.layers) && j.layers.length) {
-        // Projects saved before fractional positions need a one-time migration.
-        legacyPosRef.current = j.posMode !== "frac";
-        setClips(j.clips); setLayers(j.layers);
-        if (j.layouts && typeof j.layouts === "object") setLayouts(j.layouts);
-        if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
-      }
-    } catch { /* ignore corrupt saves */ }
+    if (savedClips.length) { setClips(savedClips); setLayers(savedLayers); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveProject = useCallback(() => {
@@ -1158,6 +1170,33 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
   const layersRef = useRef<Layer[]>([]);
   layersRef.current = layers;
+  // Volume boost: HTMLMediaElement.volume is hard-clamped to 1.0 by browsers,
+  // so 100% and 200% used to sound identical. Elements are routed through a
+  // per-element GainNode on demand (only once volume goes above 1), which
+  // supports real gain. Wired lazily inside a user-gesture-driven loop.
+  const boostCtxRef = useRef<AudioContext | null>(null);
+  const boostGainsRef = useRef<Map<HTMLMediaElement, GainNode>>(new Map());
+  const applyVolume = useCallback((el: HTMLMediaElement, vol: number) => {
+    const wired = boostGainsRef.current.get(el);
+    if (!wired && vol <= 1) { try { el.volume = Math.max(0, vol); } catch { /* */ } return; }
+    try {
+      let ctx = boostCtxRef.current;
+      if (!ctx) {
+        const AC: typeof AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        ctx = new AC(); boostCtxRef.current = ctx;
+      }
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      let g = wired;
+      if (!g) {
+        const src = ctx.createMediaElementSource(el);
+        g = ctx.createGain();
+        src.connect(g); g.connect(ctx.destination);
+        boostGainsRef.current.set(el, g);
+        try { el.volume = 1; } catch { /* */ }
+      }
+      g.gain.value = Math.max(0, vol);
+    } catch { try { el.volume = Math.max(0, Math.min(1, vol)); } catch { /* */ } }
+  }, []);
   const syncMedia = useCallback((tt: number) => {
     const hidden = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
     for (const c of clipsRef.current) {
@@ -1166,7 +1205,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       if (active) {
         const local = tt - c.start + (c.inset || 0);
         if (!el.seeking && Math.abs(el.currentTime - local) > 0.5) { try { el.currentTime = local; } catch { /* */ } }
-        try { el.volume = Math.max(0, Math.min(1, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)))); } catch { /* */ }
+        applyVolume(el, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)));
         if (playingRef.current && el.paused) el.play().catch(() => {});
         if (!playingRef.current && !el.paused) el.pause();
       } else {
@@ -1189,7 +1228,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         } else if (!bg.paused) bg.pause();
       }
     }
-  }, []);
+  }, [applyVolume]);
   const stop = useCallback(() => {
     playingRef.current = false; setPlaying(false);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -1249,6 +1288,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const tg = e.target as HTMLElement | null;
       if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT" || tg.isContentEditable)) return;
       if (e.code === "Space") { e.preventDefault(); play(); }
+      else if (!e.metaKey && !e.ctrlKey && (e.code === "ArrowLeft" || e.code === "ArrowRight")) {
+        // frame-by-frame stepping for precise trims: 1 frame (1/30s), Shift = 10 frames
+        e.preventDefault();
+        stop();
+        const step = (e.shiftKey ? 10 : 1) / 30;
+        seek(playheadRef.current + (e.code === "ArrowRight" ? step : -step));
+      }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
       else if ((e.metaKey || e.ctrlKey) && e.code === "KeyD") { e.preventDefault(); duplicateSelected(); }
@@ -1257,7 +1303,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       else if (e.key === "Delete" || e.key === "Backspace") { if (selectedRef.current.length) { e.preventDefault(); removeMany(selectedRef.current); } }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
-  }, [play, removeMany, undo, redo, duplicateSelected, splitAtPlayhead]);
+  }, [play, removeMany, undo, redo, duplicateSelected, splitAtPlayhead, stop, seek]);
 
   useEffect(() => {
     if (!menu && !transMenu) return;
@@ -1332,6 +1378,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   // ── Variant-slot management for the Versions panel ──
   const makeSlot = useCallback((id: string) => { setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: c.variants ?? [] } : c))); setVersionsOpen(true); }, []);
   const clearSlot = useCallback((id: string) => setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: undefined } : c))), []);
+  const clearOptions = useCallback((id: string) => setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: [] } : c))), []);
   const addOption = useCallback((id: string) => setClips((cs) => cs.map((c) => {
     if (c.id !== id) return c;
     const vid = `vr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -1440,21 +1487,53 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   };
   const onClipPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current; if (!d) return; const dx = (e.clientX - d.startX) / pxPerSec;
+    // Magnet: snap the dragged edge to other clips' edges, the playhead and 0
+    // when within ~8px. Hold Alt to disable snapping.
+    const snapDelta = (raw: number, dur: number): number => {
+      if (e.altKey) return raw;
+      const thr = 8 / pxPerSec;
+      const targets: number[] = [0, playheadRef.current];
+      for (const o of clipsRef.current) {
+        if (d.moveIds.includes(o.id)) continue;
+        targets.push(o.start, o.start + o.duration);
+      }
+      let best = raw, bestDist = thr;
+      for (const t of targets) {
+        const dStart = Math.abs(raw - t);
+        if (dStart < bestDist) { best = t; bestDist = dStart; }
+        const dEnd = Math.abs(raw + dur - t);
+        if (dEnd < bestDist) { best = t - dur; bestDist = dEnd; }
+      }
+      return best;
+    };
     if (d.mode === "move") {
-      setClips((prev) => prev.map((x) => (d.moveIds.includes(x.id) ? { ...x, start: Math.max(0, +((d.origStarts.get(x.id) ?? x.start) + dx).toFixed(2)) } : x)));
+      const lead = clipsRef.current.find((x) => x.id === d.id);
+      const rawLead = Math.max(0, (d.origStarts.get(d.id) ?? 0) + dx);
+      const snapped = snapDelta(rawLead, lead?.duration ?? 0);
+      const adj = snapped - rawLead; // shift every dragged clip by the same snap offset
+      setClips((prev) => prev.map((x) => (d.moveIds.includes(x.id) ? { ...x, start: Math.max(0, +((d.origStarts.get(x.id) ?? x.start) + dx + adj).toFixed(3)) } : x)));
       setDropHint(d.moveIds.length > 1 ? null : hitTest(e.clientY, d.type)); // layer change only for a single clip
     } else if (d.mode === "trim") {
       const c = clipsRef.current.find((x) => x.id === d.id);
       const isMedia = c && (c.kind === "video" || c.kind === "audio");
       const maxDur = isMedia && c?.srcDur ? Math.max(MIN_DUR, c.srcDur - (c.inset || 0)) : Infinity; // drag right again to restore up to the source length
-      update(d.id, { duration: Math.max(MIN_DUR, Math.min(maxDur, +(d.origDur + dx).toFixed(2))) });
+      let dur = Math.max(MIN_DUR, Math.min(maxDur, +(d.origDur + dx).toFixed(2)));
+      // snap the right edge
+      const snappedEnd = snapDelta(d.origStart + dur, 0);
+      const durSnapped = Math.max(MIN_DUR, Math.min(maxDur, snappedEnd - d.origStart));
+      if (Math.abs(durSnapped - dur) < 8 / pxPerSec) dur = +durSnapped.toFixed(3);
+      update(d.id, { duration: dur });
     } else if (d.mode === "trimL") {
       const c = clipsRef.current.find((x) => x.id === d.id);
       const isMedia = c && (c.kind === "video" || c.kind === "audio");
       // left edge: dragging right trims; dragging left restores hidden head (down to inset 0)
       const minDx = Math.max(isMedia ? -d.origInset : -Infinity, -d.origStart);
       const maxDx = d.origDur - MIN_DUR;
-      const ddx = Math.max(minDx, Math.min(maxDx, dx));
+      let ddx = Math.max(minDx, Math.min(maxDx, dx));
+      // snap the left edge
+      const snappedStart = snapDelta(d.origStart + ddx, 0);
+      const ddxSnapped = Math.max(minDx, Math.min(maxDx, snappedStart - d.origStart));
+      if (Math.abs(ddxSnapped - ddx) < 8 / pxPerSec) ddx = ddxSnapped;
       update(d.id, {
         start: +(d.origStart + ddx).toFixed(2),
         duration: +(d.origDur - ddx).toFixed(2),
@@ -2089,8 +2168,17 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                       <span className="text-fg font-medium">Versions &amp; batch render</span>
                       <button onClick={() => setVersionsOpen(false)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
                     </div>
+                    <div className="mb-2 rounded-md bg-bg-subtle/60 border border-border px-2 py-1.5 text-[10px] text-fg-subtle leading-relaxed">
+                      Render several variants of this video in one go. Mark a clip on the timeline as a <span className="text-fg-muted">version slot</span> and give it options (e.g. 3 different hook images, or 2 alternate texts). FlowLab renders <span className="text-fg-muted">every combination</span> of all slots, in every checked format, as separate files (v1, v2, …).
+                    </div>
                     {slots.length === 0 ? (
-                      <div className="text-fg-subtle leading-relaxed">No variant slots yet.<br />Right-click a clip on the timeline -&gt; <span className="text-fg-muted">Use in versions</span>, then add hook/element options here. Every combination renders as its own version (v1, v2, …).</div>
+                      <div className="text-fg-subtle leading-relaxed">
+                        <div className="text-fg-muted mb-1">No version slots yet. To make versions:</div>
+                        1. Right-click a clip on the timeline.<br />
+                        2. Choose <span className="text-fg-muted">Use in versions</span>.<br />
+                        3. Come back here and add its options (alternate texts or assets).<br />
+                        <span className="block mt-1">Then pick formats and hit Render &mdash; you get one file per combination.</span>
+                      </div>
                     ) : (
                       <div className="space-y-2.5">
                         {slots.map((c) => {
@@ -2098,8 +2186,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           return (
                             <div key={c.id} className="rounded-md border border-border p-2">
                               <div className="flex items-center justify-between mb-1.5">
-                                <span className="text-fg truncate">{clipLabel(c)} <span className="text-fg-subtle">· {c.kind}</span></span>
-                                <button onClick={() => clearSlot(c.id)} title="Remove from versions" className="text-fg-subtle hover:text-red-400"><X size={12} /></button>
+                                <span className="text-fg truncate">{clipLabel(c)} <span className="text-fg-subtle">· base + {c.variants?.length ?? 0} alt</span></span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {(c.variants?.length ?? 0) > 0 && <button onClick={() => clearOptions(c.id)} title="Remove all options (keep this slot)" className="text-[10px] text-fg-subtle hover:text-fg">clear options</button>}
+                                  <button onClick={() => clearSlot(c.id)} title="Remove this slot from versions" className="text-fg-subtle hover:text-red-400"><X size={12} /></button>
+                                </div>
                               </div>
                               <div className="flex items-center gap-1.5 mb-1 text-fg-subtle"><span className="w-6 text-brand">v1</span><span className="truncate">{c.kind === "text" ? `"${(c.text || "").slice(0, 30)}"` : (clipLabel(c) + " (base)")}</span></div>
                               {(c.variants || []).map((v, i) => (
@@ -2121,9 +2212,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                                 const cats = Array.from(new Set(brandLib.filter((a) => a.kind === c.kind && a.category).map((a) => a.category as string)));
                                 return (
                                   <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
-                                    <span className="text-fg-subtle">bulk from bin:</span>
-                                    {cats.map((cat) => <button key={cat} onClick={() => addAllFromBin(c.id, cat)} className="px-1.5 py-0.5 rounded border border-dashed border-border text-brand hover:border-brand">+ all {cat}</button>)}
-                                    <button onClick={() => addAllFromBin(c.id, "all")} className="px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand">+ all {c.kind}</button>
+                                    <span className="text-fg-subtle" title="Each button adds every matching asset from the bin as a separate version option">add many from bin:</span>
+                                    {cats.map((cat) => <button key={cat} title={`Add every "${cat}" ${c.kind} from the bin as options`} onClick={() => addAllFromBin(c.id, cat)} className="px-1.5 py-0.5 rounded border border-dashed border-border text-brand hover:border-brand">+ all {cat}</button>)}
+                                    <button title={`Add every ${c.kind} from the bin as options`} onClick={() => addAllFromBin(c.id, "all")} className="px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand">+ all {c.kind}</button>
                                   </div>
                                 );
                               })()}
@@ -2132,7 +2223,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         })}
                       </div>
                     )}
-                    <div className="mt-3 mb-1.5 text-fg">Versions: <span className="text-brand font-medium">{versionCount}</span> × formats</div>
+                    <div className="mt-3 mb-1.5 text-fg">Formats to render:</div>
                     <div className="flex flex-wrap gap-2 mb-2">
                       {RESOLUTIONS.map((r) => (
                         <label key={r.key} className="inline-flex items-center gap-1 text-fg-muted cursor-pointer">
@@ -2141,7 +2232,16 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         </label>
                       ))}
                     </div>
-                    <div className="text-fg-subtle mb-2 text-[10px]">Total files: {versionCount * RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length}. Named by the template (version = v1…vN).</div>
+                    {(() => {
+                      const fmts = RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length;
+                      const total = versionCount * fmts;
+                      return (
+                        <div className={`mb-2 text-[10px] leading-relaxed ${total > 24 ? "text-amber-400" : "text-fg-subtle"}`}>
+                          This renders <span className="font-medium">{total}</span> separate file{total === 1 ? "" : "s"} ({versionCount} version{versionCount === 1 ? "" : "s"} &times; {fmts} format{fmts === 1 ? "" : "s"}), named by your template (v1&hellip;v{versionCount}).
+                          {total > 24 && <span> That is a lot &mdash; trim options or formats if you only need a few.</span>}
+                        </div>
+                      );
+                    })()}
                     <button onClick={renderAllVersions} disabled={batchRunning || exporting || !clips.length} className="w-full px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center justify-center gap-1.5">
                       {batchRunning ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{batchRunning ? `${progress}%` : "Render all versions"}
                     </button>
@@ -2490,7 +2590,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 {sel.kind === "text" && (<textarea value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} rows={2} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand resize-y" placeholder="Text" />)}
                 {sel.kind === "text" && (
                   <div className="space-y-1">
-                    <div className="text-fg-muted">Entrance animation</div>
+                    <div className="text-fg-muted">Alignment</div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {([["left", "Left"], ["center", "Center"], ["right", "Right"]] as const).map(([v, l]) => (
+                        <button key={v} onClick={() => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), align: v as TextStyle["align"] } } : c))); }}
+                          className={`px-1 py-1 rounded border text-[10px] ${(sel.tstyle?.align || "center") === v ? "border-brand bg-brand/10 text-brand" : "border-border text-fg-muted hover:border-brand/50"}`}>{l}</button>
+                      ))}
+                    </div>
+                    <div className="text-fg-muted pt-1">Entrance animation</div>
                     <div className="grid grid-cols-4 gap-1">
                       {([["", "None"], ["fade", "Fade"], ["scale", "Scale"], ["zoomIn", "Zoom in"], ["bounce", "Bounce"], ["spin", "Spin"], ["slideUp", "Slide ↑"], ["slideDown", "Slide ↓"], ["wipeRight", "Wipe →"], ["wipeLeft", "Wipe ←"], ["blurIn", "Blur"], ["wordsUp", "Words up"], ["typewriter", "Type"]] as const).map(([v, l]) => (
                         <button key={v} onClick={() => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), enter: v as TextStyle["enter"] } } : c))); }}
@@ -2634,7 +2741,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
               {(sel.kind === "video" || sel.kind === "audio") && (
                 <Section id="audio" title="Audio" open={openSec.audio} onToggle={toggleSec}>
-                  <label className="flex items-center gap-2 text-fg-muted">volume<input type="range" min={0} max={2} step={0.05} value={sel.volume ?? 1} onChange={(e) => updateSel(sel.id, { volume: Number(e.target.value) })} disabled={!!sel.muted} className="flex-1 disabled:opacity-40" /><span className="w-10 text-right tabular-nums">{Math.round((sel.volume ?? 1) * 100)}%</span></label>
+                  <label className="flex items-center gap-2 text-fg-muted">volume<input type="range" min={0} max={3} step={0.05} value={sel.volume ?? 1} onChange={(e) => updateSel(sel.id, { volume: Number(e.target.value) })} disabled={!!sel.muted} className="flex-1 disabled:opacity-40" /><span className="w-10 text-right tabular-nums">{Math.round((sel.volume ?? 1) * 100)}%</span></label>
                   <label className="flex items-center gap-1.5 text-fg-muted"><input type="checkbox" checked={!!sel.muted} onChange={(e) => updateSel(sel.id, { muted: e.target.checked })} /> Mute</label>
                 </Section>
               )}
