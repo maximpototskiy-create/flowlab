@@ -314,33 +314,22 @@ const NAMING_KEY = "flowlab.editor.naming";
 const NAMING_DEFAULT = { template: "{project}_{type}_{version}__{resolution}_{duration}_{lang}_{initials}", version: "v1", lang: "en", initials: "" };
 const NAMING_TOKENS = ["project", "type", "version", "resolution", "duration", "lang", "initials"] as const;
 // Versions = cartesian product of each variant slot's options (option 0 = base).
-function enumerateCombos(slots: EditClip[]): number[][] {
-  let combos: number[][] = [[]];
-  for (const s of slots) {
-    const opts = 1 + (s.variants?.length ?? 0);
-    const next: number[][] = [];
-    for (const combo of combos) for (let i = 0; i < opts; i++) next.push([...combo, i]);
-    combos = next;
-  }
-  return combos;
-}
-// Apply one combo: swap each slot clip's text/url to the chosen option.
-function applyCombo(base: EditClip[], slots: EditClip[], combo: number[]): EditClip[] {
-  const pick = new Map<string, number>();
-  slots.forEach((s, i) => pick.set(s.id, combo[i] ?? 0));
+// ---- Timeline versions -------------------------------------------------------
+// A version is simply "the same timeline with some clips swapped": a map of
+// clip id -> override (different url / text, plus the variant's own duration
+// for sectioned videos so the chain re-times). v1 is always the base.
+export type VersionOv = { url?: string; text?: string; dur?: number };
+export type TimelineVersion = { id: string; name: string; ov: Record<string, VersionOv> };
+function applyOverrides(base: EditClip[], ov: Record<string, VersionOv>): EditClip[] {
   return base.map((c) => {
-    const idx = pick.get(c.id);
-    if (idx == null || idx === 0) return c;
-    const v = c.variants?.[idx - 1];
-    if (!v) return c;
-    // A sectioned video slot adopts the variant's own duration (when known),
-    // so the whole hook/body/packshot chain re-times itself per version.
-    const adaptDur = v.url != null && v.dur != null && v.dur > 0.05 && c.section && c.kind === "video";
+    const o = ov[c.id];
+    if (!o) return c;
+    const adaptDur = o.url != null && o.dur != null && o.dur > 0.05 && c.section && c.kind === "video";
     return {
       ...c,
-      ...(v.text != null ? { text: v.text } : {}),
-      ...(v.url != null ? { url: v.url } : {}),
-      ...(adaptDur ? { duration: +v.dur!.toFixed(2), inset: 0 } : {}),
+      ...(o.text != null ? { text: o.text } : {}),
+      ...(o.url != null ? { url: o.url } : {}),
+      ...(adaptDur ? { duration: +o.dur!.toFixed(2), inset: 0 } : {}),
     };
   });
 }
@@ -417,20 +406,91 @@ function Section({ id, title, open, onToggle, right, children }: {
   );
 }
 
-// Loads its video source only once the tile scrolls into view, so a picker with
-// dozens of clips doesn't fire dozens of parallel range requests at storage
-// (which Supabase resets — net::ERR_CONNECTION_RESET).
-function LazyVideo({ src, className }: { src: string; className?: string }) {
-  const ref = useRef<HTMLVideoElement | null>(null);
-  const [show, setShow] = useState(false);
+// ---- video thumbnails without live <video> elements --------------------------
+// Every bin card / picker tile used to mount its own network-backed <video>
+// (preload=metadata). Dozens of parallel range requests saturated the
+// connection: thumbnails never finished, and a hidden tab froze mid-load.
+// VideoThumb instead grabs ONE frame per URL through a small work queue
+// (3 downloads at a time), caches it as a data-URL for the whole session and
+// renders a plain <img>. A live video is mounted only while hovered.
+const frameCache = new Map<string, { img: string; dur: number; w: number; h: number }>();
+const framePending = new Map<string, Promise<{ img: string; dur: number; w: number; h: number } | null>>();
+let frameActive = 0;
+const frameQueue: (() => void)[] = [];
+function framePump() {
+  while (frameActive < 3 && frameQueue.length) { frameActive++; frameQueue.shift()!(); }
+}
+function grabFrame(url: string): Promise<{ img: string; dur: number; w: number; h: number } | null> {
+  const hit = frameCache.get(url);
+  if (hit) return Promise.resolve(hit);
+  const pending = framePending.get(url);
+  if (pending) return pending;
+  const p = new Promise<{ img: string; dur: number; w: number; h: number } | null>((resolve) => {
+    const job = () => {
+      const v = document.createElement("video");
+      v.crossOrigin = "anonymous"; v.muted = true; v.playsInline = true; v.preload = "metadata";
+      let done = false;
+      const finish = (res: { img: string; dur: number; w: number; h: number } | null) => {
+        if (done) return; done = true;
+        clearTimeout(tm);
+        try { v.removeAttribute("src"); v.load(); } catch { /* */ }
+        frameActive--; framePump();
+        if (res) frameCache.set(url, res);
+        framePending.delete(url);
+        resolve(res);
+      };
+      const tm = setTimeout(() => finish(null), 12_000);
+      v.onerror = () => finish(null);
+      v.onloadeddata = () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 2); } catch { finish(null); } };
+      v.onseeked = () => {
+        try {
+          const scale = 200 / Math.max(v.videoWidth, v.videoHeight, 1);
+          const c = document.createElement("canvas");
+          c.width = Math.max(2, Math.round(v.videoWidth * scale));
+          c.height = Math.max(2, Math.round(v.videoHeight * scale));
+          c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);
+          finish({ img: c.toDataURL("image/jpeg", 0.72), dur: v.duration || 0, w: v.videoWidth, h: v.videoHeight });
+        } catch { finish(null); }
+      };
+      v.src = url;
+    };
+    frameQueue.push(job); framePump();
+  });
+  framePending.set(url, p);
+  return p;
+}
+function VideoThumb({ src, className, hoverPlay, onDims }: { src: string; className?: string; hoverPlay?: boolean; onDims?: (w: number, h: number, dur: number) => void }) {
+  const holdRef = useRef<HTMLDivElement | null>(null);
+  const [img, setImg] = useState<string | null>(() => frameCache.get(src)?.img ?? null);
+  const [hover, setHover] = useState(false);
   useEffect(() => {
-    const el = ref.current;
-    if (!el || show) return;
-    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setShow(true); io.disconnect(); } }, { rootMargin: "120px" });
+    setImg(frameCache.get(src)?.img ?? null);
+    const el = holdRef.current;
+    if (!el || frameCache.has(src)) {
+      const c = frameCache.get(src); if (c) onDims?.(c.w, c.h, c.dur);
+      return;
+    }
+    let alive = true;
+    const io = new IntersectionObserver((es) => {
+      if (!es.some((e) => e.isIntersecting)) return;
+      io.disconnect();
+      grabFrame(src).then((r) => { if (alive && r) { setImg(r.img); onDims?.(r.w, r.h, r.dur); } });
+    }, { rootMargin: "160px" });
     io.observe(el);
-    return () => io.disconnect();
-  }, [show]);
-  return <video ref={ref} src={show ? src : undefined} muted playsInline preload="metadata" className={className} />;
+    return () => { alive = false; io.disconnect(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
+  return (
+    <div ref={holdRef} className={`relative overflow-hidden ${className ?? ""}`}
+      onMouseEnter={hoverPlay ? () => setHover(true) : undefined}
+      onMouseLeave={hoverPlay ? () => setHover(false) : undefined}>
+      {img
+        // eslint-disable-next-line @next/next/no-img-element
+        ? <img src={img} alt="" draggable={false} className="absolute inset-0 w-full h-full object-cover" />
+        : <div className="absolute inset-0 grid place-items-center text-fg-subtle text-[9px] bg-bg-subtle/40">…</div>}
+      {hover && <video src={src} muted loop playsInline autoPlay className="absolute inset-0 w-full h-full object-cover" />}
+    </div>
+  );
 }
 
 export default function VideoEditor({ assets, workflowId, projectId, projectName, brandId }: { assets: EditorAsset[]; workflowId?: string; projectId?: string; projectName?: string; brandId?: string }) {
@@ -506,7 +566,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   });
   useEffect(() => { try { localStorage.setItem(NAMING_KEY, JSON.stringify(naming)); } catch { /* */ } }, [naming]);
   const [versionsOpen, setVersionsOpen] = useState(false);
-  const [optionPicker, setOptionPicker] = useState<string | null>(null); // slot id with the asset-picker grid open
+  const [genClip, setGenClip] = useState(""); // versions generator: clip to replace
+  const [genCat, setGenCat] = useState("hook"); // versions generator: bin category
+  const [replaceFor, setReplaceFor] = useState<string | null>(null); // clip id being replaced in the active version
+  const [textOvFor, setTextOvFor] = useState<string | null>(null); // text clip id being overridden
+  const [textOvDraft, setTextOvDraft] = useState("");
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchFormats, setBatchFormats] = useState<Set<string>>(() => new Set(["9:16"]));
   const [hookBannerDismissed, setHookBannerDismissed] = useState(false);
@@ -593,20 +657,21 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   selectedRef.current = selectedIds;
 
   // ---- Version preview -----------------------------------------------------
-  // previewVer selects which version combo is DISPLAYED in the viewport
-  // (0 = v1 = base). The timeline and properties always edit the BASE clips;
+  // activeVer selects which timeline version is DISPLAYED (0 = v1 = base).
+  // The timeline and properties always edit the BASE clips;
   // viewClips is a derived, non-destructive substitution used only for
   // rendering the preview (and for "export what I see").
-  const [previewVer, setPreviewVer] = useState(0);
-  const verSlots = useMemo(() => clips.filter((c) => c.variants !== undefined), [clips]);
-  const verCombos = useMemo(() => enumerateCombos(verSlots), [verSlots]);
-  useEffect(() => { if (previewVer >= verCombos.length) setPreviewVer(0); }, [verCombos.length, previewVer]);
+  const [tlVersions, setTlVersions] = useState<TimelineVersion[]>([]);
+  const [activeVer, setActiveVer] = useState(0); // 0 = base (v1)
+  useEffect(() => { if (activeVer > tlVersions.length) setActiveVer(0); }, [tlVersions.length, activeVer]);
   const viewClips = useMemo(
-    () => (previewVer > 0 && verCombos[previewVer] ? chainSections(applyCombo(clips, verSlots, verCombos[previewVer])) : clips),
-    [clips, previewVer, verSlots, verCombos],
+    () => (activeVer > 0 && tlVersions[activeVer - 1] ? chainSections(applyOverrides(clips, tlVersions[activeVer - 1].ov)) : clips),
+    [clips, activeVer, tlVersions],
   );
   const viewClipsRef = useRef<EditClip[]>([]);
   viewClipsRef.current = viewClips;
+  const tlVersionsRef = useRef<TimelineVersion[]>([]);
+  tlVersionsRef.current = tlVersions;
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
   const sortBin = (arr: EditorAsset[]) => {
@@ -752,12 +817,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     try {
       const raw = localStorage.getItem(PROJECT_KEY);
       if (raw) {
-        const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; posMode?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>> };
+        const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; posMode?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>>; versions?: TimelineVersion[] };
         if (Array.isArray(j.clips) && j.clips.length && Array.isArray(j.layers) && j.layers.length) {
           legacyPosRef.current = j.posMode !== "frac";
           savedClips = j.clips; savedLayers = j.layers;
           if (j.layouts && typeof j.layouts === "object") setLayouts(j.layouts);
           if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
+          if (Array.isArray(j.versions)) setTlVersions(j.versions.filter((v) => v && typeof v === "object" && v.ov));
         }
       }
     } catch { /* ignore corrupt saves */ }
@@ -846,14 +912,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveProject = useCallback(() => {
-    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey, layouts: layoutsRef.current, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
+    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey, layouts: layoutsRef.current, versions: tlVersionsRef.current, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
   }, [resKey]);
   useEffect(() => {
     if (!restoredRef.current) return;
     setSaveState("saving");
-    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey, layouts, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
+    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey, layouts, versions: tlVersions, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
     return () => clearTimeout(t);
-  }, [clips, layers, resKey, layouts]);
+  }, [clips, layers, resKey, layouts, tlVersions]);
   // Switch the active output format, remembering each format's own layout.
   // Snapshot the current clips into the old format, then restore any saved
   // layout for the new one (clips the new format hasn't seen keep their spot).
@@ -1401,30 +1467,29 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     setVersionsOpen(false); setBatchRunning(true); setProgress(0); stop();
     try {
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
-      const slots = clipsRef.current.filter((c) => (c.variants?.length ?? 0) > 0);
-      const combos = enumerateCombos(slots);
-      const indices = only != null && combos[only] ? [only] : combos.map((_, i) => i);
+      const all: { name: string; ov: Record<string, VersionOv> }[] = [{ name: "v1", ov: {} }, ...tlVersionsRef.current.map((v, i) => ({ name: `v${i + 2}`, ov: v.ov }))];
+      const indices = only != null && all[only] ? [only] : all.map((_, i) => i);
       const total = indices.length * fmts.length;
       let done = 0;
       for (const vi of indices) {
-        const verClips = chainSections(applyCombo(clipsRef.current, slots, combos[vi]));
+        const verClips = chainSections(applyOverrides(clipsRef.current, all[vi].ov));
         const vis = layersRef.current.filter((l) => l.type !== "audio");
         const hiddenIds = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
         const z: EditClip[] = [];
         for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...verClips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
         const ordered = [...z, ...verClips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
         for (const r of fmts) {
-          setStatus(`Rendering v${vi + 1} ${r.label} (${done + 1}/${total})\u2026`); setProgress(0);
+          setStatus(`Rendering ${all[vi].name} \u00b7 ${r.key} (${done + 1}/${total})\u2026`);
           const { blob, ext } = await exportTimeline({
             clips: ordered.map(toExportClip),
-            width: r.w, height: r.h, previewWidth: previewSize.w || r.w,
-            onProgress: (p) => setProgress(Math.round(p * 100)),
-            onStage: (msg) => setStatus(`v${vi + 1} ${r.key}: ${msg}`),
+            width: r.w, height: r.h, previewWidth: previewSize.w,
+            onProgress: (p) => setProgress(Math.round(((done + p) / total) * 100)),
+            onStage: (msg) => setStatus(`${all[vi].name} ${r.key}: ${msg}`),
           });
           const url = URL.createObjectURL(blob);
-          const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, `v${vi + 1}`, r.key);
-          document.body.appendChild(a); a.click(); a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 4000);
+          const a = document.createElement("a");
+          a.href = url; a.download = buildFileName(ext, all[vi].name, r.key);
+          document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
           done++;
           await new Promise((res) => setTimeout(res, 500)); // stagger downloads
         }
@@ -1436,27 +1501,56 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const renderAllVersions = useCallback(() => renderVersions(null), [renderVersions]);
   const renderOneVersion = useCallback((vi: number) => renderVersions(vi), [renderVersions]);
 
-  // ── Variant-slot management for the Versions panel ──
-  const makeSlot = useCallback((id: string) => { setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: c.variants ?? [] } : c))); setVersionsOpen(true); }, []);
-  const clearSlot = useCallback((id: string) => setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: undefined } : c))), []);
-  const clearOptions = useCallback((id: string) => setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: [] } : c))), []);
-  const addOption = useCallback((id: string) => setClips((cs) => cs.map((c) => {
-    if (c.id !== id) return c;
-    const vid = `vr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const opt = c.kind === "text" ? { id: vid, text: "" } : { id: vid, url: "" };
-    return { ...c, variants: [...(c.variants || []), opt] };
-  })), []);
-  // Add a media option directly with a URL (thumbnail picker flow).
-  const addOptionUrl = useCallback((id: string, url: string) => setClips((cs) => cs.map((c) => {
-    if (c.id !== id) return c;
-    if (c.url === url || (c.variants || []).some((v) => v.url === url)) return c; // dedupe
-    const vid = `vr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    return { ...c, variants: [...(c.variants || []), { id: vid, url }] };
-  })), []);
-  const setOption = useCallback((id: string, vId: string, patch: { text?: string; url?: string; dur?: number }) =>
-    setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).map((v) => (v.id === vId ? { ...v, ...patch } : v)) } : c))), []);
-  const removeOption = useCallback((id: string, vId: string) =>
-    setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).filter((v) => v.id !== vId) } : c))), []);
+  // ── Timeline-version operations ──
+  const addVersion = useCallback((dupOv?: Record<string, VersionOv>): number => {
+    let idx = 0;
+    setTlVersions((vs) => {
+      idx = vs.length + 1;
+      return [...vs, { id: `tv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`, name: `v${vs.length + 2}`, ov: { ...(dupOv ?? {}) } }];
+    });
+    return idx;
+  }, []);
+  const deleteVersion = useCallback((i: number) => { // i is 1-based (0 = base, undeletable)
+    setTlVersions((vs) => vs.filter((_, k) => k !== i - 1));
+    setActiveVer((a) => (a === i ? 0 : a > i ? a - 1 : a));
+  }, []);
+  // Write an override into the ACTIVE version; if base is active, fork a new
+  // version first so the base always stays intact.
+  const setOverride = useCallback((clipId: string, ov: VersionOv | null) => {
+    setActiveVer((cur) => {
+      if (cur > 0) {
+        setTlVersions((vs) => vs.map((v, k) => {
+          if (k !== cur - 1) return v;
+          const next = { ...v.ov };
+          if (ov) next[clipId] = ov; else delete next[clipId];
+          return { ...v, ov: next };
+        }));
+        return cur;
+      }
+      // base active -> fork
+      setTlVersions((vs) => [...vs, { id: `tv-${Date.now().toString(36)}`, name: `v${vs.length + 2}`, ov: ov ? { [clipId]: ov } : {} }]);
+      return tlVersionsRef.current.length + 1;
+    });
+  }, []);
+  // Generate one version per bin asset (e.g. every "hook" asset from the
+  // brand library) replacing the given clip. This IS the old "+ all hook"
+  // flow, but each result is an explicit, previewable version.
+  const generateVersions = useCallback((clipId: string, category: string) => {
+    const c = clipsRef.current.find((x) => x.id === clipId);
+    if (!c) return 0;
+    const pool = (category === "all" ? [...library, ...brandLib] : brandLib.filter((a) => a.category === category))
+      .filter((a) => a.kind === c.kind && a.url && a.url !== c.url);
+    const seen = new Set<string>();
+    const fresh: TimelineVersion[] = [];
+    const existing = new Set(tlVersionsRef.current.map((v) => v.ov[clipId]?.url).filter(Boolean));
+    for (const a of pool) {
+      if (seen.has(a.url) || existing.has(a.url)) continue;
+      seen.add(a.url);
+      fresh.push({ id: `tv-${a.id}`, name: "", ov: { [clipId]: { url: a.url, ...(a.duration ? { dur: a.duration } : {}) } } });
+    }
+    if (fresh.length) setTlVersions((vs) => [...vs, ...fresh]);
+    return fresh.length;
+  }, [library, brandLib]);
   const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
   // Human-readable label for an asset URL (bin label, else the file name).
   const urlLabel = useCallback((u?: string) => {
@@ -1465,60 +1559,28 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     if (a) return a.label;
     try { return decodeURIComponent(u.split("/").pop()!.split("?")[0]).slice(0, 26); } catch { return "asset"; }
   }, [assets, brandLib]);
-  // What a given version swaps relative to the base assembly, e.g.
-  // "hook: giphy(2).gif · text: "Alt hook"" — v1 (index 0) is the base.
-  const describeVer = useCallback((vi: number): string => {
-    const combo = verCombos[vi];
-    if (!combo) return "";
+  // Human summary of a version's overrides: "Hook: asset \u00b7 Body: asset".
+  const describeOv = useCallback((ov: Record<string, VersionOv>): string => {
     const parts: string[] = [];
-    verSlots.forEach((s, si) => {
-      const k = combo[si] ?? 0;
-      if (k === 0) return;
-      const v = s.variants?.[k - 1];
-      if (!v) return;
-      parts.push(`${s.section ?? clipLabel(s)}: ${s.kind === "text" ? `"${(v.text || "").slice(0, 22)}"` : urlLabel(v.url)}`);
-    });
-    return parts.length ? parts.join(" \u00b7 ") : "base (as assembled)";
-  }, [verCombos, verSlots, clipLabel, urlLabel]);
-  // Version index that keeps the current preview's picks but sets one slot to
-  // a given option (0 = base). Enumeration order: the LAST slot varies fastest.
-  const comboIndexFor = useCallback((slotId: string, optIdx: number): number => {
-    const cur = verCombos[previewVer] ? [...verCombos[previewVer]] : verSlots.map(() => 0);
-    const si = verSlots.findIndex((s) => s.id === slotId);
-    if (si < 0) return previewVer;
-    cur[si] = optIdx;
-    let idx = 0;
-    for (let i = 0; i < verSlots.length; i++) {
-      const opts = 1 + (verSlots[i].variants?.length ?? 0);
-      idx = idx * opts + Math.min(cur[i] ?? 0, opts - 1);
+    for (const [cid, o] of Object.entries(ov)) {
+      const c = clipsRef.current.find((x) => x.id === cid);
+      if (!c) continue;
+      parts.push(`${c.section ?? clipLabel(c)}: ${o.text != null ? `"${o.text.slice(0, 22)}"` : urlLabel(o.url)}`);
     }
-    return Math.min(idx, verCombos.length - 1);
-  }, [verCombos, previewVer, verSlots]);
-  // Bulk-add every matching bin asset as a variant in one click (e.g. all 10
-  // generated hooks -> 10 versions, no per-item clicking).
-  const addAllFromBin = useCallback((id: string, category: string) => {
-    setClips((cs) => cs.map((c) => {
-      if (c.id !== id) return c;
-      const pool = (category === "all" ? [...library, ...brandLib] : brandLib.filter((a) => a.category === category)).filter((a) => a.kind === c.kind && a.url);
-      const existing = new Set<string>([c.url, ...(c.variants || []).map((v) => v.url)].filter((u): u is string => !!u));
-      const add: { id: string; url: string }[] = [];
-      for (const a of pool) { if (existing.has(a.url)) continue; existing.add(a.url); add.push({ id: `vr-${a.id}`, url: a.url }); }
-      return { ...c, variants: [...(c.variants || []), ...add] };
-    }));
-  }, [library, brandLib]);
-  // One-tap auto-versions: pick the opening clip as the hook slot and fill it
-  // with every Hook asset from the library.
+    return parts.length ? parts.join(" \u00b7 ") : "no changes yet";
+  }, [clipLabel, urlLabel]);
+  // One-tap versions from the banner: a version per Hook asset in the library.
   const buildHookVersions = useCallback(() => {
     const hooks = brandLib.filter((a) => a.category === "hook" && (a.kind === "video" || a.kind === "image"));
-    if (hooks.length < 2) return;
     const hookUrls = new Set(hooks.map((h) => h.url));
-    const slot = clipsRef.current.find((c) => c.url != null && hookUrls.has(c.url)) ||
+    const slot = clipsRef.current.find((c) => c.section === "Hook" && (c.kind === "video" || c.kind === "image")) ||
+      clipsRef.current.find((c) => c.url != null && hookUrls.has(c.url)) ||
       clipsRef.current.filter((c) => c.kind === "video" || c.kind === "image").sort((a, b) => a.start - b.start)[0];
     if (!slot) return;
-    addAllFromBin(slot.id, "hook");
+    generateVersions(slot.id, "hook");
     setVersionsOpen(true);
     setHookBannerDismissed(true);
-  }, [brandLib, addAllFromBin]);
+  }, [brandLib, generateVersions]);
 
   const exportMp4 = useCallback(async () => {
     if (exporting || !clips.length) return;
@@ -1539,12 +1601,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         onStage: (m) => setStatus(m),
       });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, previewVer > 0 ? `v${previewVer + 1}` : undefined);
+      const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, activeVer > 0 ? `v${activeVer + 1}` : undefined);
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
       setStatus(mp4 ? "Done — MP4 downloaded." : "Done — WebM downloaded (browser doesn\u2019t support MP4 recording).");
     } catch (e) { console.error(e); setStatus(`Export failed: ${e instanceof Error ? e.message : "see console"}`); }
     finally { setExporting(false); }
-  }, [exporting, clips.length, layers, res, previewSize, stop, buildFileName, previewVer]);
+  }, [exporting, clips.length, layers, res, previewSize, stop, buildFileName, activeVer]);
 
   // Reverse bridge: render + upload + hand the URL to the canvas Editor node
   const [sendingToCanvas, setSendingToCanvas] = useState(false);
@@ -1875,15 +1937,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         {items.map((a) => (
           <div key={a.id} className="min-w-0">
             <div role="button" tabIndex={0} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={`${a.label}${extOf(a.url) ? ` · ${extOf(a.url)}` : ""}`}
-              onMouseEnter={(e) => { const v = e.currentTarget.querySelector("video"); if (v) (v as HTMLVideoElement).play().catch(() => {}); }}
-              onMouseLeave={(e) => { const v = e.currentTarget.querySelector("video"); if (v) { (v as HTMLVideoElement).pause(); (v as HTMLVideoElement).currentTime = 0; } }}
               className="group relative w-full aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
               {a.kind === "image" ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={a.url} alt="" onLoad={(e) => noteDims(a.url, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className="absolute inset-0 w-full h-full object-cover" loading="lazy" draggable={false} />
               ) : a.kind === "video" ? (
-                <video src={a.url} muted loop playsInline preload="metadata" onLoadedMetadata={(e) => noteDims(a.url, e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                  className="absolute inset-0 w-full h-full object-cover pointer-events-none" />
+                <VideoThumb src={a.url} hoverPlay onDims={(w, h) => noteDims(a.url, w, h)} className="absolute inset-0 w-full h-full" />
               ) : (
                 <span className="absolute inset-0 flex items-center justify-center text-fg-subtle"><Music size={20} />
                   <button onClick={(e) => { e.stopPropagation(); togglePreview(a.url); }} title={previewingUrl === a.url ? "Stop" : "Preview"}
@@ -2319,167 +2378,72 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 <Layers size={12} /> Versions
               </button>
               {versionsOpen && (() => {
-                const slots = verSlots;
-                const versionCount = verCombos.length;
+                const allVers: { name: string; ov: Record<string, VersionOv> }[] = [{ name: "v1", ov: {} }, ...tlVersions.map((v, i) => ({ name: `v${i + 2}`, ov: v.ov }))];
+                const replaceable = clips.filter((c) => (c.kind === "video" || c.kind === "image") && c.url).sort((a, b) => a.start - b.start);
+                const cats = Array.from(new Set(brandLib.map((a) => a.category).filter(Boolean))) as string[];
+                const fmtsChecked = RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length;
+                const total = allVers.length * fmtsChecked;
+                const exFmt = RESOLUTIONS.find((r) => batchFormats.has(r.key))?.key;
                 return (
-                  <div className="absolute right-0 top-full mt-1 z-50 w-[420px] max-h-[70vh] overflow-auto rounded-lg border border-border bg-bg-card p-3 shadow-xl text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
+                  <div className="absolute right-0 top-full mt-1 z-50 w-[440px] max-h-[72vh] overflow-auto rounded-lg border border-border bg-bg-card p-3 shadow-xl text-[11px]" onPointerDown={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-fg font-medium">Versions &amp; batch render</span>
+                      <span className="text-fg font-medium">Versions</span>
                       <button onClick={() => setVersionsOpen(false)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
                     </div>
                     <div className="mb-2 rounded-md bg-bg-subtle/60 border border-border px-2 py-1.5 text-[10px] text-fg-subtle leading-relaxed">
-                      Render several variants of this video in one go. Mark a clip on the timeline as a <span className="text-fg-muted">version slot</span> and give it options (e.g. 3 different hook images, or 2 alternate texts). FlowLab renders <span className="text-fg-muted">every combination</span> of all slots, in every checked format, as separate files (v1, v2, …).
+                      A version is the same timeline with some clips swapped. Switch versions with the tabs under the player (or the chip over the preview), swap a clip inside a version via right-click {"\u2192"} <span className="text-fg-muted">Replace in this version</span>. v1 is always your base.
                     </div>
-                    {slots.length === 0 && (() => {
-                      const secClips = clips.filter((cl) => cl.section && (cl.kind === "video" || cl.kind === "image"));
-                      const secNames = Array.from(new Set(secClips.map((cl) => cl.section as string)));
-                      if (!secNames.length) return null;
-                      const makeSlot = (names: string[]) => setClips((p) => p.map((cl) => (cl.section && names.includes(cl.section) && (cl.kind === "video" || cl.kind === "image") && cl.variants === undefined ? { ...cl, variants: [] } : cl)));
-                      return (
-                        <div className="mb-3 rounded-md border border-brand/40 bg-brand/5 px-2 py-2">
-                          <div className="text-fg mb-1.5">Your timeline has sections {"\u2014"} version them in one click:</div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {secNames.map((n) => <button key={n} onClick={() => makeSlot([n])} className="px-2 py-1 rounded border border-brand/50 text-brand hover:bg-brand/10">+ {n} versions</button>)}
-                            {secNames.length > 1 && <button onClick={() => makeSlot(secNames)} className="px-2 py-1 rounded border border-border text-fg-muted hover:border-brand hover:text-brand">+ all sections</button>}
-                          </div>
-                          <div className="mt-1 text-[10px] text-fg-subtle">Each section becomes a slot; add alternative assets to it below. Swapping a variant re-times the whole chain automatically.</div>
+
+                    <div className="space-y-0.5 mb-2">
+                      {allVers.map((v, vi) => (
+                        <div key={vi} onClick={() => setActiveVer(vi)}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer border ${activeVer === vi ? "bg-brand/10 border-brand/40" : "border-transparent hover:bg-bg-subtle"}`}>
+                          <span className={`w-7 shrink-0 ${activeVer === vi ? "text-brand font-medium" : "text-fg-subtle"}`}>{v.name}</span>
+                          <span className="flex-1 truncate text-fg-muted" title={vi === 0 ? "base (as assembled)" : describeOv(v.ov)}>{vi === 0 ? "base (as assembled)" : describeOv(v.ov)}</span>
+                          <button title="Render only this version (in the checked formats)" onClick={(e) => { e.stopPropagation(); renderOneVersion(vi); }} className="text-fg-subtle hover:text-brand shrink-0"><Download size={12} /></button>
+                          {vi > 0 && <button title="Duplicate this version" onClick={(e) => { e.stopPropagation(); addVersion(tlVersions[vi - 1].ov); }} className="text-fg-subtle hover:text-fg shrink-0"><Copy size={12} /></button>}
+                          {vi > 0 && <button title="Delete this version" onClick={(e) => { e.stopPropagation(); deleteVersion(vi); }} className="text-fg-subtle hover:text-red-400 shrink-0"><X size={12} /></button>}
                         </div>
-                      );
-                    })()}
-                    {slots.length === 0 ? (
-                      <div className="text-fg-subtle leading-relaxed">
-                        <div className="text-fg-muted mb-1">No version slots yet. To make versions:</div>
-                        1. Right-click a clip on the timeline.<br />
-                        2. Choose <span className="text-fg-muted">Use in versions</span>.<br />
-                        3. Come back here and add its options (alternate texts or assets).<br />
-                        <span className="block mt-1">Then pick formats and hit Render &mdash; you get one file per combination.</span>
-                      </div>
-                    ) : (
-                      <div className="space-y-2.5">
-                        {slots.map((c) => {
-                          const matchCat = (c.section || "").toLowerCase();
-                          const mediaAssets = Array.from(new Map([...assets, ...brandLib].filter((a) => a.kind === c.kind).map((a) => [a.url, a])).values())
-                            .sort((a, b) => Number(((b.category || "").toLowerCase() === matchCat && !!matchCat)) - Number(((a.category || "").toLowerCase() === matchCat && !!matchCat)));
-                          return (
-                            <div key={c.id} className="rounded-md border border-border p-2">
-                              <div className="flex items-center justify-between mb-1.5">
-                                <span className="text-fg truncate">{c.section ?? clipLabel(c)} <span className="text-fg-subtle">· base + {c.variants?.length ?? 0} option{(c.variants?.length ?? 0) === 1 ? "" : "s"}</span></span>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  {(c.variants?.length ?? 0) > 0 && <button onClick={() => clearOptions(c.id)} title="Remove all options (keep this slot)" className="text-[10px] text-fg-subtle hover:text-fg">clear options</button>}
-                                  <button onClick={() => clearSlot(c.id)} title="Remove this slot from versions" className="text-fg-subtle hover:text-red-400"><X size={12} /></button>
-                                </div>
-                              </div>
-                              {(() => {
-                                const si = verSlots.findIndex((s) => s.id === c.id);
-                                const activeIdx = verCombos[previewVer]?.[si] ?? 0;
-                                const thumb = (url?: string, onDur?: (d: number) => void) => !url
-                                  ? <div className="w-9 h-9 rounded bg-bg-subtle grid place-items-center text-fg-subtle shrink-0">?</div>
-                                  : c.kind === "image"
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    ? <img src={url} alt="" className="w-9 h-9 rounded object-cover shrink-0" />
-                                    : c.kind === "video"
-                                      ? <video src={url} muted playsInline preload="metadata" onLoadedMetadata={onDur ? (e) => onDur(e.currentTarget.duration) : undefined} className="w-9 h-9 rounded object-cover shrink-0" />
-                                      : <div className="w-9 h-9 rounded bg-bg-subtle grid place-items-center text-fg-subtle shrink-0"><Music size={13} /></div>;
-                                const row = (idx: number, inner: React.ReactNode, url?: string, removeId?: string, onDur?: (d: number) => void) => (
-                                  <div key={removeId ?? "base"} onClick={() => setPreviewVer(comboIndexFor(c.id, idx))}
-                                    title="Click to see this option in the preview"
-                                    className={`flex items-center gap-2 mb-1 px-1.5 py-1 rounded cursor-pointer border ${activeIdx === idx ? "bg-brand/10 border-brand/40" : "border-transparent hover:bg-bg-subtle"}`}>
-                                    {c.kind !== "text" && thumb(url, onDur)}
-                                    {inner}
-                                    {idx === 0
-                                      ? <span className="text-[9px] uppercase tracking-wider text-fg-subtle shrink-0">base</span>
-                                      : <button title="Remove this option" onClick={(e) => { e.stopPropagation(); if (removeId) removeOption(c.id, removeId); }} className="text-fg-subtle hover:text-red-400 shrink-0"><X size={12} /></button>}
-                                  </div>
-                                );
-                                return (
-                                  <>
-                                    {row(0, <span className="flex-1 truncate text-fg-muted">{c.kind === "text" ? `"${(c.text || "").slice(0, 34)}"` : clipLabel(c)}</span>, c.url)}
-                                    {(c.variants || []).map((v, i) => row(
-                                      i + 1,
-                                      c.kind === "text"
-                                        ? <input value={v.text ?? ""} onClick={(e) => e.stopPropagation()} onChange={(e) => setOption(c.id, v.id, { text: e.target.value })} placeholder="alternative text" className="flex-1 bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" />
-                                        : <span className="flex-1 truncate text-fg-muted">{urlLabel(v.url)}{v.dur ? <span className="text-fg-subtle"> · {v.dur.toFixed(1)}s</span> : null}</span>,
-                                      v.url, v.id,
-                                      c.kind === "video" && !v.dur ? (d: number) => setOption(c.id, v.id, { dur: +d.toFixed(2) }) : undefined,
-                                    ))}
-                                  </>
-                                );
-                              })()}
-                              {c.kind === "text" ? (
-                                <button onClick={() => addOption(c.id)} className="mt-1 px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> add option</button>
-                              ) : (
-                                <button onClick={() => setOptionPicker(optionPicker === c.id ? null : c.id)} className={`mt-1 px-1.5 py-0.5 rounded border border-dashed inline-flex items-center gap-1 ${optionPicker === c.id ? "border-brand text-brand" : "border-border text-fg-subtle hover:text-fg hover:border-brand"}`}><Plus size={11} /> {optionPicker === c.id ? "close picker" : "add option"}</button>
-                              )}
-                              {optionPicker === c.id && c.kind !== "text" && (
-                                <div className="mt-1.5 max-h-44 overflow-y-auto grid grid-cols-4 gap-1.5 p-1.5 rounded-md border border-border bg-bg-subtle/50">
-                                  {mediaAssets.length === 0 && <div className="col-span-4 text-fg-subtle text-center py-2">No {c.kind} assets in the bin</div>}
-                                  {mediaAssets.map((a) => (
-                                    <button key={a.id} title={`Add "${a.label}" as an option`} onClick={() => addOptionUrl(c.id, a.url)}
-                                      className="relative rounded overflow-hidden border border-border hover:border-brand aspect-square bg-black/20">
-                                      {c.kind === "image"
-                                        // eslint-disable-next-line @next/next/no-img-element
-                                        ? <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" />
-                                        : c.kind === "video"
-                                          ? <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
-                                          : <div className="absolute inset-0 grid place-items-center text-fg-subtle"><Music size={16} /></div>}
-                                      <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[8px] px-1 py-0.5 truncate">{a.label}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                              {c.kind !== "text" && (() => {
-                                const cats = Array.from(new Set(brandLib.filter((a) => a.kind === c.kind && a.category).map((a) => a.category as string)));
-                                return (
-                                  <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
-                                    <span className="text-fg-subtle" title="Each button adds every matching asset from the bin as a separate version option">add many from bin:</span>
-                                    {cats.map((cat) => <button key={cat} title={`Add every "${cat}" ${c.kind} from the bin as options`} onClick={() => addAllFromBin(c.id, cat)} className="px-1.5 py-0.5 rounded border border-dashed border-border text-brand hover:border-brand">+ all {cat}</button>)}
-                                    <button title={`Add every ${c.kind} from the bin as options`} onClick={() => addAllFromBin(c.id, "all")} className="px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand">+ all {c.kind}</button>
-                                  </div>
-                                );
-                              })()}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {versionCount > 1 && (
-                      <div className="mt-3">
-                        <div className="text-fg mb-1.5">All versions ({versionCount}) <span className="text-fg-subtle">{"\u2014"} click to preview in the viewport</span></div>
-                        <div className="max-h-44 overflow-y-auto space-y-0.5 pr-1">
-                          {verCombos.map((_, vi) => (
-                            <div key={vi} onClick={() => setPreviewVer(vi)}
-                              className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer border ${previewVer === vi ? "bg-brand/10 border-brand/40" : "border-transparent hover:bg-bg-subtle"}`}>
-                              <span className={`w-7 shrink-0 ${previewVer === vi ? "text-brand font-medium" : "text-fg-subtle"}`}>v{vi + 1}</span>
-                              <span className="flex-1 truncate text-fg-muted" title={describeVer(vi)}>{describeVer(vi)}</span>
-                              <button title="Render only this version (in the checked formats)" onClick={(e) => { e.stopPropagation(); renderOneVersion(vi); }} className="text-fg-subtle hover:text-brand shrink-0"><Download size={12} /></button>
-                            </div>
-                          ))}
+                      ))}
+                    </div>
+                    <button onClick={() => { const i = addVersion(activeVer > 0 ? tlVersions[activeVer - 1].ov : {}); setActiveVer(i); }}
+                      className="mb-3 px-2 py-1 rounded border border-dashed border-border text-fg-subtle hover:text-brand hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> New version (duplicate current)</button>
+
+                    {replaceable.length > 0 && (
+                      <div className="mb-3 rounded-md border border-border bg-bg-subtle/40 px-2 py-2">
+                        <div className="text-fg mb-1">Generate versions from the bin</div>
+                        <div className="text-[10px] text-fg-subtle mb-1.5">One new version per asset, replacing the chosen clip:</div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <select value={genClip} onChange={(e) => setGenClip(e.target.value)} className="bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand max-w-[150px]">
+                            {replaceable.map((c) => <option key={c.id} value={c.id}>{c.section ?? clipLabel(c)}</option>)}
+                          </select>
+                          <select value={genCat} onChange={(e) => setGenCat(e.target.value)} className="bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand">
+                            {cats.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
+                            <option value="all">any asset</option>
+                          </select>
+                          <button onClick={() => { const cid = genClip || replaceable[0]?.id; if (!cid) return; const n = generateVersions(cid, genCat); setStatus(n ? `${n} version${n === 1 ? "" : "s"} generated.` : "Nothing new to add from that category."); }}
+                            className="px-2 py-1 rounded bg-brand text-black font-medium">Generate</button>
                         </div>
                       </div>
                     )}
-                    <div className="mt-3 mb-1.5 text-fg">Formats to render:</div>
-                    <div className="flex flex-wrap gap-2 mb-2">
+
+                    <div className="mt-1 mb-1.5 text-fg">Formats to render:</div>
+                    <div className="flex items-center gap-3 mb-2">
                       {RESOLUTIONS.map((r) => (
-                        <label key={r.key} className="inline-flex items-center gap-1 text-fg-muted cursor-pointer">
-                          <input type="checkbox" checked={batchFormats.has(r.key)} onChange={(e) => setBatchFormats((s) => { const n = new Set(s); if (e.target.checked) n.add(r.key); else n.delete(r.key); return n; })} />
+                        <label key={r.key} className="inline-flex items-center gap-1 cursor-pointer text-fg-muted">
+                          <input type="checkbox" checked={batchFormats.has(r.key)} onChange={(e) => setBatchFormats((p) => { const n = new Set(p); if (e.target.checked) n.add(r.key); else n.delete(r.key); return n; })} className="accent-[rgb(var(--brand))]" />
                           {r.key}
                         </label>
                       ))}
                     </div>
-                    {(() => {
-                      const fmts = RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length;
-                      const total = versionCount * fmts;
-                      const exFmt = RESOLUTIONS.find((r) => batchFormats.has(r.key))?.key;
-                      return (
-                        <div className={`mb-2 text-[10px] leading-relaxed ${total > 24 ? "text-amber-400" : "text-fg-subtle"}`}>
-                          This renders <span className="font-medium">{total}</span> separate file{total === 1 ? "" : "s"} ({versionCount} version{versionCount === 1 ? "" : "s"} &times; {fmts} format{fmts === 1 ? "" : "s"}), named by your template (v1&hellip;v{versionCount}).
-                          {total > 24 && <span> That is a lot &mdash; trim options or formats if you only need a few.</span>}
-                          {exFmt && <div className="mt-1 truncate text-fg-subtle">Name example: <span className="text-fg-muted">{buildFileName("mp4", `v${previewVer + 1}`, exFmt)}</span></div>}
-                        </div>
-                      );
-                    })()}
-                    <button onClick={renderAllVersions} disabled={batchRunning || exporting || !clips.length} className="w-full px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center justify-center gap-1.5">
-                      {batchRunning ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{batchRunning ? `${progress}%` : "Render all versions"}
+                    <div className={`mb-2 text-[10px] leading-relaxed ${total > 24 ? "text-amber-400" : "text-fg-subtle"}`}>
+                      This renders <span className="font-medium">{total}</span> separate file{total === 1 ? "" : "s"} ({allVers.length} version{allVers.length === 1 ? "" : "s"} &times; {fmtsChecked} format{fmtsChecked === 1 ? "" : "s"}), named by your template.
+                      {total > 24 && <span> That is a lot &mdash; delete versions or formats if you only need a few.</span>}
+                      {exFmt && <div className="mt-1 truncate text-fg-subtle">Name example: <span className="text-fg-muted">{buildFileName("mp4", `v${activeVer + 1}`, exFmt)}</span></div>}
+                    </div>
+                    <button disabled={batchRunning || exporting} onClick={renderAllVersions}
+                      className="w-full py-1.5 rounded-md bg-brand text-black font-medium disabled:opacity-50 inline-flex items-center justify-center gap-1.5">
+                      <Download size={13} /> Render all versions
                     </button>
                   </div>
                 );
@@ -2505,7 +2469,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             const hookUrls = new Set(hooks.map((h) => h.url));
             const placedHook = clips.find((c) => c.url != null && hookUrls.has(c.url));
             const others = hooks.filter((h) => h.url !== placedHook?.url).length;
-            const hasSlot = clips.some((c) => c.variants !== undefined);
+            const hasSlot = tlVersions.length > 0;
             // Only nudge when the user has actually placed a hook on the timeline
             // AND there are other hooks to turn into versions. Avoids popping up
             // at random moments.
@@ -2518,15 +2482,15 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               </div>
             );
           })()}
-          {verCombos.length > 1 && (
-            <div className="absolute top-3 right-3 z-30 flex items-center gap-1 px-1.5 py-1 rounded-lg bg-bg-card/95 border border-border shadow-lg text-[11px]" title={previewVer > 0 ? "Previewing a version - timeline edits still apply to the base" : "Base assembly"}>
-              <button onClick={() => setPreviewVer((v) => (v - 1 + verCombos.length) % verCombos.length)} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Previous version"><ChevronLeft size={13} /></button>
-              <button onClick={() => setVersionsOpen(true)} className="px-1.5 py-0.5 rounded hover:bg-bg-subtle" title={describeVer(previewVer)}>
-                <span className="text-brand font-medium">v{previewVer + 1}</span>
-                <span className="text-fg-subtle">/{verCombos.length}</span>
+          {tlVersions.length > 0 && (
+            <div className="absolute top-3 right-3 z-30 flex items-center gap-1 px-1.5 py-1 rounded-lg bg-bg-card/95 border border-border shadow-lg text-[11px]" title={activeVer > 0 ? "Viewing a version - structural edits still apply to the base timeline" : "Base timeline"}>
+              <button onClick={() => setActiveVer((v) => (v - 1 + tlVersions.length + 1) % (tlVersions.length + 1))} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Previous version"><ChevronLeft size={13} /></button>
+              <button onClick={() => setVersionsOpen(true)} className="px-1.5 py-0.5 rounded hover:bg-bg-subtle" title={activeVer > 0 ? describeOv(tlVersions[activeVer - 1].ov) : "base"}>
+                <span className="text-brand font-medium">v{activeVer + 1}</span>
+                <span className="text-fg-subtle">/{tlVersions.length + 1}</span>
               </button>
-              <button onClick={() => setPreviewVer((v) => (v + 1) % verCombos.length)} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Next version"><ChevronRight size={13} /></button>
-              {previewVer > 0 && <span className="max-w-[200px] truncate text-fg-subtle pr-1">{describeVer(previewVer)}</span>}
+              <button onClick={() => setActiveVer((v) => (v + 1) % (tlVersions.length + 1))} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Next version"><ChevronRight size={13} /></button>
+              {activeVer > 0 && <span className="max-w-[200px] truncate text-fg-subtle pr-1">{describeOv(tlVersions[activeVer - 1].ov)}</span>}
             </div>
           )}
           {clips.length > 0 ? (
@@ -2648,6 +2612,22 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         </div>
 
         {/* Timeline */}
+        {tlVersions.length > 0 && (
+          <div className="shrink-0 border-t border-border bg-bg-card/60 px-2 py-1 flex items-center gap-1 overflow-x-auto text-[11px]">
+            <span className="text-fg-subtle mr-1 shrink-0">Versions:</span>
+            {[{ name: "v1" }, ...tlVersions].map((v, vi) => (
+              <button key={vi} onClick={() => setActiveVer(vi)}
+                title={vi === 0 ? "Base timeline" : describeOv(tlVersions[vi - 1].ov)}
+                className={`group px-2 py-0.5 rounded-md border shrink-0 inline-flex items-center gap-1 ${activeVer === vi ? "bg-brand/15 border-brand text-brand font-medium" : "border-border text-fg-muted hover:text-fg hover:border-border-strong"}`}>
+                v{vi + 1}
+                {vi > 0 && <span onClick={(e) => { e.stopPropagation(); deleteVersion(vi); }} title="Delete this version" className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-red-400"><X size={10} /></span>}
+              </button>
+            ))}
+            <button onClick={() => { const i = addVersion(activeVer > 0 ? tlVersions[activeVer - 1].ov : {}); setActiveVer(i); }}
+              title="New version (duplicate current)" className="px-1.5 py-0.5 rounded-md border border-dashed border-border text-fg-subtle hover:text-brand hover:border-brand shrink-0"><Plus size={11} /></button>
+            {activeVer > 0 && <span className="ml-2 text-fg-subtle truncate">right-click a clip {"\u2192"} Replace in v{activeVer + 1}</span>}
+          </div>
+        )}
         <div ref={timelineWheelRef} className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
           onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
@@ -2933,7 +2913,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           const tile = (url: string, label: string, isVid: boolean, on: boolean, key: string) => (
                             <button key={key} type="button" onClick={() => pick(url, isVid)} className={`relative rounded overflow-hidden border aspect-square bg-black ${on ? "border-brand ring-1 ring-brand" : "border-border hover:border-brand/50"}`} title={label}>
                               {isVid
-                                ? <LazyVideo src={url} className="w-full h-full object-cover pointer-events-none" />
+                                ? <VideoThumb src={url} className="w-full h-full pointer-events-none" />
                                 : /* eslint-disable-next-line @next/next/no-img-element */ <img src={url} alt="" loading="lazy" className="w-full h-full object-cover pointer-events-none" />}
                               <span className="absolute inset-x-0 bottom-0 bg-black/65 text-white text-[8px] leading-tight px-1 py-0.5 truncate">{label}</span>
                             </button>
@@ -3025,9 +3005,21 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               <>
                 <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Versions</div>
                 <div className="px-1 pb-1.5">
-                  <button onClick={() => { makeSlot(menu.id); setMenu(null); }} className="w-full px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">
-                    {c.variants !== undefined ? "Manage variants\u2026" : "Use in versions (add variants)"}
-                  </button>
+                  {(c.kind === "video" || c.kind === "image") && (
+                    <button onClick={() => { setReplaceFor(menu.id); setMenu(null); }} className="w-full px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">
+                      {activeVer > 0 ? `Replace in v${activeVer + 1}\u2026` : "New version replacing this\u2026"}
+                    </button>
+                  )}
+                  {c.kind === "text" && (
+                    <button onClick={() => { setTextOvDraft((activeVer > 0 ? tlVersions[activeVer - 1]?.ov[menu.id]?.text : undefined) ?? c.text ?? ""); setTextOvFor(menu.id); setMenu(null); }} className="w-full px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">
+                      {activeVer > 0 ? `Edit text in v${activeVer + 1}\u2026` : "New version with other text\u2026"}
+                    </button>
+                  )}
+                  {activeVer > 0 && tlVersions[activeVer - 1]?.ov[menu.id] && (
+                    <button onClick={() => { setOverride(menu.id, null); setMenu(null); }} className="w-full px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">
+                      Use base asset in v{activeVer + 1}
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -3063,6 +3055,55 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       {marquee && marquee.w > 1 && marquee.h > 1 && (
         <div className="fixed z-50 border border-brand bg-brand/15 pointer-events-none" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
       )}
+      {replaceFor && (() => {
+        const c = clips.find((x) => x.id === replaceFor);
+        if (!c) return null;
+        const pool = Array.from(new Map([...assets, ...brandLib].filter((a) => a.kind === c.kind && a.url && a.url !== c.url).map((a) => [a.url, a])).values())
+          .sort((a, b) => Number(((b.category || "").toLowerCase() === (c.section || "").toLowerCase() && !!c.section)) - Number(((a.category || "").toLowerCase() === (c.section || "").toLowerCase() && !!c.section)));
+        return (
+          <div className="fixed inset-0 z-[80] bg-black/50 grid place-items-center" onClick={() => setReplaceFor(null)}>
+            <div className="w-[520px] max-h-[70vh] overflow-auto rounded-xl border border-border bg-bg-card p-3 shadow-2xl text-[11px]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-fg font-medium">Replace {c.section ?? clipLabel(c)} {activeVer > 0 ? `in v${activeVer + 1}` : "(creates a new version)"}</span>
+                <button onClick={() => setReplaceFor(null)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
+              </div>
+              {pool.length === 0 && <div className="text-fg-subtle py-4 text-center">No matching {c.kind} assets in the bin.</div>}
+              <div className="grid grid-cols-4 gap-1.5">
+                {pool.map((a) => (
+                  <button key={a.id} title={a.label} onClick={() => { setOverride(c.id, { url: a.url, ...(a.duration ? { dur: a.duration } : frameCache.get(a.url)?.dur ? { dur: frameCache.get(a.url)!.dur } : {}) }); setReplaceFor(null); }}
+                    className="relative rounded overflow-hidden border border-border hover:border-brand aspect-square bg-black/20">
+                    {a.kind === "image"
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" />
+                      : <VideoThumb src={a.url} className="absolute inset-0 w-full h-full" />}
+                    <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[8px] px-1 py-0.5 truncate">{a.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {textOvFor && (() => {
+        const c = clips.find((x) => x.id === textOvFor);
+        if (!c) return null;
+        return (
+          <div className="fixed inset-0 z-[80] bg-black/50 grid place-items-center" onClick={() => setTextOvFor(null)}>
+            <div className="w-[420px] rounded-xl border border-border bg-bg-card p-3 shadow-2xl text-[11px]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-fg font-medium">Text {activeVer > 0 ? `in v${activeVer + 1}` : "(creates a new version)"}</span>
+                <button onClick={() => setTextOvFor(null)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
+              </div>
+              <textarea value={textOvDraft} onChange={(e) => setTextOvDraft(e.target.value)} rows={3} autoFocus
+                className="w-full bg-bg-subtle border border-border rounded px-2 py-1.5 text-fg outline-none focus:border-brand mb-2" />
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setTextOvFor(null)} className="px-2.5 py-1 rounded border border-border text-fg-muted hover:text-fg">Cancel</button>
+                <button onClick={() => { setOverride(c.id, { text: textOvDraft }); setTextOvFor(null); }} className="px-2.5 py-1 rounded bg-brand text-black font-medium">Save</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {trackOpen && sel && sel.sr?.green && (
         <TrackEditor
           source={sel.sr.green}
