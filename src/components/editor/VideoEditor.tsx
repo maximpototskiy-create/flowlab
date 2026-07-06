@@ -315,24 +315,11 @@ const NAMING_DEFAULT = { template: "{project}_{type}_{version}__{resolution}_{du
 const NAMING_TOKENS = ["project", "type", "version", "resolution", "duration", "lang", "initials"] as const;
 // Versions = cartesian product of each variant slot's options (option 0 = base).
 // ---- Timeline versions -------------------------------------------------------
-// A version is simply "the same timeline with some clips swapped": a map of
-// clip id -> override (different url / text, plus the variant's own duration
-// for sectioned videos so the chain re-times). v1 is always the base.
-export type VersionOv = { url?: string; text?: string; dur?: number };
-export type TimelineVersion = { id: string; name: string; ov: Record<string, VersionOv> };
-function applyOverrides(base: EditClip[], ov: Record<string, VersionOv>): EditClip[] {
-  return base.map((c) => {
-    const o = ov[c.id];
-    if (!o) return c;
-    const adaptDur = o.url != null && o.dur != null && o.dur > 0.05 && c.section && c.kind === "video";
-    return {
-      ...c,
-      ...(o.text != null ? { text: o.text } : {}),
-      ...(o.url != null ? { url: o.url } : {}),
-      ...(adaptDur ? { duration: +o.dur!.toFixed(2), inset: 0 } : {}),
-    };
-  });
-}
+// A version is a FULL snapshot of the timeline (clips + layers). You edit one
+// version at a time; the tabs simply switch which snapshot is loaded into the
+// editor. Everything you can do on the timeline (add, replace, delete, trim,
+// text, transitions) just works per version.
+export type TLSnapshot = { id: string; name: string; clips: EditClip[]; layers: Layer[] };
 
 // Keep hook/body/packshot chained back-to-back. Pure: returns the SAME array
 // when nothing needs to move (so effects can call it without loops).
@@ -413,35 +400,38 @@ function Section({ id, title, open, onToggle, right, children }: {
 // VideoThumb instead grabs ONE frame per URL through a small work queue
 // (3 downloads at a time), caches it as a data-URL for the whole session and
 // renders a plain <img>. A live video is mounted only while hovered.
-const frameCache = new Map<string, { img: string; dur: number; w: number; h: number }>();
-const framePending = new Map<string, Promise<{ img: string; dur: number; w: number; h: number } | null>>();
+const frameCache = new Map<string, { img: string | null; dur: number; w: number; h: number; live?: boolean }>();
+const framePending = new Map<string, Promise<{ img: string | null; dur: number; w: number; h: number; live?: boolean } | null>>();
 let frameActive = 0;
 const frameQueue: (() => void)[] = [];
 function framePump() {
   while (frameActive < 3 && frameQueue.length) { frameActive++; frameQueue.shift()!(); }
 }
-function grabFrame(url: string): Promise<{ img: string; dur: number; w: number; h: number } | null> {
+function grabFrame(url: string): Promise<{ img: string | null; dur: number; w: number; h: number; live?: boolean } | null> {
   const hit = frameCache.get(url);
   if (hit) return Promise.resolve(hit);
   const pending = framePending.get(url);
   if (pending) return pending;
-  const p = new Promise<{ img: string; dur: number; w: number; h: number } | null>((resolve) => {
-    const job = () => {
+  const p = new Promise<{ img: string | null; dur: number; w: number; h: number; live?: boolean } | null>((resolve) => {
+    const attempt = (useCors: boolean) => {
       const v = document.createElement("video");
-      v.crossOrigin = "anonymous"; v.muted = true; v.playsInline = true; v.preload = "metadata";
+      if (useCors) v.crossOrigin = "anonymous";
+      v.muted = true; v.playsInline = true;
+      v.preload = "auto"; // metadata alone never buffers a drawable frame
       let done = false;
-      const finish = (res: { img: string; dur: number; w: number; h: number } | null) => {
+      const finish = (res: { img: string | null; dur: number; w: number; h: number; live?: boolean } | null, retryNoCors?: boolean) => {
         if (done) return; done = true;
         clearTimeout(tm);
         try { v.removeAttribute("src"); v.load(); } catch { /* */ }
+        if (retryNoCors) { attempt(false); return; }
         frameActive--; framePump();
         if (res) frameCache.set(url, res);
         framePending.delete(url);
         resolve(res);
       };
-      const tm = setTimeout(() => finish(null), 12_000);
-      v.onerror = () => finish(null);
-      v.onloadeddata = () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 2); } catch { finish(null); } };
+      const tm = setTimeout(() => finish(useCors ? null : { img: null, dur: 0, w: 0, h: 0, live: true }, useCors), 10_000);
+      v.onerror = () => finish(useCors ? null : { img: null, dur: 0, w: 0, h: 0, live: true }, useCors);
+      v.onloadedmetadata = () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 2); } catch { finish(null, useCors); } };
       v.onseeked = () => {
         try {
           const scale = 200 / Math.max(v.videoWidth, v.videoHeight, 1);
@@ -450,31 +440,36 @@ function grabFrame(url: string): Promise<{ img: string; dur: number; w: number; 
           c.height = Math.max(2, Math.round(v.videoHeight * scale));
           c.getContext("2d")!.drawImage(v, 0, 0, c.width, c.height);
           finish({ img: c.toDataURL("image/jpeg", 0.72), dur: v.duration || 0, w: v.videoWidth, h: v.videoHeight });
-        } catch { finish(null); }
+        } catch {
+          // tainted canvas (no CORS headers): remember dims, render a lazy
+          // live <video> tile instead of a captured frame
+          finish({ img: null, dur: v.duration || 0, w: v.videoWidth, h: v.videoHeight, live: true });
+        }
       };
       v.src = url;
     };
-    frameQueue.push(job); framePump();
+    frameQueue.push(() => attempt(true)); framePump();
   });
   framePending.set(url, p);
   return p;
 }
 function VideoThumb({ src, className, hoverPlay, onDims }: { src: string; className?: string; hoverPlay?: boolean; onDims?: (w: number, h: number, dur: number) => void }) {
   const holdRef = useRef<HTMLDivElement | null>(null);
-  const [img, setImg] = useState<string | null>(() => frameCache.get(src)?.img ?? null);
+  const [state, setState] = useState<{ img: string | null; live: boolean } | null>(() => {
+    const c = frameCache.get(src); return c ? { img: c.img, live: !!c.live } : null;
+  });
   const [hover, setHover] = useState(false);
   useEffect(() => {
-    setImg(frameCache.get(src)?.img ?? null);
+    const c0 = frameCache.get(src);
+    setState(c0 ? { img: c0.img, live: !!c0.live } : null);
+    if (c0) { onDims?.(c0.w, c0.h, c0.dur); return; }
     const el = holdRef.current;
-    if (!el || frameCache.has(src)) {
-      const c = frameCache.get(src); if (c) onDims?.(c.w, c.h, c.dur);
-      return;
-    }
+    if (!el) return;
     let alive = true;
     const io = new IntersectionObserver((es) => {
       if (!es.some((e) => e.isIntersecting)) return;
       io.disconnect();
-      grabFrame(src).then((r) => { if (alive && r) { setImg(r.img); onDims?.(r.w, r.h, r.dur); } });
+      grabFrame(src).then((r) => { if (alive && r) { setState({ img: r.img, live: !!r.live }); if (r.w) onDims?.(r.w, r.h, r.dur); } });
     }, { rootMargin: "160px" });
     io.observe(el);
     return () => { alive = false; io.disconnect(); };
@@ -484,10 +479,12 @@ function VideoThumb({ src, className, hoverPlay, onDims }: { src: string; classN
     <div ref={holdRef} className={`relative overflow-hidden ${className ?? ""}`}
       onMouseEnter={hoverPlay ? () => setHover(true) : undefined}
       onMouseLeave={hoverPlay ? () => setHover(false) : undefined}>
-      {img
+      {state?.img
         // eslint-disable-next-line @next/next/no-img-element
-        ? <img src={img} alt="" draggable={false} className="absolute inset-0 w-full h-full object-cover" />
-        : <div className="absolute inset-0 grid place-items-center text-fg-subtle text-[9px] bg-bg-subtle/40">…</div>}
+        ? <img src={state.img} alt="" draggable={false} className="absolute inset-0 w-full h-full object-cover" />
+        : state?.live
+          ? <video src={src} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
+          : <div className="absolute inset-0 grid place-items-center bg-bg-subtle/40"><span className="w-3.5 h-3.5 rounded-full border border-border border-t-brand animate-spin" /></div>}
       {hover && <video src={src} muted loop playsInline autoPlay className="absolute inset-0 w-full h-full object-cover" />}
     </div>
   );
@@ -569,8 +566,6 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [genClip, setGenClip] = useState(""); // versions generator: clip to replace
   const [genCat, setGenCat] = useState("hook"); // versions generator: bin category
   const [replaceFor, setReplaceFor] = useState<string | null>(null); // clip id being replaced in the active version
-  const [textOvFor, setTextOvFor] = useState<string | null>(null); // text clip id being overridden
-  const [textOvDraft, setTextOvDraft] = useState("");
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchFormats, setBatchFormats] = useState<Set<string>>(() => new Set(["9:16"]));
   const [hookBannerDismissed, setHookBannerDismissed] = useState(false);
@@ -657,21 +652,25 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   selectedRef.current = selectedIds;
 
   // ---- Version preview -----------------------------------------------------
-  // activeVer selects which timeline version is DISPLAYED (0 = v1 = base).
-  // The timeline and properties always edit the BASE clips;
-  // viewClips is a derived, non-destructive substitution used only for
-  // rendering the preview (and for "export what I see").
-  const [tlVersions, setTlVersions] = useState<TimelineVersion[]>([]);
-  const [activeVer, setActiveVer] = useState(0); // 0 = base (v1)
-  useEffect(() => { if (activeVer > tlVersions.length) setActiveVer(0); }, [tlVersions.length, activeVer]);
-  const viewClips = useMemo(
-    () => (activeVer > 0 && tlVersions[activeVer - 1] ? chainSections(applyOverrides(clips, tlVersions[activeVer - 1].ov)) : clips),
-    [clips, activeVer, tlVersions],
-  );
+  // Timeline versions are full snapshots; the active one is loaded into
+  // clips/layers and edited directly. Switching tabs stores the current state
+  // back into the snapshot list and loads the target.
+  const [tlVersions, setTlVersions] = useState<TLSnapshot[]>([]);
+  const [activeVer, setActiveVer] = useState(0); // index into tlVersions (single implicit version while the list is empty)
+  const viewClips = clips; // the loaded version IS the editable timeline
   const viewClipsRef = useRef<EditClip[]>([]);
   viewClipsRef.current = viewClips;
-  const tlVersionsRef = useRef<TimelineVersion[]>([]);
+  const tlVersionsRef = useRef<TLSnapshot[]>([]);
   tlVersionsRef.current = tlVersions;
+  const activeVerRef = useRef(0);
+  activeVerRef.current = activeVer;
+  // Store the live editor state back into the active snapshot.
+  const syncedVersions = useCallback((): TLSnapshot[] => {
+    const vs = tlVersionsRef.current;
+    if (!vs.length) return [];
+    const cur = Math.min(activeVerRef.current, vs.length - 1);
+    return vs.map((v, k) => (k === cur ? { ...v, clips: clipsRef.current, layers: layersRef.current } : v));
+  }, []);
 
   const res = RESOLUTIONS.find((r) => r.key === resKey)!;
   const sortBin = (arr: EditorAsset[]) => {
@@ -817,13 +816,19 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     try {
       const raw = localStorage.getItem(PROJECT_KEY);
       if (raw) {
-        const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; posMode?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>>; versions?: TimelineVersion[] };
+        const j = JSON.parse(raw) as { clips?: EditClip[]; layers?: Layer[]; resKey?: string; posMode?: string; layouts?: Record<string, Record<string, { x: number; y: number; scale: number }>>; versions?: TLSnapshot[]; activeVer?: number };
         if (Array.isArray(j.clips) && j.clips.length && Array.isArray(j.layers) && j.layers.length) {
           legacyPosRef.current = j.posMode !== "frac";
           savedClips = j.clips; savedLayers = j.layers;
           if (j.layouts && typeof j.layouts === "object") setLayouts(j.layouts);
           if (j.resKey && RESOLUTIONS.some((r) => r.key === j.resKey)) setResKey(j.resKey);
-          if (Array.isArray(j.versions)) setTlVersions(j.versions.filter((v) => v && typeof v === "object" && v.ov));
+          const vers = Array.isArray(j.versions) ? j.versions.filter((v) => v && typeof v === "object" && Array.isArray(v.clips) && Array.isArray(v.layers)) : [];
+          if (vers.length) {
+            const ai = Math.min(Math.max(0, j.activeVer ?? 0), vers.length - 1);
+            setTlVersions(vers);
+            setActiveVer(ai);
+            savedClips = vers[ai].clips; savedLayers = vers[ai].layers;
+          }
         }
       }
     } catch { /* ignore corrupt saves */ }
@@ -912,12 +917,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const saveProject = useCallback(() => {
-    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey, layouts: layoutsRef.current, versions: tlVersionsRef.current, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
+    try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips: clipsRef.current, layers: layersRef.current, resKey, layouts: layoutsRef.current, versions: syncedVersions(), activeVer: activeVerRef.current, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1500); } catch { /* quota */ }
   }, [resKey]);
   useEffect(() => {
     if (!restoredRef.current) return;
     setSaveState("saving");
-    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey, layouts, versions: tlVersions, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
+    const t = setTimeout(() => { try { localStorage.setItem(PROJECT_KEY, JSON.stringify({ clips, layers, resKey, layouts, versions: syncedVersions(), activeVer: activeVerRef.current, posMode: (posMigratedRef.current || !legacyPosRef.current) ? "frac" : undefined })); setSaveState("saved"); setTimeout(() => setSaveState(""), 1200); } catch { setSaveState(""); } }, 1200);
     return () => clearTimeout(t);
   }, [clips, layers, resKey, layouts, tlVersions]);
   // Switch the active output format, remembering each format's own layout.
@@ -1467,28 +1472,32 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     setVersionsOpen(false); setBatchRunning(true); setProgress(0); stop();
     try {
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
-      const all: { name: string; ov: Record<string, VersionOv> }[] = [{ name: "v1", ov: {} }, ...tlVersionsRef.current.map((v, i) => ({ name: `v${i + 2}`, ov: v.ov }))];
+      const all: TLSnapshot[] = tlVersionsRef.current.length
+        ? syncedVersions()
+        : [{ id: "cur", name: "", clips: clipsRef.current, layers: layersRef.current }];
       const indices = only != null && all[only] ? [only] : all.map((_, i) => i);
       const total = indices.length * fmts.length;
       let done = 0;
       for (const vi of indices) {
-        const verClips = chainSections(applyOverrides(clipsRef.current, all[vi].ov));
-        const vis = layersRef.current.filter((l) => l.type !== "audio");
-        const hiddenIds = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
+        const snap = all[vi];
+        const verClips = snap.clips;
+        const vis = snap.layers.filter((l) => l.type !== "audio");
+        const hiddenIds = new Set(snap.layers.filter((l) => l.hidden).map((l) => l.id));
         const z: EditClip[] = [];
         for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...verClips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
         const ordered = [...z, ...verClips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
+        const vName = `v${vi + 1}`;
         for (const r of fmts) {
-          setStatus(`Rendering ${all[vi].name} \u00b7 ${r.key} (${done + 1}/${total})\u2026`);
+          setStatus(`Rendering ${vName} \u00b7 ${r.key} (${done + 1}/${total})\u2026`);
           const { blob, ext } = await exportTimeline({
             clips: ordered.map(toExportClip),
             width: r.w, height: r.h, previewWidth: previewSize.w,
             onProgress: (p) => setProgress(Math.round(((done + p) / total) * 100)),
-            onStage: (msg) => setStatus(`${all[vi].name} ${r.key}: ${msg}`),
+            onStage: (msg) => setStatus(`${vName} ${r.key}: ${msg}`),
           });
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
-          a.href = url; a.download = buildFileName(ext, all[vi].name, r.key);
+          a.href = url; a.download = buildFileName(ext, vName, r.key);
           document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
           done++;
           await new Promise((res) => setTimeout(res, 500)); // stagger downloads
@@ -1497,60 +1506,91 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       setStatus(`Done \u2014 ${total} file(s) downloaded.`);
     } catch (e) { console.error(e); setStatus(`Batch failed: ${e instanceof Error ? e.message : "see console"}`); }
     finally { setBatchRunning(false); }
-  }, [batchRunning, exporting, batchFormats, previewSize, stop, buildFileName, toExportClip]);
+  }, [batchRunning, exporting, batchFormats, previewSize, stop, buildFileName, toExportClip, syncedVersions]);
   const renderAllVersions = useCallback(() => renderVersions(null), [renderVersions]);
   const renderOneVersion = useCallback((vi: number) => renderVersions(vi), [renderVersions]);
 
-  // ── Timeline-version operations ──
-  const addVersion = useCallback((dupOv?: Record<string, VersionOv>): number => {
-    let idx = 0;
-    setTlVersions((vs) => {
-      idx = vs.length + 1;
-      return [...vs, { id: `tv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`, name: `v${vs.length + 2}`, ov: { ...(dupOv ?? {}) } }];
-    });
-    return idx;
-  }, []);
-  const deleteVersion = useCallback((i: number) => { // i is 1-based (0 = base, undeletable)
-    setTlVersions((vs) => vs.filter((_, k) => k !== i - 1));
-    setActiveVer((a) => (a === i ? 0 : a > i ? a - 1 : a));
-  }, []);
-  // Write an override into the ACTIVE version; if base is active, fork a new
-  // version first so the base always stays intact.
-  const setOverride = useCallback((clipId: string, ov: VersionOv | null) => {
-    setActiveVer((cur) => {
-      if (cur > 0) {
-        setTlVersions((vs) => vs.map((v, k) => {
-          if (k !== cur - 1) return v;
-          const next = { ...v.ov };
-          if (ov) next[clipId] = ov; else delete next[clipId];
-          return { ...v, ov: next };
-        }));
-        return cur;
-      }
-      // base active -> fork
-      setTlVersions((vs) => [...vs, { id: `tv-${Date.now().toString(36)}`, name: `v${vs.length + 2}`, ov: ov ? { [clipId]: ov } : {} }]);
-      return tlVersionsRef.current.length + 1;
-    });
-  }, []);
-  // Generate one version per bin asset (e.g. every "hook" asset from the
-  // brand library) replacing the given clip. This IS the old "+ all hook"
-  // flow, but each result is an explicit, previewable version.
+  // ── Timeline-version operations (full snapshots) ──
+  const mkSnap = useCallback((): TLSnapshot => ({
+    id: `tv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+    name: "",
+    clips: clipsRef.current,
+    layers: layersRef.current,
+  }), []);
+  const clearHist = useCallback(() => { histRef.current = []; histPosRef.current = -1; }, []);
+  const switchVersion = useCallback((i: number) => {
+    const vs = tlVersionsRef.current;
+    if (!vs.length || i === activeVerRef.current || i < 0 || i >= vs.length) return;
+    const synced = syncedVersions();
+    const target = synced[i];
+    setTlVersions(synced);
+    setActiveVer(i);
+    setSelectedIds([]);
+    setClips(target.clips);
+    setLayers(target.layers);
+    clearHist(); // undo must never cross versions
+  }, [syncedVersions, clearHist]);
+  // "+" - snapshot the current timeline as a NEW version and keep editing it.
+  const addVersionFromCurrent = useCallback(() => {
+    const vs = tlVersionsRef.current;
+    if (!vs.length) {
+      // first fork: current state becomes v1, an identical copy becomes v2
+      setTlVersions([mkSnap(), mkSnap()]);
+      setActiveVer(1);
+    } else {
+      const synced = syncedVersions();
+      setTlVersions([...synced, mkSnap()]);
+      setActiveVer(synced.length);
+    }
+    clearHist();
+    setStatus("New version created \u2014 you are editing it now; v1 and the others stay as they were.");
+  }, [mkSnap, syncedVersions, clearHist]);
+  const duplicateVersion = useCallback((i: number) => {
+    const synced = syncedVersions();
+    const src = synced[i];
+    if (!src) return;
+    setTlVersions([...synced, { ...src, id: `tv-${Date.now().toString(36)}`, clips: src.clips, layers: src.layers }]);
+  }, [syncedVersions]);
+  const deleteVersion = useCallback((i: number) => {
+    const vs = tlVersionsRef.current;
+    if (i < 0 || i >= vs.length) return;
+    const cur = activeVerRef.current;
+    const next = vs.filter((_, k) => k !== i);
+    setTlVersions(next);
+    if (!next.length) { setActiveVer(0); return; } // back to a single implicit version (current state stays)
+    if (cur === i) {
+      const ni = Math.max(0, i - 1);
+      const t = next[ni];
+      setActiveVer(ni);
+      setSelectedIds([]);
+      setClips(t.clips);
+      setLayers(t.layers);
+      clearHist();
+    } else if (cur > i) setActiveVer(cur - 1);
+  }, [clearHist]);
+  // Generate one version per bin asset of a category, replacing the given
+  // clip in a copy of the CURRENT timeline (chain re-times each copy).
   const generateVersions = useCallback((clipId: string, category: string) => {
-    const c = clipsRef.current.find((x) => x.id === clipId);
+    const src = clipsRef.current;
+    const c = src.find((x) => x.id === clipId);
     if (!c) return 0;
     const pool = (category === "all" ? [...library, ...brandLib] : brandLib.filter((a) => a.category === category))
       .filter((a) => a.kind === c.kind && a.url && a.url !== c.url);
     const seen = new Set<string>();
-    const fresh: TimelineVersion[] = [];
-    const existing = new Set(tlVersionsRef.current.map((v) => v.ov[clipId]?.url).filter(Boolean));
+    const fresh: TLSnapshot[] = [];
     for (const a of pool) {
-      if (seen.has(a.url) || existing.has(a.url)) continue;
+      if (seen.has(a.url)) continue;
       seen.add(a.url);
-      fresh.push({ id: `tv-${a.id}`, name: "", ov: { [clipId]: { url: a.url, ...(a.duration ? { dur: a.duration } : {}) } } });
+      const cl = src.map((x) => (x.id === clipId
+        ? { ...x, url: a.url, inset: 0, ...(a.duration && x.section && x.kind === "video" ? { duration: +a.duration.toFixed(2), autoDur: false } : { autoDur: true }) }
+        : x));
+      fresh.push({ id: `tv-${a.id}-${Math.random().toString(36).slice(2, 5)}`, name: "", clips: chainSections(cl), layers: layersRef.current });
     }
-    if (fresh.length) setTlVersions((vs) => [...vs, ...fresh]);
+    if (!fresh.length) return 0;
+    const base = tlVersionsRef.current.length ? syncedVersions() : [mkSnap()];
+    setTlVersions([...base, ...fresh]);
     return fresh.length;
-  }, [library, brandLib]);
+  }, [library, brandLib, syncedVersions, mkSnap]);
   const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
   // Human-readable label for an asset URL (bin label, else the file name).
   const urlLabel = useCallback((u?: string) => {
@@ -1559,15 +1599,24 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     if (a) return a.label;
     try { return decodeURIComponent(u.split("/").pop()!.split("?")[0]).slice(0, 26); } catch { return "asset"; }
   }, [assets, brandLib]);
-  // Human summary of a version's overrides: "Hook: asset \u00b7 Body: asset".
-  const describeOv = useCallback((ov: Record<string, VersionOv>): string => {
+  // Human summary of a snapshot: what differs from v1, else duration + count.
+  const describeSnap = useCallback((v: TLSnapshot): string => {
+    const base = tlVersionsRef.current[0];
     const parts: string[] = [];
-    for (const [cid, o] of Object.entries(ov)) {
-      const c = clipsRef.current.find((x) => x.id === cid);
-      if (!c) continue;
-      parts.push(`${c.section ?? clipLabel(c)}: ${o.text != null ? `"${o.text.slice(0, 22)}"` : urlLabel(o.url)}`);
+    if (base && base !== v) {
+      const baseBy = new Map(base.clips.map((c) => [c.id, c]));
+      for (const c of v.clips) {
+        const b = baseBy.get(c.id);
+        if (!b) { parts.push(`+ ${c.section ?? clipLabel(c)}`); continue; }
+        if (b.url !== c.url) parts.push(`${c.section ?? clipLabel(c)}: ${urlLabel(c.url)}`);
+        else if ((b.text ?? "") !== (c.text ?? "")) parts.push(`text: "${(c.text ?? "").slice(0, 18)}"`);
+      }
+      for (const b of base.clips) if (!v.clips.some((c) => c.id === b.id)) parts.push(`removed ${b.section ?? clipLabel(b)}`);
     }
-    return parts.length ? parts.join(" \u00b7 ") : "no changes yet";
+    if (parts.length) return parts.slice(0, 4).join(" \u00b7 ") + (parts.length > 4 ? ` \u00b7 +${parts.length - 4}` : "");
+    const dur = Math.round(Math.max(0, ...v.clips.map((c) => c.start + c.duration), 0));
+    const n = v.clips.filter((c) => c.kind === "video" || c.kind === "image" || c.kind === "text").length;
+    return `${dur}s \u00b7 ${n} clip${n === 1 ? "" : "s"}`;
   }, [clipLabel, urlLabel]);
   // One-tap versions from the banner: a version per Hook asset in the library.
   const buildHookVersions = useCallback(() => {
@@ -1601,7 +1650,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         onStage: (m) => setStatus(m),
       });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, activeVer > 0 ? `v${activeVer + 1}` : undefined);
+      const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, tlVersionsRef.current.length ? `v${activeVer + 1}` : undefined);
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
       setStatus(mp4 ? "Done — MP4 downloaded." : "Done — WebM downloaded (browser doesn\u2019t support MP4 recording).");
     } catch (e) { console.error(e); setStatus(`Export failed: ${e instanceof Error ? e.message : "see console"}`); }
@@ -2378,7 +2427,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 <Layers size={12} /> Versions
               </button>
               {versionsOpen && (() => {
-                const allVers: { name: string; ov: Record<string, VersionOv> }[] = [{ name: "v1", ov: {} }, ...tlVersions.map((v, i) => ({ name: `v${i + 2}`, ov: v.ov }))];
+                const allVers: TLSnapshot[] = tlVersions.length ? tlVersions : [{ id: "cur", name: "", clips, layers }];
                 const replaceable = clips.filter((c) => (c.kind === "video" || c.kind === "image") && c.url).sort((a, b) => a.start - b.start);
                 const cats = Array.from(new Set(brandLib.map((a) => a.category).filter(Boolean))) as string[];
                 const fmtsChecked = RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length;
@@ -2391,28 +2440,28 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                       <button onClick={() => setVersionsOpen(false)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
                     </div>
                     <div className="mb-2 rounded-md bg-bg-subtle/60 border border-border px-2 py-1.5 text-[10px] text-fg-subtle leading-relaxed">
-                      A version is the same timeline with some clips swapped. Switch versions with the tabs under the player (or the chip over the preview), swap a clip inside a version via right-click {"\u2192"} <span className="text-fg-muted">Replace in this version</span>. v1 is always your base.
+                      Every version is a full timeline. Edit whatever you like (add clips, replace, delete, text), press <span className="text-fg-muted">+</span> to snapshot the current state as a new version and keep going. Tabs under the player switch between them.
                     </div>
 
                     <div className="space-y-0.5 mb-2">
                       {allVers.map((v, vi) => (
-                        <div key={vi} onClick={() => setActiveVer(vi)}
-                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer border ${activeVer === vi ? "bg-brand/10 border-brand/40" : "border-transparent hover:bg-bg-subtle"}`}>
-                          <span className={`w-7 shrink-0 ${activeVer === vi ? "text-brand font-medium" : "text-fg-subtle"}`}>{v.name}</span>
-                          <span className="flex-1 truncate text-fg-muted" title={vi === 0 ? "base (as assembled)" : describeOv(v.ov)}>{vi === 0 ? "base (as assembled)" : describeOv(v.ov)}</span>
+                        <div key={v.id} onClick={() => switchVersion(vi)}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer border ${(tlVersions.length ? activeVer : 0) === vi ? "bg-brand/10 border-brand/40" : "border-transparent hover:bg-bg-subtle"}`}>
+                          <span className={`w-7 shrink-0 ${(tlVersions.length ? activeVer : 0) === vi ? "text-brand font-medium" : "text-fg-subtle"}`}>v{vi + 1}</span>
+                          <span className="flex-1 truncate text-fg-muted" title={describeSnap(v)}>{vi === 0 ? `base \u00b7 ${describeSnap(v)}` : describeSnap(v)}</span>
                           <button title="Render only this version (in the checked formats)" onClick={(e) => { e.stopPropagation(); renderOneVersion(vi); }} className="text-fg-subtle hover:text-brand shrink-0"><Download size={12} /></button>
-                          {vi > 0 && <button title="Duplicate this version" onClick={(e) => { e.stopPropagation(); addVersion(tlVersions[vi - 1].ov); }} className="text-fg-subtle hover:text-fg shrink-0"><Copy size={12} /></button>}
-                          {vi > 0 && <button title="Delete this version" onClick={(e) => { e.stopPropagation(); deleteVersion(vi); }} className="text-fg-subtle hover:text-red-400 shrink-0"><X size={12} /></button>}
+                          {tlVersions.length > 0 && <button title="Duplicate this version" onClick={(e) => { e.stopPropagation(); duplicateVersion(vi); }} className="text-fg-subtle hover:text-fg shrink-0"><Copy size={12} /></button>}
+                          {tlVersions.length > 1 && <button title="Delete this version" onClick={(e) => { e.stopPropagation(); deleteVersion(vi); }} className="text-fg-subtle hover:text-red-400 shrink-0"><X size={12} /></button>}
                         </div>
                       ))}
                     </div>
-                    <button onClick={() => { const i = addVersion(activeVer > 0 ? tlVersions[activeVer - 1].ov : {}); setActiveVer(i); }}
-                      className="mb-3 px-2 py-1 rounded border border-dashed border-border text-fg-subtle hover:text-brand hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> New version (duplicate current)</button>
+                    <button onClick={addVersionFromCurrent}
+                      className="mb-3 px-2 py-1 rounded border border-dashed border-border text-fg-subtle hover:text-brand hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> New version (snapshot of the current timeline)</button>
 
-                    {replaceable.length > 0 && (
+                    {replaceable.length > 0 && brandLib.length > 0 && (
                       <div className="mb-3 rounded-md border border-border bg-bg-subtle/40 px-2 py-2">
                         <div className="text-fg mb-1">Generate versions from the bin</div>
-                        <div className="text-[10px] text-fg-subtle mb-1.5">One new version per asset, replacing the chosen clip:</div>
+                        <div className="text-[10px] text-fg-subtle mb-1.5">One new version per asset, replacing the chosen clip in a copy of the current timeline:</div>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <select value={genClip} onChange={(e) => setGenClip(e.target.value)} className="bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand max-w-[150px]">
                             {replaceable.map((c) => <option key={c.id} value={c.id}>{c.section ?? clipLabel(c)}</option>)}
@@ -2439,7 +2488,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     <div className={`mb-2 text-[10px] leading-relaxed ${total > 24 ? "text-amber-400" : "text-fg-subtle"}`}>
                       This renders <span className="font-medium">{total}</span> separate file{total === 1 ? "" : "s"} ({allVers.length} version{allVers.length === 1 ? "" : "s"} &times; {fmtsChecked} format{fmtsChecked === 1 ? "" : "s"}), named by your template.
                       {total > 24 && <span> That is a lot &mdash; delete versions or formats if you only need a few.</span>}
-                      {exFmt && <div className="mt-1 truncate text-fg-subtle">Name example: <span className="text-fg-muted">{buildFileName("mp4", `v${activeVer + 1}`, exFmt)}</span></div>}
+                      {exFmt && <div className="mt-1 truncate text-fg-subtle">Name example: <span className="text-fg-muted">{buildFileName("mp4", `v${(tlVersions.length ? activeVer : 0) + 1}`, exFmt)}</span></div>}
                     </div>
                     <button disabled={batchRunning || exporting} onClick={renderAllVersions}
                       className="w-full py-1.5 rounded-md bg-brand text-black font-medium disabled:opacity-50 inline-flex items-center justify-center gap-1.5">
@@ -2483,14 +2532,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             );
           })()}
           {tlVersions.length > 0 && (
-            <div className="absolute top-3 right-3 z-30 flex items-center gap-1 px-1.5 py-1 rounded-lg bg-bg-card/95 border border-border shadow-lg text-[11px]" title={activeVer > 0 ? "Viewing a version - structural edits still apply to the base timeline" : "Base timeline"}>
-              <button onClick={() => setActiveVer((v) => (v - 1 + tlVersions.length + 1) % (tlVersions.length + 1))} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Previous version"><ChevronLeft size={13} /></button>
-              <button onClick={() => setVersionsOpen(true)} className="px-1.5 py-0.5 rounded hover:bg-bg-subtle" title={activeVer > 0 ? describeOv(tlVersions[activeVer - 1].ov) : "base"}>
+            <div className="absolute top-3 right-3 z-30 flex items-center gap-1 px-1.5 py-1 rounded-lg bg-bg-card/95 border border-border shadow-lg text-[11px]" title="Each version is a full editable timeline">
+              <button onClick={() => switchVersion((activeVer - 1 + tlVersions.length) % tlVersions.length)} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Previous version"><ChevronLeft size={13} /></button>
+              <button onClick={() => setVersionsOpen(true)} className="px-1.5 py-0.5 rounded hover:bg-bg-subtle" title={tlVersions[activeVer] ? describeSnap(tlVersions[activeVer]) : ""}>
                 <span className="text-brand font-medium">v{activeVer + 1}</span>
-                <span className="text-fg-subtle">/{tlVersions.length + 1}</span>
+                <span className="text-fg-subtle">/{tlVersions.length}</span>
               </button>
-              <button onClick={() => setActiveVer((v) => (v + 1) % (tlVersions.length + 1))} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Next version"><ChevronRight size={13} /></button>
-              {activeVer > 0 && <span className="max-w-[200px] truncate text-fg-subtle pr-1">{describeOv(tlVersions[activeVer - 1].ov)}</span>}
+              <button onClick={() => switchVersion((activeVer + 1) % tlVersions.length)} className="w-6 h-6 grid place-items-center rounded text-fg-muted hover:text-fg hover:bg-bg-subtle" aria-label="Next version"><ChevronRight size={13} /></button>
             </div>
           )}
           {clips.length > 0 ? (
@@ -2615,17 +2663,17 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         {tlVersions.length > 0 && (
           <div className="shrink-0 border-t border-border bg-bg-card/60 px-2 py-1 flex items-center gap-1 overflow-x-auto text-[11px]">
             <span className="text-fg-subtle mr-1 shrink-0">Versions:</span>
-            {[{ name: "v1" }, ...tlVersions].map((v, vi) => (
-              <button key={vi} onClick={() => setActiveVer(vi)}
-                title={vi === 0 ? "Base timeline" : describeOv(tlVersions[vi - 1].ov)}
+            {tlVersions.map((v, vi) => (
+              <button key={v.id} onClick={() => switchVersion(vi)}
+                title={describeSnap(v)}
                 className={`group px-2 py-0.5 rounded-md border shrink-0 inline-flex items-center gap-1 ${activeVer === vi ? "bg-brand/15 border-brand text-brand font-medium" : "border-border text-fg-muted hover:text-fg hover:border-border-strong"}`}>
                 v{vi + 1}
-                {vi > 0 && <span onClick={(e) => { e.stopPropagation(); deleteVersion(vi); }} title="Delete this version" className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-red-400"><X size={10} /></span>}
+                {tlVersions.length > 1 && <span onClick={(e) => { e.stopPropagation(); deleteVersion(vi); }} title="Delete this version" className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-red-400"><X size={10} /></span>}
               </button>
             ))}
-            <button onClick={() => { const i = addVersion(activeVer > 0 ? tlVersions[activeVer - 1].ov : {}); setActiveVer(i); }}
-              title="New version (duplicate current)" className="px-1.5 py-0.5 rounded-md border border-dashed border-border text-fg-subtle hover:text-brand hover:border-brand shrink-0"><Plus size={11} /></button>
-            {activeVer > 0 && <span className="ml-2 text-fg-subtle truncate">right-click a clip {"\u2192"} Replace in v{activeVer + 1}</span>}
+            <button onClick={addVersionFromCurrent}
+              title="Snapshot the current timeline as a new version" className="px-1.5 py-0.5 rounded-md border border-dashed border-border text-fg-subtle hover:text-brand hover:border-brand shrink-0"><Plus size={11} /></button>
+            <span className="ml-2 text-fg-subtle truncate">editing v{activeVer + 1} {"\u2014"} every change stays in this version</span>
           </div>
         )}
         <div ref={timelineWheelRef} className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
@@ -3007,17 +3055,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 <div className="px-1 pb-1.5">
                   {(c.kind === "video" || c.kind === "image") && (
                     <button onClick={() => { setReplaceFor(menu.id); setMenu(null); }} className="w-full px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">
-                      {activeVer > 0 ? `Replace in v${activeVer + 1}\u2026` : "New version replacing this\u2026"}
-                    </button>
-                  )}
-                  {c.kind === "text" && (
-                    <button onClick={() => { setTextOvDraft((activeVer > 0 ? tlVersions[activeVer - 1]?.ov[menu.id]?.text : undefined) ?? c.text ?? ""); setTextOvFor(menu.id); setMenu(null); }} className="w-full px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">
-                      {activeVer > 0 ? `Edit text in v${activeVer + 1}\u2026` : "New version with other text\u2026"}
-                    </button>
-                  )}
-                  {activeVer > 0 && tlVersions[activeVer - 1]?.ov[menu.id] && (
-                    <button onClick={() => { setOverride(menu.id, null); setMenu(null); }} className="w-full px-1.5 py-1 rounded hover:bg-white/5 text-fg-muted text-left">
-                      Use base asset in v{activeVer + 1}
+                      Replace asset{tlVersions.length ? ` (edits v${activeVer + 1})` : ""}\u2026
                     </button>
                   )}
                 </div>
@@ -3064,13 +3102,18 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           <div className="fixed inset-0 z-[80] bg-black/50 grid place-items-center" onClick={() => setReplaceFor(null)}>
             <div className="w-[520px] max-h-[70vh] overflow-auto rounded-xl border border-border bg-bg-card p-3 shadow-2xl text-[11px]" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-fg font-medium">Replace {c.section ?? clipLabel(c)} {activeVer > 0 ? `in v${activeVer + 1}` : "(creates a new version)"}</span>
+                <span className="text-fg font-medium">Replace {c.section ?? clipLabel(c)}{tlVersions.length ? ` (in v${activeVer + 1})` : ""}</span>
                 <button onClick={() => setReplaceFor(null)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
               </div>
               {pool.length === 0 && <div className="text-fg-subtle py-4 text-center">No matching {c.kind} assets in the bin.</div>}
               <div className="grid grid-cols-4 gap-1.5">
                 {pool.map((a) => (
-                  <button key={a.id} title={a.label} onClick={() => { setOverride(c.id, { url: a.url, ...(a.duration ? { dur: a.duration } : frameCache.get(a.url)?.dur ? { dur: frameCache.get(a.url)!.dur } : {}) }); setReplaceFor(null); }}
+                  <button key={a.id} title={a.label}
+                    onClick={() => {
+                      const durKnown = a.duration ?? frameCache.get(a.url)?.dur;
+                      update(c.id, { url: a.url, inset: 0, ...(durKnown && c.section && c.kind === "video" ? { duration: +durKnown.toFixed(2), autoDur: false } : { autoDur: true }) });
+                      setReplaceFor(null);
+                    }}
                     className="relative rounded overflow-hidden border border-border hover:border-brand aspect-square bg-black/20">
                     {a.kind === "image"
                       // eslint-disable-next-line @next/next/no-img-element
@@ -3079,26 +3122,6 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[8px] px-1 py-0.5 truncate">{a.label}</span>
                   </button>
                 ))}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-      {textOvFor && (() => {
-        const c = clips.find((x) => x.id === textOvFor);
-        if (!c) return null;
-        return (
-          <div className="fixed inset-0 z-[80] bg-black/50 grid place-items-center" onClick={() => setTextOvFor(null)}>
-            <div className="w-[420px] rounded-xl border border-border bg-bg-card p-3 shadow-2xl text-[11px]" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-fg font-medium">Text {activeVer > 0 ? `in v${activeVer + 1}` : "(creates a new version)"}</span>
-                <button onClick={() => setTextOvFor(null)} className="text-fg-subtle hover:text-fg"><X size={13} /></button>
-              </div>
-              <textarea value={textOvDraft} onChange={(e) => setTextOvDraft(e.target.value)} rows={3} autoFocus
-                className="w-full bg-bg-subtle border border-border rounded px-2 py-1.5 text-fg outline-none focus:border-brand mb-2" />
-              <div className="flex justify-end gap-2">
-                <button onClick={() => setTextOvFor(null)} className="px-2.5 py-1 rounded border border-border text-fg-muted hover:text-fg">Cancel</button>
-                <button onClick={() => { setOverride(c.id, { text: textOvDraft }); setTextOvFor(null); }} className="px-2.5 py-1 rounded bg-brand text-black font-medium">Save</button>
               </div>
             </div>
           </div>
