@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
 import type { TextStyle, CapWord } from "@/lib/editor/exportVideo";
 import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
@@ -472,6 +472,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   });
   useEffect(() => { try { localStorage.setItem(NAMING_KEY, JSON.stringify(naming)); } catch { /* */ } }, [naming]);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  const [optionPicker, setOptionPicker] = useState<string | null>(null); // slot id with the asset-picker grid open
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchFormats, setBatchFormats] = useState<Set<string>>(() => new Set(["9:16"]));
   const [hookBannerDismissed, setHookBannerDismissed] = useState(false);
@@ -774,10 +775,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           });
           if (savedClips.length) {
             // MERGE: keep the existing assembly, stack the hand-off on top as
-            // fresh layers. Sequential section auto-layout is skipped here —
-            // the user positions imported clips relative to their edit.
+            // fresh layers. Imported hook/body/packshot sections still get the
+            // sequential auto-layout (the layout pass only repositions clips
+            // that carry a `section` tag, so the saved assembly is untouched).
             setLayers([...newLayers, ...savedLayers]);
             setClips([...savedClips, ...newClips]);
+            if (newClips.some((c) => c.section)) sectionLayoutRef.current = true;
           } else {
             if (!newLayers.some((l) => l.type === "video")) newLayers.push({ id: `vimp_${Date.now()}_${_l++}`, type: "video" });
             if (!newLayers.some((l) => l.type === "audio")) newLayers.push({ id: `aimp_${Date.now()}_${_l++}`, type: "audio" });
@@ -1404,6 +1407,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const opt = c.kind === "text" ? { id: vid, text: "" } : { id: vid, url: "" };
     return { ...c, variants: [...(c.variants || []), opt] };
   })), []);
+  // Add a media option directly with a URL (thumbnail picker flow).
+  const addOptionUrl = useCallback((id: string, url: string) => setClips((cs) => cs.map((c) => {
+    if (c.id !== id) return c;
+    if (c.url === url || (c.variants || []).some((v) => v.url === url)) return c; // dedupe
+    const vid = `vr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    return { ...c, variants: [...(c.variants || []), { id: vid, url }] };
+  })), []);
   const setOption = useCallback((id: string, vId: string, patch: { text?: string; url?: string }) =>
     setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).map((v) => (v.id === vId ? { ...v, ...patch } : v)) } : c))), []);
   const removeOption = useCallback((id: string, vId: string) =>
@@ -1431,6 +1441,20 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     });
     return parts.length ? parts.join(" \u00b7 ") : "base (as assembled)";
   }, [verCombos, verSlots, clipLabel, urlLabel]);
+  // Version index that keeps the current preview's picks but sets one slot to
+  // a given option (0 = base). Enumeration order: the LAST slot varies fastest.
+  const comboIndexFor = useCallback((slotId: string, optIdx: number): number => {
+    const cur = verCombos[previewVer] ? [...verCombos[previewVer]] : verSlots.map(() => 0);
+    const si = verSlots.findIndex((s) => s.id === slotId);
+    if (si < 0) return previewVer;
+    cur[si] = optIdx;
+    let idx = 0;
+    for (let i = 0; i < verSlots.length; i++) {
+      const opts = 1 + (verSlots[i].variants?.length ?? 0);
+      idx = idx * opts + Math.min(cur[i] ?? 0, opts - 1);
+    }
+    return Math.min(idx, verCombos.length - 1);
+  }, [verCombos, previewVer, verSlots]);
   // Bulk-add every matching bin asset as a variant in one click (e.g. all 10
   // generated hooks -> 10 versions, no per-item clicking).
   const addAllFromBin = useCallback((id: string, category: string) => {
@@ -1459,7 +1483,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
   const exportMp4 = useCallback(async () => {
     if (exporting || !clips.length) return;
-    setExporting(true); setProgress(0); setStatus("Recording…"); stop();
+    setExporting(true); setProgress(0); setStatus("Preparing sources…"); stop();
     try {
       // Export exactly what the preview shows: the currently previewed version.
       const src = viewClipsRef.current;
@@ -2237,22 +2261,63 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                                   <button onClick={() => clearSlot(c.id)} title="Remove this slot from versions" className="text-fg-subtle hover:text-red-400"><X size={12} /></button>
                                 </div>
                               </div>
-                              <div className="flex items-center gap-1.5 mb-1 text-fg-subtle"><span className="w-6 text-brand">v1</span><span className="truncate">{c.kind === "text" ? `"${(c.text || "").slice(0, 30)}"` : (clipLabel(c) + " (base)")}</span></div>
-                              {(c.variants || []).map((v, i) => (
-                                <div key={v.id} className="flex items-center gap-1.5 mb-1">
-                                  <span className="w-6 text-fg-subtle">v{i + 2}</span>
-                                  {c.kind === "text" ? (
-                                    <input value={v.text ?? ""} onChange={(e) => setOption(c.id, v.id, { text: e.target.value })} placeholder="alternative hook text" className="flex-1 bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" />
-                                  ) : (
-                                    <select value={v.url ?? ""} onChange={(e) => setOption(c.id, v.id, { url: e.target.value })} className="flex-1 bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand">
-                                      <option value="">— pick asset —</option>
-                                      {mediaAssets.map((a) => <option key={a.id} value={a.url}>{a.label}</option>)}
-                                    </select>
-                                  )}
-                                  <button onClick={() => removeOption(c.id, v.id)} className="text-fg-subtle hover:text-red-400"><X size={12} /></button>
+                              {(() => {
+                                const si = verSlots.findIndex((s) => s.id === c.id);
+                                const activeIdx = verCombos[previewVer]?.[si] ?? 0;
+                                const thumb = (url?: string) => !url
+                                  ? <div className="w-9 h-9 rounded bg-bg-subtle grid place-items-center text-fg-subtle shrink-0">?</div>
+                                  : c.kind === "image"
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    ? <img src={url} alt="" className="w-9 h-9 rounded object-cover shrink-0" />
+                                    : c.kind === "video"
+                                      ? <video src={url} muted playsInline preload="metadata" className="w-9 h-9 rounded object-cover shrink-0" />
+                                      : <div className="w-9 h-9 rounded bg-bg-subtle grid place-items-center text-fg-subtle shrink-0"><Music size={13} /></div>;
+                                const row = (idx: number, inner: React.ReactNode, url?: string, removeId?: string) => (
+                                  <div key={removeId ?? "base"} onClick={() => setPreviewVer(comboIndexFor(c.id, idx))}
+                                    title="Click to see this option in the preview"
+                                    className={`flex items-center gap-2 mb-1 px-1.5 py-1 rounded cursor-pointer border ${activeIdx === idx ? "bg-brand/10 border-brand/40" : "border-transparent hover:bg-bg-subtle"}`}>
+                                    {c.kind !== "text" && thumb(url)}
+                                    {inner}
+                                    {idx === 0
+                                      ? <span className="text-[9px] uppercase tracking-wider text-fg-subtle shrink-0">base</span>
+                                      : <button title="Remove this option" onClick={(e) => { e.stopPropagation(); if (removeId) removeOption(c.id, removeId); }} className="text-fg-subtle hover:text-red-400 shrink-0"><X size={12} /></button>}
+                                  </div>
+                                );
+                                return (
+                                  <>
+                                    {row(0, <span className="flex-1 truncate text-fg-muted">{c.kind === "text" ? `"${(c.text || "").slice(0, 34)}"` : clipLabel(c)}</span>, c.url)}
+                                    {(c.variants || []).map((v, i) => row(
+                                      i + 1,
+                                      c.kind === "text"
+                                        ? <input value={v.text ?? ""} onClick={(e) => e.stopPropagation()} onChange={(e) => setOption(c.id, v.id, { text: e.target.value })} placeholder="alternative text" className="flex-1 bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" />
+                                        : <span className="flex-1 truncate text-fg-muted">{urlLabel(v.url)}</span>,
+                                      v.url, v.id,
+                                    ))}
+                                  </>
+                                );
+                              })()}
+                              {c.kind === "text" ? (
+                                <button onClick={() => addOption(c.id)} className="mt-1 px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> add option</button>
+                              ) : (
+                                <button onClick={() => setOptionPicker(optionPicker === c.id ? null : c.id)} className={`mt-1 px-1.5 py-0.5 rounded border border-dashed inline-flex items-center gap-1 ${optionPicker === c.id ? "border-brand text-brand" : "border-border text-fg-subtle hover:text-fg hover:border-brand"}`}><Plus size={11} /> {optionPicker === c.id ? "close picker" : "add option"}</button>
+                              )}
+                              {optionPicker === c.id && c.kind !== "text" && (
+                                <div className="mt-1.5 max-h-44 overflow-y-auto grid grid-cols-4 gap-1.5 p-1.5 rounded-md border border-border bg-bg-subtle/50">
+                                  {mediaAssets.length === 0 && <div className="col-span-4 text-fg-subtle text-center py-2">No {c.kind} assets in the bin</div>}
+                                  {mediaAssets.map((a) => (
+                                    <button key={a.id} title={`Add "${a.label}" as an option`} onClick={() => addOptionUrl(c.id, a.url)}
+                                      className="relative rounded overflow-hidden border border-border hover:border-brand aspect-square bg-black/20">
+                                      {c.kind === "image"
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        ? <img src={a.url} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                                        : c.kind === "video"
+                                          ? <video src={a.url} muted playsInline preload="metadata" className="absolute inset-0 w-full h-full object-cover" />
+                                          : <div className="absolute inset-0 grid place-items-center text-fg-subtle"><Music size={16} /></div>}
+                                      <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[8px] px-1 py-0.5 truncate">{a.label}</span>
+                                    </button>
+                                  ))}
                                 </div>
-                              ))}
-                              <button onClick={() => addOption(c.id)} className="mt-1 px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> add option</button>
+                              )}
                               {c.kind !== "text" && (() => {
                                 const cats = Array.from(new Set(brandLib.filter((a) => a.kind === c.kind && a.category).map((a) => a.category as string)));
                                 return (

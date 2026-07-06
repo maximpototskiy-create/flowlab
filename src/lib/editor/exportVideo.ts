@@ -75,32 +75,32 @@ function corsUrl(u: string): string {
   return u + (u.includes("?") ? "&" : "?") + "flcors=1";
 }
 
-function loadVideoEl(url: string): Promise<HTMLVideoElement> {
+function loadVideoEl(src: string): Promise<HTMLVideoElement> {
   return new Promise((resolve, reject) => {
     const v = document.createElement("video");
     v.crossOrigin = "anonymous";
     v.preload = "auto";
     v.playsInline = true;
-    v.src = corsUrl(url);
+    v.src = src; // callers pass a prefetched blob: URL (or a corsUrl fallback)
     v.onloadeddata = () => resolve(v);
     v.onerror = () => reject(new Error("video load failed (CORS?)"));
   });
 }
-function loadImgEl(url: string): Promise<HTMLImageElement> {
+function loadImgEl(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const i = new Image();
     i.crossOrigin = "anonymous";
-    i.src = corsUrl(url);
+    i.src = src;
     i.onload = () => resolve(i);
     i.onerror = () => reject(new Error("image load failed (CORS?)"));
   });
 }
-function loadAudioEl(url: string): Promise<HTMLAudioElement> {
+function loadAudioEl(src: string): Promise<HTMLAudioElement> {
   return new Promise((resolve, reject) => {
     const a = document.createElement("audio");
     a.crossOrigin = "anonymous";
     a.preload = "auto";
-    a.src = corsUrl(url);
+    a.src = src;
     a.onloadeddata = () => resolve(a);
     a.onerror = () => reject(new Error("audio load failed (CORS?)"));
   });
@@ -336,15 +336,36 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
   const total = Math.max(0.1, ...clips.map((c) => c.start + c.duration));
   const sx = previewWidth > 1 ? W / previewWidth : 1; // preview px -> export px
 
-  // preload media
+  // Prefetch every media source fully into a local Blob first. Rendering
+  // seeks videos frame by frame - against a network-backed <video> every seek
+  // stalls on HTTP range requests (minutes per version + crashes); against a
+  // local blob: URL seeks are near-instant.
+  const blobCache = new Map<string, { blob: Blob; objUrl: string }>();
+  const prefetch = async (url: string): Promise<string> => {
+    const hit = blobCache.get(url);
+    if (hit) return hit.objUrl;
+    try {
+      const r = await fetch(corsUrl(url));
+      if (!r.ok) throw new Error(String(r.status));
+      const blob = await r.blob();
+      const objUrl = URL.createObjectURL(blob);
+      blobCache.set(url, { blob, objUrl });
+      return objUrl;
+    } catch { return corsUrl(url); } // stream from network as a last resort
+  };
+  const urls = Array.from(new Set(clips.filter((c) => c.url).map((c) => c.url!)));
+  await Promise.all(urls.map((u) => prefetch(u)));
+
+  // preload media (from the local blobs)
   const videos = new Map<string, HTMLVideoElement>();
   const images = new Map<string, HTMLImageElement>();
   const audios = new Map<string, HTMLAudioElement>();
   for (const c of clips) {
     if (!c.url) continue;
-    if (c.kind === "video") videos.set(c.id, await loadVideoEl(c.url));
-    else if (c.kind === "image") images.set(c.id, await loadImgEl(c.url));
-    else if (c.kind === "audio") audios.set(c.id, await loadAudioEl(c.url));
+    const src = await prefetch(c.url);
+    if (c.kind === "video") videos.set(c.id, await loadVideoEl(src));
+    else if (c.kind === "image") images.set(c.id, await loadImgEl(src));
+    else if (c.kind === "audio") audios.set(c.id, await loadAudioEl(src));
   }
 
   const canvas = document.createElement("canvas");
@@ -427,8 +448,10 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
   };
 
   const cleanupMedia = () => {
-    for (const v of videos.values()) { try { v.pause(); } catch { /* */ } }
-    for (const a of audios.values()) { try { a.pause(); } catch { /* */ } }
+    for (const v of videos.values()) { try { v.pause(); v.removeAttribute("src"); v.load(); } catch { /* */ } }
+    for (const a of audios.values()) { try { a.pause(); a.removeAttribute("src"); a.load(); } catch { /* */ } }
+    for (const e of blobCache.values()) { try { URL.revokeObjectURL(e.objUrl); } catch { /* */ } }
+    blobCache.clear();
   };
 
   // ---- Path 1: OFFLINE frame-by-frame render via WebCodecs ------------------
@@ -464,7 +487,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
       waits.push(new Promise<void>((res2) => {
         let done = false;
         const fin = () => { if (done) return; done = true; el.removeEventListener("seeked", fin); clearTimeout(tm); res2(); };
-        const tm = setTimeout(fin, 2000); // safety net - never hang on a bad seek
+        const tm = setTimeout(fin, 800); // safety net - never hang on a bad seek (local blob seeks are fast)
         el.addEventListener("seeked", fin);
         try { el.currentTime = loc; } catch { fin(); }
       }));
@@ -482,9 +505,9 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
     let any = false;
     for (const c of audible) {
       try {
-        const resp = await fetch(corsUrl(c.url!));
-        if (!resp.ok) continue;
-        const buf = await octx.decodeAudioData(await resp.arrayBuffer());
+        const cached = blobCache.get(c.url!);
+        const ab = cached ? await cached.blob.arrayBuffer() : await (await fetch(corsUrl(c.url!))).arrayBuffer();
+        const buf = await octx.decodeAudioData(ab);
         const src = octx.createBufferSource();
         src.buffer = buf;
         const g = octx.createGain();
@@ -576,7 +599,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
       frame.close();
       // Backpressure via the encoder's dequeue event: timers are throttled in
       // background tabs, encoder callbacks are not.
-      if (venc.encodeQueueSize > 8) {
+      if (venc.encodeQueueSize > 4) {
         await new Promise<void>((res2) => venc.addEventListener("dequeue", () => res2(), { once: true }));
       }
       p.onProgress?.(f / totalFrames);
