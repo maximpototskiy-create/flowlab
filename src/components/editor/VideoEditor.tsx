@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
 import type { TextStyle, CapWord } from "@/lib/editor/exportVideo";
-import { drawCaption, type ExportClip } from "@/lib/editor/exportVideo";
+import { drawCaption, kfState, type ExportClip } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
@@ -273,6 +273,7 @@ type EditClip = {
   y: number;
   fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
   rot?: number; // rotation in degrees (media clips)
+  kf?: { t: number; x?: number; y?: number; scale?: number; rot?: number }[]; // transform keyframes (clip-local time)
   // Alternatives for batch "versions": extra options beyond this clip's base
   // value. Each version swaps in one option's text (captions) or url (media).
   variants?: { id: string; text?: string; url?: string; dur?: number }[];
@@ -312,8 +313,22 @@ const DEFAULTS = { image: 4, audio: 6, video: 4, text: 3, fx: 1.5, adjust: 3 };
 // {duration} {lang} {initials}. "__" separates the concept block from render
 // specs (matches the team's CCA naming convention). Persisted per browser.
 const NAMING_KEY = "flowlab.editor.naming";
-const NAMING_DEFAULT = { template: "{project}_{type}_{version}__{resolution}_{duration}_{lang}_{initials}", version: "v1", lang: "en", initials: "" };
-const NAMING_TOKENS = ["project", "type", "version", "resolution", "duration", "lang", "initials"] as const;
+const NAMING_DEFAULT = { template: "{date}_{brand}_{project}_{type}_{version}__{resolution}_{duration}_{lang}_{initials}", version: "v1", lang: "en", initials: "", brandCode: "" };
+// {date} = YY.MM, e.g. 26.07
+function namingDate(): string {
+  const d = new Date();
+  return `${String(d.getFullYear() % 100).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+// Default brand abbreviation: initials of words ("Cleaner Kit" -> CK), else
+// the first two letters upper-cased. The codes in the studio's sheet are not
+// fully rule-based (Ringtune -> RT), so the field stays editable.
+function guessBrandCode(name?: string): string {
+  if (!name) return "";
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return words.slice(0, 3).map((w) => w[0]).join("").toUpperCase();
+  return name.trim().slice(0, 2).toUpperCase();
+}
+const NAMING_TOKENS = ["date", "brand", "project", "type", "version", "resolution", "duration", "lang", "initials"] as const;
 // Versions = cartesian product of each variant slot's options (option 0 = base).
 // ---- Timeline versions -------------------------------------------------------
 // A version is a FULL snapshot of the timeline (clips + layers). You edit one
@@ -491,7 +506,7 @@ function VideoThumb({ src, className, hoverPlay, onDims }: { src: string; classN
   );
 }
 
-export default function VideoEditor({ assets, workflowId, projectId, projectName, brandId }: { assets: EditorAsset[]; workflowId?: string; projectId?: string; projectName?: string; brandId?: string }) {
+export default function VideoEditor({ assets, workflowId, projectId, projectName, brandId, brandName }: { assets: EditorAsset[]; workflowId?: string; projectId?: string; projectName?: string; brandId?: string; brandName?: string }) {
   const [layers, setLayers] = useState<Layer[]>([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]);
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
@@ -564,7 +579,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [namingOpen, setNamingOpen] = useState(false);
-  const [naming, setNaming] = useState<{ template: string; version: string; lang: string; initials: string }>(() => {
+  const [naming, setNaming] = useState<{ template: string; version: string; lang: string; initials: string; brandCode?: string }>(() => {
     if (typeof window !== "undefined") {
       try { const raw = localStorage.getItem(NAMING_KEY); if (raw) return { ...NAMING_DEFAULT, ...JSON.parse(raw) }; } catch { /* */ }
     }
@@ -1490,6 +1505,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const r = RESOLUTIONS.find((x) => x.key === (formatKey ?? resKey)) ?? RESOLUTIONS[0];
     const dur = Math.max(1, Math.round(endOf(clipsRef.current)));
     const tokens: Record<string, string> = {
+      date: namingDate(),
+      brand: (naming.brandCode || guessBrandCode(brandName)).trim(),
       project: (projectName || "creative").trim(),
       type: "video",
       version: versionOverride || naming.version || "v1",
@@ -1502,10 +1519,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     // Drop empty token gaps while preserving the "__" concept/spec separator.
     const name = raw.split("__").map((seg) => seg.split("_").filter(Boolean).join("_")).filter(Boolean).join("__");
     return `${name || `creative-${Date.now()}`}.${ext}`;
-  }, [naming, projectName, resKey]);
+  }, [naming, projectName, brandName, resKey]);
 
   // One clip -> the export-clip shape (shared by single + batch export).
-  const toExportClip = useCallback((c: EditClip) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr }), []);
+  const toExportClip = useCallback((c: EditClip) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, kf: c.kf, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr }), []);
 
   // Render every version (variant combo) x every chosen format, each downloaded
   // with its own templated name (version token = v1..vN per combo).
@@ -1688,7 +1705,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const ordered = [...z, ...src.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, kf: c.kf, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
         onStage: (m) => setStatus(m),
@@ -1714,7 +1731,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, kf: c.kf, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -1921,7 +1938,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
-  const onVpDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "scale") => {
+  const onVpDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "scale" | "rotate") => {
     if (e.button === 1) return; // middle button → let the viewport pan
     e.stopPropagation();
     if (isLocked(c)) return;
@@ -1931,9 +1948,23 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const TH = 10; const STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3];
     const groupIds = mode === "move" ? (ids.length ? ids : [c.id]) : [c.id];
     const orig = new Map(groupIds.map((id) => { const cc = clipsRef.current.find((x) => x.id === id); return [id, { x: cc?.x ?? 0, y: cc?.y ?? 0 }]; }));
-    const s = { sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y, os: c.scale };
+    const s = { sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y, os: c.scale, or: c.rot ?? 0 };
+    // rotation: angle from the clip's on-screen centre to the cursor
+    const box = (e.currentTarget as HTMLElement).parentElement?.getBoundingClientRect();
+    const cx0 = box ? box.left + box.width / 2 : e.clientX;
+    const cy0 = box ? box.top + box.height / 2 : e.clientY;
+    const angleAt = (px: number, py: number) => (Math.atan2(py - cy0, px - cx0) * 180) / Math.PI;
+    const a0 = angleAt(e.clientX, e.clientY);
     const move = (ev: PointerEvent) => {
       const z = viewZoomRef.current || 1; const dxr = (ev.clientX - s.sx) / z, dyr = (ev.clientY - s.sy) / z;
+      if (mode === "rotate") {
+        let rot = s.or + (angleAt(ev.clientX, ev.clientY) - a0);
+        rot = ((rot + 180) % 360 + 360) % 360 - 180; // normalize to -180..180
+        if (ev.shiftKey) rot = Math.round(rot / 15) * 15; // snap to 15 deg steps
+        if (Math.abs(rot) < 3 && !ev.shiftKey) rot = 0; // gentle zero snap
+        update(c.id, { rot: Math.round(rot * 10) / 10 });
+        return;
+      }
       if (mode === "move") {
         const pw = previewSize.w || 1, ph = previewSize.h || 1;
         // snap based on the grabbed clip, apply the same (snapped) delta to the whole selection
@@ -2458,6 +2489,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     ))}
                   </div>
                   <div className="grid grid-cols-3 gap-2 mb-2">
+                    <div><label className="block text-fg-subtle mb-0.5">Brand code</label><input value={naming.brandCode ?? ""} placeholder={guessBrandCode(brandName) || "RT"} onChange={(e) => setNaming((n) => ({ ...n, brandCode: e.target.value.replace(/[^A-Za-z0-9]/g, "").slice(0, 4).toUpperCase() }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
                     <div><label className="block text-fg-subtle mb-0.5">Version</label><input value={naming.version} onChange={(e) => setNaming((n) => ({ ...n, version: e.target.value.replace(/[^A-Za-z0-9-]/g, "").slice(0, 8) }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
                     <div><label className="block text-fg-subtle mb-0.5">Lang</label><input value={naming.lang} onChange={(e) => setNaming((n) => ({ ...n, lang: e.target.value.replace(/[^A-Za-z-]/g, "").slice(0, 5) }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
                     <div><label className="block text-fg-subtle mb-0.5">Initials</label><input value={naming.initials} onChange={(e) => setNaming((n) => ({ ...n, initials: e.target.value.replace(/[^A-Za-z0-9]/g, "").slice(0, 8) }))} placeholder="AA" className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
@@ -2465,7 +2497,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                   {/* Live per-token breakdown - makes any junk in a field obvious at a glance */}
                   <div className="mb-2 rounded bg-bg-subtle/50 border border-border px-2 py-1.5 text-[10px] leading-relaxed">
                     <span className="text-fg-subtle">Tokens now: </span>
-                    <span className="font-mono">{`{project}`}</span>=<span className="text-fg-muted">{(projectName || "creative").trim()}</span>{" · "}
+                    <span className="font-mono">{`{date}`}</span>=<span className="text-fg-muted">{namingDate()}</span>{" \u00b7 "}<span className="font-mono">{`{brand}`}</span>=<span className="text-fg-muted">{(naming.brandCode || guessBrandCode(brandName)) || "(empty)"}</span>{" \u00b7 "}<span className="font-mono">{`{project}`}</span>=<span className="text-fg-muted">{(projectName || "creative").trim()}</span>{" · "}
                     <span className="font-mono">{`{version}`}</span>=<span className="text-fg-muted">{naming.version || "v1"}</span>{" · "}
                     <span className="font-mono">{`{lang}`}</span>=<span className="text-fg-muted">{naming.lang || "en"}</span>{" · "}
                     <span className="font-mono">{`{initials}`}</span>=<span className="text-fg-muted">{naming.initials || "(empty)"}</span>
@@ -2629,15 +2661,16 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                       let boxStyle: React.CSSProperties | null = null;
                       if (boxMode && dims) {
                         const W = previewSize.w, H = previewSize.h;
+                        const ks = kfState(c, t - c.start); // keyframed transform (falls back to static values)
                         const ratio = fitMode === "cover" ? Math.max(W / dims.w, H / dims.h) : Math.min(W / dims.w, H / dims.h);
-                        const fitPx = ratio * (c.scale || 1) * v.scaleMul;
+                        const fitPx = ratio * ks.scale * v.scaleMul;
                         const bw = dims.w * fitPx, bh = dims.h * fitPx;
                         boxStyle = {
-                          left: (W - bw) / 2 + ((c.x || 0) + v.offX) * W,
-                          top: (H - bh) / 2 + ((c.y || 0) + v.offY) * H,
+                          left: (W - bw) / 2 + (ks.x + v.offX) * W,
+                          top: (H - bh) / 2 + (ks.y + v.offY) * H,
                           width: bw, height: bh,
                           opacity: v.opacity,
-                          transform: c.rot ? `rotate(${c.rot}deg)` : undefined,
+                          transform: ks.rot ? `rotate(${ks.rot}deg)` : undefined,
                           transformOrigin: "center",
                         };
                       }
@@ -2672,7 +2705,15 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           )}
                           {isSel && active && <div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />}
                           {selected === c.id && active && (
-                            <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} />)}
+                            <>
+                              <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} />
+                              {(c.kind === "video" || c.kind === "image") && (
+                                <div onPointerDown={(e) => onVpDown(e, c, "rotate")} title="Drag to rotate (Shift = 15 deg steps)"
+                                  className="absolute left-1/2 -translate-x-1/2 -top-6 w-4 h-4 rounded-full bg-bg-card border-2 border-brand cursor-grab active:cursor-grabbing shadow" style={{ touchAction: "none" }}>
+                                  <div className="absolute left-1/2 top-full -translate-x-1/2 w-px h-2.5 bg-brand/70" />
+                                </div>
+                              )}
+                            </>)}
                         </div>
                       );
                     })}
@@ -2877,6 +2918,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         })()}
                         <span className={`px-2 truncate leading-9 relative z-[1] ${c.kind === "video" ? "bg-black/40 rounded" : ""}`}>{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trimL")} className="absolute left-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-l z-[2]" />
+                        {(c.kf?.length ?? 0) > 0 && c.kf!.map((k, ki) => (
+                          <span key={ki} title={`transform key @ ${k.t.toFixed(2)}s - click: jump, Alt+click: delete`}
+                            onPointerDown={(e) => { e.stopPropagation(); if (e.altKey) update(c.id, { kf: c.kf!.length > 1 ? c.kf!.filter((_, j) => j !== ki) : undefined }); else seek(c.start + k.t); }}
+                            className="absolute bottom-0.5 w-2 h-2 rotate-45 bg-amber-400 border border-black/50 cursor-pointer z-[3] hover:scale-125 transition-transform"
+                            style={{ left: Math.max(1, k.t * pxPerSec - 4) }} />
+                        ))}
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r z-[2]" />
                       </div>
                     ))}
@@ -3000,6 +3047,26 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                   {(sel.kind === "video" || sel.kind === "image") && (
                     <label className="flex items-center gap-2 text-fg-muted">rotate<input type="range" min={-180} max={180} step={1} value={sel.rot ?? 0} onChange={(e) => updateSel(sel.id, { rot: Number(e.target.value) })} onDoubleClick={() => updateSel(sel.id, { rot: 0 })} className="flex-1" /><span className="w-9 text-right tabular-nums">{Math.round(sel.rot ?? 0)}&deg;</span></label>
                   )}
+                  {(sel.kind === "video" || sel.kind === "image") && (() => {
+                    const local = +(Math.min(Math.max(playhead - sel.start, 0), sel.duration)).toFixed(2);
+                    const near = (sel.kf || []).find((k) => Math.abs(k.t - local) < 0.05);
+                    const cur = kfState(sel, local);
+                    return (
+                      <div className="flex items-center gap-2 text-fg-muted">
+                        <span>keys</span>
+                        <button title={near ? "Update the keyframe at the playhead with the current transform" : "Add a transform keyframe (x/y/scale/rotate) at the playhead"}
+                          onClick={() => {
+                            const key = { t: local, x: cur.x, y: cur.y, scale: cur.scale, rot: cur.rot };
+                            updateSel(sel.id, { kf: [...(sel.kf || []).filter((k) => Math.abs(k.t - local) >= 0.05), key].sort((a, b) => a.t - b.t) });
+                          }}
+                          className={`w-5 h-5 grid place-items-center rounded border ${near ? "border-brand text-brand bg-brand/15" : "border-border text-fg-subtle hover:text-brand hover:border-brand"}`}>
+                          <span className="block w-2 h-2 rotate-45 border border-current" style={{ background: near ? "currentColor" : "transparent" }} />
+                        </button>
+                        <span className="text-fg-subtle text-[10px] flex-1">{(sel.kf?.length ?? 0)} key{(sel.kf?.length ?? 0) === 1 ? "" : "s"} {"\u00b7"} diamonds on the clip: click = jump, Alt+click = delete</span>
+                        {(sel.kf?.length ?? 0) > 0 && <button onClick={() => updateSel(sel.id, { kf: undefined })} className="text-fg-subtle hover:text-red-400 text-[10px] underline decoration-dotted">clear</button>}
+                      </div>
+                    );
+                  })()}
                   <label className="flex items-center gap-2 text-fg-muted">animation<select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
                   <button onClick={() => resetTransform(sel.id)} className="text-[10px] text-fg-subtle hover:text-fg underline underline-offset-2">Reset position & scale</button>
                 </Section>

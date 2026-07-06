@@ -46,6 +46,7 @@ export type ExportClip = {
   x: number;
   y: number;
   rot?: number;
+  kf?: { t: number; x?: number; y?: number; scale?: number; rot?: number }[];
   fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
   fadeIn: number;
   fadeOut: number;
@@ -334,6 +335,33 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   return { x: cx - maxLineW / 2 - padX, y: top, w: maxLineW + padX * 2, h: (cy + descent + padY) - top };
 }
 
+// Keyframe interpolation (After-Effects-style, linear): each key pins any of
+// x / y / scale / rot at a clip-local time; between keys the value blends.
+// Static clip values act as the base when a property has no keys.
+export function kfState(
+  c: { x?: number; y?: number; scale?: number; rot?: number; kf?: { t: number; x?: number; y?: number; scale?: number; rot?: number }[] },
+  local: number,
+): { x: number; y: number; scale: number; rot: number } {
+  const out = { x: c.x || 0, y: c.y || 0, scale: c.scale || 1, rot: c.rot || 0 };
+  const kf = c.kf;
+  if (!kf || !kf.length) return out;
+  for (const p of ["x", "y", "scale", "rot"] as const) {
+    const pts = kf.filter((k) => k[p] != null).sort((a, b) => a.t - b.t);
+    if (!pts.length) continue;
+    if (local <= pts[0].t) { out[p] = pts[0][p]!; continue; }
+    if (local >= pts[pts.length - 1].t) { out[p] = pts[pts.length - 1][p]!; continue; }
+    for (let i2 = 0; i2 < pts.length - 1; i2++) {
+      const a = pts[i2], b = pts[i2 + 1];
+      if (local >= a.t && local <= b.t) {
+        const f = (local - a.t) / Math.max(1e-6, b.t - a.t);
+        out[p] = a[p]! + (b[p]! - a[p]!) * f;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 // Cross-export source cache: a versions batch renders the same timeline many
 // times - downloading every source once per version was the main time sink.
 // Bounded by total byte size, least-recently-used entries are evicted.
@@ -451,26 +479,27 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
             // layout renders correctly in every format. Default: video fills
             // (cover), images fit whole (contain). x/y/scale are fine offsets.
             const fitMode = c.fit ?? (c.kind === "video" ? "cover" : "contain");
+            const ks = kfState(c, tt - c.start);
             const ratio = fitMode === "cover" ? Math.max(W / mw, H / mh) : Math.min(W / mw, H / mh);
-            const fit = ratio * (c.scale || 1) * v.scaleMul;
+            const fit = ratio * ks.scale * v.scaleMul;
             const dw = mw * fit, dh = mh * fit;
-            const dx = (W - dw) / 2 + (c.x || 0) * W + v.offX * W;
-            const dy = (H - dh) / 2 + (c.y || 0) * H + v.offY * H;
+            const dx = (W - dw) / 2 + ks.x * W + v.offX * W;
+            const dy = (H - dh) / 2 + ks.y * H + v.offY * H;
             if (c.blend === "screen" || c.blend === "multiply") ctx.globalCompositeOperation = c.blend;
             // "blur" fills the letterbox bars with a blurred cover copy behind.
             if (fitMode === "blur") {
-              const cov = Math.max(W / mw, H / mh) * (c.scale || 1) * v.scaleMul;
+              const cov = Math.max(W / mw, H / mh) * ks.scale * v.scaleMul;
               const bw = mw * cov, bh = mh * cov;
               ctx.save();
               ctx.filter = `blur(${Math.max(8, Math.round(W / 50))}px)`;
-              try { ctx.drawImage(el, (W - bw) / 2 + (c.x || 0) * W + v.offX * W, (H - bh) / 2 + (c.y || 0) * H + v.offY * H, bw, bh); } catch { /* */ }
+              try { ctx.drawImage(el, (W - bw) / 2 + ks.x * W + v.offX * W, (H - bh) / 2 + ks.y * H + v.offY * H, bw, bh); } catch { /* */ }
               ctx.restore();
             }
-            if (c.rot) {
+            if (ks.rot) {
               // rotate around the media box centre (blur backdrop stays unrotated)
               ctx.save();
               ctx.translate(dx + dw / 2, dy + dh / 2);
-              ctx.rotate((c.rot * Math.PI) / 180);
+              ctx.rotate((ks.rot * Math.PI) / 180);
               if (c.keyColor) drawKeyed(ctx, el, c, -dw / 2, -dh / 2, dw, dh);
               else { try { ctx.drawImage(el, -dw / 2, -dh / 2, dw, dh); } catch { /* */ } }
               ctx.restore();
