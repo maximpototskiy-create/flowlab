@@ -45,6 +45,7 @@ export type ExportClip = {
   scale: number;
   x: number;
   y: number;
+  rot?: number;
   fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
   fadeIn: number;
   fadeOut: number;
@@ -465,7 +466,15 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
               try { ctx.drawImage(el, (W - bw) / 2 + (c.x || 0) * W + v.offX * W, (H - bh) / 2 + (c.y || 0) * H + v.offY * H, bw, bh); } catch { /* */ }
               ctx.restore();
             }
-            if (c.keyColor) drawKeyed(ctx, el, c, dx, dy, dw, dh);
+            if (c.rot) {
+              // rotate around the media box centre (blur backdrop stays unrotated)
+              ctx.save();
+              ctx.translate(dx + dw / 2, dy + dh / 2);
+              ctx.rotate((c.rot * Math.PI) / 180);
+              if (c.keyColor) drawKeyed(ctx, el, c, -dw / 2, -dh / 2, dw, dh);
+              else { try { ctx.drawImage(el, -dw / 2, -dh / 2, dw, dh); } catch { /* */ } }
+              ctx.restore();
+            } else if (c.keyColor) drawKeyed(ctx, el, c, dx, dy, dw, dh);
             else { try { ctx.drawImage(el, dx, dy, dw, dh); } catch { /* */ } }
             ctx.globalCompositeOperation = "source-over";
           }

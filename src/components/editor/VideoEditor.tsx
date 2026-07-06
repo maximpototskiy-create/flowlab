@@ -272,6 +272,7 @@ type EditClip = {
   x: number;
   y: number;
   fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
+  rot?: number; // rotation in degrees (media clips)
   // Alternatives for batch "versions": extra options beyond this clip's base
   // value. Each version swaps in one option's text (captions) or url (media).
   variants?: { id: string; text?: string; url?: string; dur?: number }[];
@@ -583,6 +584,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const cutModeRef = useRef(false);
   cutModeRef.current = cutMode;
   const [binDragging, setBinDragging] = useState(false); // an asset is being dragged from the bin
+  const [clipDragging, setClipDragging] = useState(false); // a timeline clip is being moved
   const [railTab, setRailTab] = useState<"media" | "brand" | "audio" | "text" | "subs" | "effects" | "filters">("media");
   const [brandLib, setBrandLib] = useState<EditorAsset[]>([]);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -1054,6 +1056,17 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     setClips((p) => [...p, base(a.kind, layer, a.url, a.label, at, duration, known ? {} : { autoDur: true })]);
   };
   // when a video/audio's real duration loads, snap the clip length to it (unless already trimmed)
+  // natural media dimensions per clip (needed to render Fill/Fit as a real
+  // full-frame box instead of an object-fit crop)
+  const clipDimsRef = useRef<Map<string, { w: number; h: number }>>(new Map());
+  const [, setDimsTick] = useState(0);
+  const noteClipDims = (id: string, w: number, h: number) => {
+    if (!w || !h) return;
+    const cur = clipDimsRef.current.get(id);
+    if (cur && cur.w === w && cur.h === h) return;
+    clipDimsRef.current.set(id, { w, h });
+    setDimsTick((n) => n + 1);
+  };
   const onMeta = (id: string, dur: number) => {
     if (!isFinite(dur) || dur <= 0) return;
     setClips((prev) => prev.map((c) => {
@@ -1492,7 +1505,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   }, [naming, projectName, resKey]);
 
   // One clip -> the export-clip shape (shared by single + batch export).
-  const toExportClip = useCallback((c: EditClip) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr }), []);
+  const toExportClip = useCallback((c: EditClip) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr }), []);
 
   // Render every version (variant combo) x every chosen format, each downloaded
   // with its own templated name (version token = v1..vN per combo).
@@ -1675,7 +1688,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const ordered = [...z, ...src.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
         onStage: (m) => setStatus(m),
@@ -1701,7 +1714,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext } = await exportTimeline({
-        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
+        clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
       });
@@ -1741,6 +1754,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const moveIds = mode === "move" ? (ids.length ? ids : [c.id]) : [c.id];
     const origStarts = new Map(moveIds.map((id) => [id, clipsRef.current.find((x) => x.id === id)?.start ?? 0]));
     dragRef.current = { id: c.id, mode, startX: e.clientX, origDur: c.duration, origStart: c.start, origInset: c.inset || 0, type: layerType(c), moveIds, origStarts };
+    if (mode === "move") setClipDragging(true);
   };
   const onClipPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current; if (!d) return; const dx = (e.clientX - d.startX) / pxPerSec;
@@ -1799,6 +1813,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     }
   };
   const onClipPointerUp = () => {
+    setClipDragging(false);
     const d = dragRef.current; dragRef.current = null;
     const hint = dropHintRef.current; setDropHint(null);
     // Manually MOVING a sectioned clip detaches it from the auto-chained
@@ -1937,7 +1952,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const up = () => { setSnap({ v: false, h: false }); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
-  const resetTransform = (id: string) => update(id, { x: 0, y: 0, scale: 1 });
+  const resetTransform = (id: string) => update(id, { x: 0, y: 0, scale: 1, rot: 0 });
   // drag a caption box on the canvas overlay → move (x/y); corner handle → scale
   const onCapDown = (e: React.PointerEvent, c: EditClip) => {
     if (e.button !== 0) return;
@@ -2028,7 +2043,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(96px, 1fr))` }}>
         {items.map((a) => (
           <div key={a.id} className="min-w-0">
-            <div role="button" tabIndex={0} draggable onDragStart={(e) => onBinDragStart(e, a)} onClick={() => addAssetAt(a)} title={`${a.label}${extOf(a.url) ? ` · ${extOf(a.url)}` : ""}`}
+            <div role="button" tabIndex={0} draggable onDragStart={(e) => onBinDragStart(e, a)} onDragEnd={() => setBinDragging(false)} onClick={() => addAssetAt(a)} title={`${a.label}${extOf(a.url) ? ` · ${extOf(a.url)}` : ""}`}
               className="group relative w-full aspect-square rounded-md overflow-hidden bg-bg-card border border-border hover:border-brand cursor-grab active:cursor-grabbing">
               {a.kind === "image" ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -2064,7 +2079,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const ty = ((c.y || 0) + v.offY) * previewSize.h;
     return {
       opacity: v.opacity,
-      transform: `translate(${tx}px, ${ty}px) scale(${(c.scale || 1) * v.scaleMul})`,
+      transform: `translate(${tx}px, ${ty}px) scale(${(c.scale || 1) * v.scaleMul})${c.rot ? ` rotate(${c.rot}deg)` : ""}`,
       transformOrigin: "center",
       clipPath: v.reveal != null ? `inset(0 ${Math.round((1 - v.reveal) * 100)}% 0 0)` : undefined,
     };
@@ -2603,12 +2618,35 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                       const fitMode = c.fit ?? (c.kind === "video" ? "cover" : "contain");
                       const objFit = fitMode === "cover" ? "object-cover" : "object-contain";
                       const blurBg = fitMode === "blur";
+                      // Full-frame box: size the clip by its NATURAL dimensions
+                      // (cover = scale up, never crop), so moving/scaling shows
+                      // the rest of the frame - only the canvas clips it. This
+                      // matches the export math exactly. Falls back to the old
+                      // object-fit path until dims are known / during wipes /
+                      // for chroma-keyed clips.
+                      const dims = clipDimsRef.current.get(c.id);
+                      const boxMode = !!dims && !c.keyColor && v.reveal == null && fitMode !== "blur";
+                      let boxStyle: React.CSSProperties | null = null;
+                      if (boxMode && dims) {
+                        const W = previewSize.w, H = previewSize.h;
+                        const ratio = fitMode === "cover" ? Math.max(W / dims.w, H / dims.h) : Math.min(W / dims.w, H / dims.h);
+                        const fitPx = ratio * (c.scale || 1) * v.scaleMul;
+                        const bw = dims.w * fitPx, bh = dims.h * fitPx;
+                        boxStyle = {
+                          left: (W - bw) / 2 + ((c.x || 0) + v.offX) * W,
+                          top: (H - bh) / 2 + ((c.y || 0) + v.offY) * H,
+                          width: bw, height: bh,
+                          opacity: v.opacity,
+                          transform: c.rot ? `rotate(${c.rot}deg)` : undefined,
+                          transformOrigin: "center",
+                        };
+                      }
                       // Only load a clip's video near its playback window, so the
                       // whole timeline's videos don't buffer/decode all at once.
                       const near = active || (c.start - t > 0 && c.start - t < 1.5) || (t >= c.start + c.duration && t - (c.start + c.duration) < 0.4);
                       return (
-                        <div key={c.id} className="absolute inset-0"
-                          style={{ ...styleFromVisual(c, v), mixBlendMode: (c.blend || undefined) as React.CSSProperties["mixBlendMode"], pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
+                        <div key={c.id} className={boxStyle ? "absolute" : "absolute inset-0"}
+                          style={{ ...(boxStyle ?? styleFromVisual(c, v)), mixBlendMode: (c.blend || undefined) as React.CSSProperties["mixBlendMode"], pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
                           onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}>
                           {blurBg && c.kind === "image" && !c.keyColor && (
                             // eslint-disable-next-line @next/next/no-img-element
@@ -2616,7 +2654,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           )}
                           {c.kind === "image" && !c.keyColor && (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={c.url} alt="" draggable={false} className={`absolute inset-0 w-full h-full ${objFit} pointer-events-none`} />
+                            <img src={c.url} alt="" draggable={false} onLoad={(e) => noteClipDims(c.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className={`absolute inset-0 w-full h-full ${boxStyle ? "object-fill" : objFit} pointer-events-none`} />
                           )}
                           {c.kind === "image" && c.keyColor && <KeyedImage url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3} />}
                           {blurBg && active && c.kind === "video" && !c.keyColor && (
@@ -2624,8 +2662,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                               className="absolute inset-0 w-full h-full object-cover pointer-events-none" style={{ filter: "blur(22px)", transform: "scale(1.08)" }} />
                           )}
                           {c.kind === "video" && !c.keyColor && (
-                            <video src={near || c.autoDur ? c.url : undefined} playsInline preload={active ? "auto" : "metadata"} onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
-                              className={`absolute inset-0 w-full h-full ${objFit} pointer-events-none`} />
+                            <video src={near || c.autoDur ? c.url : undefined} playsInline preload={active ? "auto" : "metadata"} onLoadedMetadata={(e) => { onMeta(c.id, e.currentTarget.duration); noteClipDims(c.id, e.currentTarget.videoWidth, e.currentTarget.videoHeight); }} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
+                              className={`absolute inset-0 w-full h-full ${boxStyle ? "object-fill" : objFit} pointer-events-none`} />
                           )}
                           {c.kind === "video" && c.keyColor && (
                             <KeyedVideo url={c.url!} keyColor={c.keyColor} keyTol={c.keyTol ?? 0.3}
@@ -2765,8 +2803,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li}` }); }}
                     onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li}` ? null : h))}
                     onDrop={(e) => onStripDrop(e, li)}
-                    className={`flex-1 rounded transition-all grid place-items-center overflow-hidden ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "h-5 bg-brand/25 ring-1 ring-brand" : binDragging ? "h-3 bg-brand/10 ring-1 ring-dashed ring-brand/40" : "h-0.5 bg-border/30"}`}>
-                    {(binDragging || (dropHint?.type === "strip" && dropHint.id === `strip-${li}`)) && (
+                    className={`flex-1 rounded transition-all grid place-items-center overflow-hidden ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "h-5 bg-brand/25 ring-1 ring-brand" : (binDragging || clipDragging) ? "h-3 bg-brand/10 ring-1 ring-dashed ring-brand/40" : "h-0.5 bg-border/30"}`}>
+                    {((binDragging || clipDragging) || (dropHint?.type === "strip" && dropHint.id === `strip-${li}`)) && (
                       <span className={`pointer-events-none inline-flex items-center gap-1 text-[9px] leading-none ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "text-brand font-medium" : "text-brand/70"}`}><Plus size={9} /> New layer</span>
                     )}
                   </div>
@@ -2872,8 +2910,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                       onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li + 1}` }); }}
                       onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li + 1}` ? null : h))}
                       onDrop={(e) => onStripDrop(e, li + 1)}
-                      className={`flex-1 rounded transition-all grid place-items-center overflow-hidden ${dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}` ? "h-5 bg-brand/25 ring-1 ring-brand" : binDragging ? "h-3 bg-brand/10 ring-1 ring-dashed ring-brand/40" : "h-0.5 bg-border/30"}`}>
-                    {(binDragging || (dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}`)) && (
+                      className={`flex-1 rounded transition-all grid place-items-center overflow-hidden ${dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}` ? "h-5 bg-brand/25 ring-1 ring-brand" : (binDragging || clipDragging) ? "h-3 bg-brand/10 ring-1 ring-dashed ring-brand/40" : "h-0.5 bg-border/30"}`}>
+                    {((binDragging || clipDragging) || (dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}`)) && (
                       <span className={`pointer-events-none inline-flex items-center gap-1 text-[9px] leading-none ${dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}` ? "text-brand font-medium" : "text-brand/70"}`}><Plus size={9} /> New layer</span>
                     )}
                   </div>
@@ -2959,6 +2997,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               {(sel.kind === "video" || sel.kind === "image" || sel.kind === "text") && (
                 <Section id="transform" title="Transform & motion" open={openSec.transform} onToggle={toggleSec}>
                   <label className="flex items-center gap-2 text-fg-muted">scale<input type="range" min={0.2} max={3} step={0.05} value={sel.scale} onChange={(e) => updateSel(sel.id, { scale: Number(e.target.value) })} className="flex-1" /><span className="w-9 text-right tabular-nums">{Math.round(sel.scale * 100)}%</span></label>
+                  {(sel.kind === "video" || sel.kind === "image") && (
+                    <label className="flex items-center gap-2 text-fg-muted">rotate<input type="range" min={-180} max={180} step={1} value={sel.rot ?? 0} onChange={(e) => updateSel(sel.id, { rot: Number(e.target.value) })} onDoubleClick={() => updateSel(sel.id, { rot: 0 })} className="flex-1" /><span className="w-9 text-right tabular-nums">{Math.round(sel.rot ?? 0)}&deg;</span></label>
+                  )}
                   <label className="flex items-center gap-2 text-fg-muted">animation<select value={sel.anim ?? ""} onChange={(e) => update(sel.id, { anim: e.target.value })} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">{ANIMS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}</select></label>
                   <button onClick={() => resetTransform(sel.id)} className="text-[10px] text-fg-subtle hover:text-fg underline underline-offset-2">Reset position & scale</button>
                 </Section>
