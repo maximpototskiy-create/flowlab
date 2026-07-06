@@ -274,7 +274,7 @@ type EditClip = {
   fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
   // Alternatives for batch "versions": extra options beyond this clip's base
   // value. Each version swaps in one option's text (captions) or url (media).
-  variants?: { id: string; text?: string; url?: string }[];
+  variants?: { id: string; text?: string; url?: string; dur?: number }[];
   fadeIn: number;
   fadeOut: number;
   anim?: string;
@@ -333,8 +333,42 @@ function applyCombo(base: EditClip[], slots: EditClip[], combo: number[]): EditC
     if (idx == null || idx === 0) return c;
     const v = c.variants?.[idx - 1];
     if (!v) return c;
-    return { ...c, ...(v.text != null ? { text: v.text } : {}), ...(v.url != null ? { url: v.url } : {}) };
+    // A sectioned video slot adopts the variant's own duration (when known),
+    // so the whole hook/body/packshot chain re-times itself per version.
+    const adaptDur = v.url != null && v.dur != null && v.dur > 0.05 && c.section && c.kind === "video";
+    return {
+      ...c,
+      ...(v.text != null ? { text: v.text } : {}),
+      ...(v.url != null ? { url: v.url } : {}),
+      ...(adaptDur ? { duration: +v.dur!.toFixed(2), inset: 0 } : {}),
+    };
   });
+}
+
+// Keep hook/body/packshot chained back-to-back. Pure: returns the SAME array
+// when nothing needs to move (so effects can call it without loops).
+const SECTION_ORDER = ["Hook", "Body", "Packshot", "CTA"];
+function chainSections(list: EditClip[]): EditClip[] {
+  const sec = list.filter((c) => c.section);
+  if (!sec.length) return list;
+  const names = Array.from(new Set(sec.map((c) => c.section as string)))
+    .sort((a, b) => (SECTION_ORDER.indexOf(a) === -1 ? 99 : SECTION_ORDER.indexOf(a)) - (SECTION_ORDER.indexOf(b) === -1 ? 99 : SECTION_ORDER.indexOf(b)));
+  let cursor = 0;
+  const startBy = new Map<string, number>();
+  for (const name of names) {
+    startBy.set(name, cursor);
+    const span = Math.max(...sec.filter((c) => c.section === name && (c.kind === "video" || c.kind === "image")).map((c) => c.duration), 1);
+    cursor = +(cursor + span).toFixed(3);
+  }
+  let changed = false;
+  const out = list.map((c) => {
+    if (!c.section || !startBy.has(c.section)) return c;
+    const st = startBy.get(c.section)!;
+    if (Math.abs(c.start - st) < 0.002) return c;
+    changed = true;
+    return { ...c, start: st };
+  });
+  return changed ? out : list;
 }
 const MIN_DUR = 0.3;
 const ANIMS = [
@@ -399,7 +433,7 @@ function LazyVideo({ src, className }: { src: string; className?: string }) {
   return <video ref={ref} src={show ? src : undefined} muted playsInline preload="metadata" className={className} />;
 }
 
-export default function VideoEditor({ assets, workflowId, projectId, projectName }: { assets: EditorAsset[]; workflowId?: string; projectId?: string; projectName?: string }) {
+export default function VideoEditor({ assets, workflowId, projectId, projectName, brandId }: { assets: EditorAsset[]; workflowId?: string; projectId?: string; projectName?: string; brandId?: string }) {
   const [layers, setLayers] = useState<Layer[]>([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]);
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
@@ -418,7 +452,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [binFilter, setBinFilter] = useState<"all" | "video" | "image" | "audio">("all");
   const [library, setLibrary] = useState<EditorAsset[]>(assets.filter((a) => !/\.(json|txt|srt|vtt|csv)(\?|$)/i.test(a.url)));
   const [binQuery, setBinQuery] = useState("");
-  const [binBrand, setBinBrand] = useState("");
+  const [binBrand, setBinBrand] = useState(brandId ?? ""); // default: the project's brand (dropdown switches to All)
   const [binProject, setBinProject] = useState(projectId ?? "");
   const [binSource, setBinSource] = useState("");
   const [binCategory, setBinCategory] = useState("all");
@@ -568,7 +602,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const verCombos = useMemo(() => enumerateCombos(verSlots), [verSlots]);
   useEffect(() => { if (previewVer >= verCombos.length) setPreviewVer(0); }, [verCombos.length, previewVer]);
   const viewClips = useMemo(
-    () => (previewVer > 0 && verCombos[previewVer] ? applyCombo(clips, verSlots, verCombos[previewVer]) : clips),
+    () => (previewVer > 0 && verCombos[previewVer] ? chainSections(applyCombo(clips, verSlots, verCombos[previewVer])) : clips),
     [clips, previewVer, verSlots, verCombos],
   );
   const viewClipsRef = useRef<EditClip[]>([]);
@@ -1105,25 +1139,15 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   // place the sections back-to-back (section start = end of the previous one)
   // as soon as every sectioned media clip knows its real duration. Runs once
   // per import; manual edits afterwards are never overwritten.
-  const sectionLayoutRef = useRef(false);
+  const sectionLayoutRef = useRef(false); // legacy import flag - chaining is continuous now
   useEffect(() => {
-    if (!sectionLayoutRef.current) return;
-    const sec = clips.filter((c) => c.section);
-    if (!sec.length) { sectionLayoutRef.current = false; return; }
-    if (sec.some((c) => c.autoDur)) return; // durations still loading
+    // ADAPTIVE section chain: whenever any sectioned clip's duration changes
+    // (metadata arrived, trim, or a version variant with its own length), the
+    // whole hook -> body -> packshot sequence re-times itself. Dragging a
+    // sectioned clip by hand detaches it from the chain (see onClipPointerUp).
     sectionLayoutRef.current = false;
-    const ORDER = ["Hook", "Body", "Packshot", "CTA"];
-    const names = Array.from(new Set(sec.map((c) => c.section as string)))
-      .sort((a, b) => (ORDER.indexOf(a) === -1 ? 99 : ORDER.indexOf(a)) - (ORDER.indexOf(b) === -1 ? 99 : ORDER.indexOf(b)));
-    let cursor = 0;
-    const startBy = new Map<string, number>();
-    for (const name of names) {
-      startBy.set(name, cursor);
-      // a section lasts as long as its longest visual (video/image); audio/text ride along
-      const span = Math.max(...sec.filter((c) => c.section === name && (c.kind === "video" || c.kind === "image")).map((c) => c.duration), 1);
-      cursor = +(cursor + span).toFixed(2);
-    }
-    setClips((prev) => prev.map((c) => (c.section && startBy.has(c.section) ? { ...c, start: startBy.get(c.section) as number } : c)));
+    if (dragRef.current) return; // never fight an active drag
+    setClips((prev) => { const next = chainSections(prev); return next === prev ? prev : next; });
   }, [clips]);
 
   // auto-prune empty layers (keep ≥1 video + ≥1 audio baseline) — never while dragging.
@@ -1369,7 +1393,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const total = indices.length * fmts.length;
       let done = 0;
       for (const vi of indices) {
-        const verClips = applyCombo(clipsRef.current, slots, combos[vi]);
+        const verClips = chainSections(applyCombo(clipsRef.current, slots, combos[vi]));
         const vis = layersRef.current.filter((l) => l.type !== "audio");
         const hiddenIds = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
         const z: EditClip[] = [];
@@ -1381,6 +1405,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             clips: ordered.map(toExportClip),
             width: r.w, height: r.h, previewWidth: previewSize.w || r.w,
             onProgress: (p) => setProgress(Math.round(p * 100)),
+            onStage: (msg) => setStatus(`v${vi + 1} ${r.key}: ${msg}`),
           });
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, `v${vi + 1}`, r.key);
@@ -1414,7 +1439,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const vid = `vr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     return { ...c, variants: [...(c.variants || []), { id: vid, url }] };
   })), []);
-  const setOption = useCallback((id: string, vId: string, patch: { text?: string; url?: string }) =>
+  const setOption = useCallback((id: string, vId: string, patch: { text?: string; url?: string; dur?: number }) =>
     setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).map((v) => (v.id === vId ? { ...v, ...patch } : v)) } : c))), []);
   const removeOption = useCallback((id: string, vId: string) =>
     setClips((cs) => cs.map((c) => (c.id === id ? { ...c, variants: (c.variants || []).filter((v) => v.id !== vId) } : c))), []);
@@ -1497,6 +1522,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
         width: res.w, height: res.h, previewWidth: previewSize.w,
         onProgress: (p) => setProgress(Math.round(p * 100)),
+        onStage: (m) => setStatus(m),
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a"); a.href = url; a.download = buildFileName(ext, previewVer > 0 ? `v${previewVer + 1}` : undefined);
@@ -1611,6 +1637,18 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const onClipPointerUp = () => {
     const d = dragRef.current; dragRef.current = null;
     const hint = dropHintRef.current; setDropHint(null);
+    // Manually MOVING a sectioned clip detaches it from the auto-chained
+    // hook/body/packshot sequence (otherwise the chain would snap it back).
+    if (d && d.mode === "move") {
+      const moved = d.moveIds.filter((id) => {
+        const c = clipsRef.current.find((x) => x.id === id);
+        return c?.section && Math.abs(c.start - (d.origStarts.get(id) ?? c.start)) > 0.05;
+      });
+      if (moved.length) {
+        setClips((p) => p.map((c) => (moved.includes(c.id) ? { ...c, section: undefined } : c)));
+        setStatus("Detached from the section chain - the clip now moves freely.");
+      }
+    }
     if (!d || d.mode !== "move" || !hint || d.moveIds.length > 1) return;
     const clip = clipsRef.current.find((c) => c.id === d.id); if (!clip) return;
     if (hint.type === "lane") { if (hint.id !== clip.layer) update(d.id, { layer: hint.id }); }
@@ -1661,7 +1699,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [snap, setSnap] = useState<{ v: boolean; h: boolean }>({ v: false, h: false });
   const viewZoomRef = useRef(1); viewZoomRef.current = viewZoom;
   const fitView = () => { setViewZoom(1); setViewPan({ x: 0, y: 0 }); };
-  const onViewWheel = (e: React.WheelEvent) => {
+  // Viewport zoom wheel. Attached as a NATIVE non-passive listener (React's
+  // synthetic onWheel is passive in Chromium, so preventDefault() there floods
+  // the console with "Unable to preventDefault" errors and the page scrolls).
+  const viewWheelRef = useRef<(e: WheelEvent) => void>(() => {});
+  viewWheelRef.current = (e: WheelEvent) => {
     if (!clips.length) return; e.preventDefault();
     const el = containerRef.current; if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -1674,6 +1716,24 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     setViewPan((p) => ({ x: cx - (cx - p.x) * ratio, y: cy - (cy - p.y) * ratio }));
     setViewZoom(nz);
   };
+  useEffect(() => {
+    const el = containerRef.current; if (!el) return;
+    const h = (e: WheelEvent) => viewWheelRef.current(e);
+    el.addEventListener("wheel", h, { passive: false });
+    return () => el.removeEventListener("wheel", h);
+  }, []);
+  // Timeline wheel: Cmd/Ctrl = horizontal zoom, Alt = lane height. Native
+  // non-passive listener for the same passive-preventDefault reason.
+  const timelineWheelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = timelineWheelRef.current; if (!el) return;
+    const h = (e: WheelEvent) => {
+      if (e.metaKey || e.ctrlKey) { e.preventDefault(); setPxPerSec((z) => Math.min(400, Math.max(2, Math.round(z * (e.deltaY < 0 ? 1.12 : 0.89))))); }
+      else if (e.altKey) { e.preventDefault(); setLaneH((hh) => Math.min(96, Math.max(28, hh + (e.deltaY < 0 ? 4 : -4)))); }
+    };
+    el.addEventListener("wheel", h, { passive: false });
+    return () => el.removeEventListener("wheel", h);
+  }, []);
   const onPanDown = (e: React.PointerEvent) => {
     if (e.button !== 0 && e.button !== 1) return;
     if (e.button === 0) setSelectedIds([]);
@@ -2240,6 +2300,22 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     <div className="mb-2 rounded-md bg-bg-subtle/60 border border-border px-2 py-1.5 text-[10px] text-fg-subtle leading-relaxed">
                       Render several variants of this video in one go. Mark a clip on the timeline as a <span className="text-fg-muted">version slot</span> and give it options (e.g. 3 different hook images, or 2 alternate texts). FlowLab renders <span className="text-fg-muted">every combination</span> of all slots, in every checked format, as separate files (v1, v2, …).
                     </div>
+                    {slots.length === 0 && (() => {
+                      const secClips = clips.filter((cl) => cl.section && (cl.kind === "video" || cl.kind === "image"));
+                      const secNames = Array.from(new Set(secClips.map((cl) => cl.section as string)));
+                      if (!secNames.length) return null;
+                      const makeSlot = (names: string[]) => setClips((p) => p.map((cl) => (cl.section && names.includes(cl.section) && (cl.kind === "video" || cl.kind === "image") && cl.variants === undefined ? { ...cl, variants: [] } : cl)));
+                      return (
+                        <div className="mb-3 rounded-md border border-brand/40 bg-brand/5 px-2 py-2">
+                          <div className="text-fg mb-1.5">Your timeline has sections {"\u2014"} version them in one click:</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {secNames.map((n) => <button key={n} onClick={() => makeSlot([n])} className="px-2 py-1 rounded border border-brand/50 text-brand hover:bg-brand/10">+ {n} versions</button>)}
+                            {secNames.length > 1 && <button onClick={() => makeSlot(secNames)} className="px-2 py-1 rounded border border-border text-fg-muted hover:border-brand hover:text-brand">+ all sections</button>}
+                          </div>
+                          <div className="mt-1 text-[10px] text-fg-subtle">Each section becomes a slot; add alternative assets to it below. Swapping a variant re-times the whole chain automatically.</div>
+                        </div>
+                      );
+                    })()}
                     {slots.length === 0 ? (
                       <div className="text-fg-subtle leading-relaxed">
                         <div className="text-fg-muted mb-1">No version slots yet. To make versions:</div>
@@ -2251,7 +2327,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     ) : (
                       <div className="space-y-2.5">
                         {slots.map((c) => {
-                          const mediaAssets = Array.from(new Map([...assets, ...brandLib].filter((a) => a.kind === c.kind).map((a) => [a.url, a])).values());
+                          const matchCat = (c.section || "").toLowerCase();
+                          const mediaAssets = Array.from(new Map([...assets, ...brandLib].filter((a) => a.kind === c.kind).map((a) => [a.url, a])).values())
+                            .sort((a, b) => Number(((b.category || "").toLowerCase() === matchCat && !!matchCat)) - Number(((a.category || "").toLowerCase() === matchCat && !!matchCat)));
                           return (
                             <div key={c.id} className="rounded-md border border-border p-2">
                               <div className="flex items-center justify-between mb-1.5">
@@ -2264,19 +2342,19 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                               {(() => {
                                 const si = verSlots.findIndex((s) => s.id === c.id);
                                 const activeIdx = verCombos[previewVer]?.[si] ?? 0;
-                                const thumb = (url?: string) => !url
+                                const thumb = (url?: string, onDur?: (d: number) => void) => !url
                                   ? <div className="w-9 h-9 rounded bg-bg-subtle grid place-items-center text-fg-subtle shrink-0">?</div>
                                   : c.kind === "image"
                                     // eslint-disable-next-line @next/next/no-img-element
                                     ? <img src={url} alt="" className="w-9 h-9 rounded object-cover shrink-0" />
                                     : c.kind === "video"
-                                      ? <video src={url} muted playsInline preload="metadata" className="w-9 h-9 rounded object-cover shrink-0" />
+                                      ? <video src={url} muted playsInline preload="metadata" onLoadedMetadata={onDur ? (e) => onDur(e.currentTarget.duration) : undefined} className="w-9 h-9 rounded object-cover shrink-0" />
                                       : <div className="w-9 h-9 rounded bg-bg-subtle grid place-items-center text-fg-subtle shrink-0"><Music size={13} /></div>;
-                                const row = (idx: number, inner: React.ReactNode, url?: string, removeId?: string) => (
+                                const row = (idx: number, inner: React.ReactNode, url?: string, removeId?: string, onDur?: (d: number) => void) => (
                                   <div key={removeId ?? "base"} onClick={() => setPreviewVer(comboIndexFor(c.id, idx))}
                                     title="Click to see this option in the preview"
                                     className={`flex items-center gap-2 mb-1 px-1.5 py-1 rounded cursor-pointer border ${activeIdx === idx ? "bg-brand/10 border-brand/40" : "border-transparent hover:bg-bg-subtle"}`}>
-                                    {c.kind !== "text" && thumb(url)}
+                                    {c.kind !== "text" && thumb(url, onDur)}
                                     {inner}
                                     {idx === 0
                                       ? <span className="text-[9px] uppercase tracking-wider text-fg-subtle shrink-0">base</span>
@@ -2290,8 +2368,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                                       i + 1,
                                       c.kind === "text"
                                         ? <input value={v.text ?? ""} onClick={(e) => e.stopPropagation()} onChange={(e) => setOption(c.id, v.id, { text: e.target.value })} placeholder="alternative text" className="flex-1 bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" />
-                                        : <span className="flex-1 truncate text-fg-muted">{urlLabel(v.url)}</span>,
+                                        : <span className="flex-1 truncate text-fg-muted">{urlLabel(v.url)}{v.dur ? <span className="text-fg-subtle"> · {v.dur.toFixed(1)}s</span> : null}</span>,
                                       v.url, v.id,
+                                      c.kind === "video" && !v.dur ? (d: number) => setOption(c.id, v.id, { dur: +d.toFixed(2) }) : undefined,
                                     ))}
                                   </>
                                 );
@@ -2390,7 +2469,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
         {/* Preview */}
         <div ref={containerRef} className="flex-1 min-h-0 bg-black flex items-center justify-center overflow-hidden relative"
-          onWheel={onViewWheel} onPointerDown={onPanDown}>
+          onPointerDown={onPanDown}>
           {(() => {
             const hooks = brandLib.filter((a) => a.category === "hook" && (a.kind === "video" || a.kind === "image"));
             const hookUrls = new Set(hooks.map((h) => h.url));
@@ -2460,7 +2539,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                               className="absolute inset-0 w-full h-full object-cover pointer-events-none" style={{ filter: "blur(22px)", transform: "scale(1.08)" }} />
                           )}
                           {c.kind === "video" && !c.keyColor && (
-                            <video src={near ? c.url : undefined} playsInline preload={active ? "auto" : "metadata"} onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
+                            <video src={near || c.autoDur ? c.url : undefined} playsInline preload={active ? "auto" : "metadata"} onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
                               className={`absolute inset-0 w-full h-full ${objFit} pointer-events-none`} />
                           )}
                           {c.kind === "video" && c.keyColor && (
@@ -2539,12 +2618,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         </div>
 
         {/* Timeline */}
-        <div className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
-          onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}
-          onWheel={(e) => {
-            if (e.metaKey || e.ctrlKey) { e.preventDefault(); setPxPerSec((z) => Math.min(400, Math.max(2, Math.round(z * (e.deltaY < 0 ? 1.12 : 0.89))))); }
-            else if (e.altKey) { e.preventDefault(); setLaneH((h) => Math.min(96, Math.max(28, h + (e.deltaY < 0 ? 4 : -4)))); }
-          }}>
+        <div ref={timelineWheelRef} className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
+          onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
               <div className="w-28 shrink-0 border-r border-border/40 sticky left-0 z-20 bg-bg-card" />

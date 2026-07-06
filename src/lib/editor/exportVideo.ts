@@ -67,6 +67,8 @@ type Params = {
   height: number;
   previewWidth: number; // px the x/y offsets were authored in
   onProgress?: (p: number) => void;
+  /** Coarse stage reporting (e.g. source prefetch progress). */
+  onStage?: (msg: string) => void;
 };
 
 // Cache-bust so the crossOrigin fetch isn't served from a previously cached
@@ -331,6 +333,24 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
   return { x: cx - maxLineW / 2 - padX, y: top, w: maxLineW + padX * 2, h: (cy + descent + padY) - top };
 }
 
+// Cross-export source cache: a versions batch renders the same timeline many
+// times - downloading every source once per version was the main time sink.
+// Bounded by total byte size, least-recently-used entries are evicted.
+const exportBlobCache = new Map<string, { blob: Blob; objUrl: string; at: number }>();
+const EXPORT_CACHE_BUDGET = 1_500_000_000; // ~1.5 GB
+function trimExportCache(): void {
+  let total = 0;
+  for (const e of exportBlobCache.values()) total += e.blob.size;
+  if (total <= EXPORT_CACHE_BUDGET) return;
+  const entries = Array.from(exportBlobCache.entries()).sort((a, b) => a[1].at - b[1].at);
+  for (const [url, e] of entries) {
+    if (total <= EXPORT_CACHE_BUDGET) break;
+    try { URL.revokeObjectURL(e.objUrl); } catch { /* */ }
+    exportBlobCache.delete(url);
+    total -= e.blob.size;
+  }
+}
+
 export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: string; mp4: boolean }> {
   const { clips, width: W, height: H, previewWidth } = p;
   const total = Math.max(0.1, ...clips.map((c) => c.start + c.duration));
@@ -339,22 +359,33 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
   // Prefetch every media source fully into a local Blob first. Rendering
   // seeks videos frame by frame - against a network-backed <video> every seek
   // stalls on HTTP range requests (minutes per version + crashes); against a
-  // local blob: URL seeks are near-instant.
-  const blobCache = new Map<string, { blob: Blob; objUrl: string }>();
+  // local blob: URL seeks are near-instant. The cache is GLOBAL and survives
+  // between exports, so a versions batch downloads each source exactly once
+  // (only the swapped variant of the next version still needs fetching).
+  const blobCache = exportBlobCache;
   const prefetch = async (url: string): Promise<string> => {
     const hit = blobCache.get(url);
-    if (hit) return hit.objUrl;
+    if (hit) { hit.at = Date.now(); return hit.objUrl; }
     try {
       const r = await fetch(corsUrl(url));
       if (!r.ok) throw new Error(String(r.status));
       const blob = await r.blob();
       const objUrl = URL.createObjectURL(blob);
-      blobCache.set(url, { blob, objUrl });
+      blobCache.set(url, { blob, objUrl, at: Date.now() });
+      trimExportCache();
       return objUrl;
     } catch { return corsUrl(url); } // stream from network as a last resort
   };
   const urls = Array.from(new Set(clips.filter((c) => c.url).map((c) => c.url!)));
-  await Promise.all(urls.map((u) => prefetch(u)));
+  const toFetch = urls.filter((u) => !blobCache.has(u));
+  let fetched = 0;
+  p.onStage?.(toFetch.length ? `Preparing sources 0/${toFetch.length}\u2026` : "Rendering\u2026");
+  await Promise.all(urls.map(async (u) => {
+    const wasNew = !blobCache.has(u);
+    await prefetch(u);
+    if (wasNew) { fetched++; p.onStage?.(`Preparing sources ${fetched}/${toFetch.length}\u2026`); }
+  }));
+  p.onStage?.("Rendering\u2026");
 
   // preload media (from the local blobs)
   const videos = new Map<string, HTMLVideoElement>();
@@ -450,8 +481,8 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
   const cleanupMedia = () => {
     for (const v of videos.values()) { try { v.pause(); v.removeAttribute("src"); v.load(); } catch { /* */ } }
     for (const a of audios.values()) { try { a.pause(); a.removeAttribute("src"); a.load(); } catch { /* */ } }
-    for (const e of blobCache.values()) { try { URL.revokeObjectURL(e.objUrl); } catch { /* */ } }
-    blobCache.clear();
+    // NOTE: blobs stay in the global cache so the next version/export reuses
+    // them; trimExportCache() keeps total memory bounded.
   };
 
   // ---- Path 1: OFFLINE frame-by-frame render via WebCodecs ------------------
