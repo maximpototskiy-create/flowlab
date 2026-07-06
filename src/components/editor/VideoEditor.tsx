@@ -552,6 +552,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 });
   const capCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const statusSeqRef = useRef(0);
+  // Transient notice: shows a status line and clears it after a few seconds
+  // (unless something else overwrote it in the meantime).
+  const flashStatus = useCallback((msg: string, ms = 4000) => {
+    const seq = ++statusSeqRef.current;
+    setStatus(msg);
+    setTimeout(() => { if (statusSeqRef.current === seq) setStatus(""); }, ms);
+  }, []);
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [namingOpen, setNamingOpen] = useState(false);
@@ -571,6 +579,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [hookBannerDismissed, setHookBannerDismissed] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [dropHint, setDropHint] = useState<{ type: "lane" | "strip"; id: string } | null>(null);
+  const [cutMode, setCutMode] = useState(false); // scissors tool: click a clip to split it at the cursor
+  const cutModeRef = useRef(false);
+  cutModeRef.current = cutMode;
+  const [binDragging, setBinDragging] = useState(false); // an asset is being dragged from the bin
   const [railTab, setRailTab] = useState<"media" | "brand" | "audio" | "text" | "subs" | "effects" | "filters">("media");
   const [brandLib, setBrandLib] = useState<EditorAsset[]>([]);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -940,7 +952,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       );
     }
     setResKey(next);
-  }, [resKey]);
+    flashStatus("Format changed. Clips FILL the frame by default (crop); right-click a clip \u2192 Fit or Blur bg to show it whole.", 6000);
+  }, [resKey, flashStatus]);
   const newProject = () => {
     if (!window.confirm("Start a new project? The current timeline will be cleared (last autosave is overwritten).")) return;
     setClips([]); setSelectedIds([]); setLayers([{ id: "v1", type: "video" }, { id: "a1", type: "audio" }]); setLayouts({}); legacyPosRef.current = false; posMigratedRef.current = true; seek(0);
@@ -1187,6 +1200,23 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       return out;
     });
   }, []);
+  // Cut-tool: split ONE clip at an absolute time (same rules as the razor).
+  const splitOneAt = useCallback((id: string, t: number) => {
+    setClips((prev) => {
+      const c = prev.find((x) => x.id === id);
+      if (!c || t <= c.start + 0.05 || t >= c.start + c.duration - 0.05) return prev;
+      const cut = +(t - c.start).toFixed(3);
+      const first: EditClip = { ...c, duration: cut, fadeOut: 0 };
+      const second: EditClip = { ...c, id: uid(), start: +t.toFixed(3), duration: +(c.duration - cut).toFixed(3), inset: +((c.inset || 0) + cut).toFixed(3), fadeIn: 0 };
+      if (c.kind === "text" && c.words?.length) {
+        const fw = c.words.filter((w) => w.t < cut);
+        const sw = c.words.filter((w) => w.t >= cut).map((w) => ({ ...w, t: +(w.t - cut).toFixed(3) }));
+        first.words = fw; first.text = fw.map((w) => w.text).join(" ") || c.text;
+        second.words = sw; second.text = sw.map((w) => w.text).join(" ") || c.text;
+      }
+      return prev.flatMap((x) => (x.id === id ? [first, second] : [x]));
+    });
+  }, []);
   // duplicate selected clips onto a NEW layer (same type), keeping their time position
   const duplicateSelected = useCallback(() => {
     const sel = selectedRef.current; if (!sel.length) return;
@@ -1428,6 +1458,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       else if ((e.metaKey || e.ctrlKey) && e.code === "KeyD") { e.preventDefault(); duplicateSelected(); }
       else if ((e.metaKey || e.ctrlKey) && e.code === "KeyB") { e.preventDefault(); splitAtPlayhead(); }
       else if (!e.metaKey && !e.ctrlKey && e.code === "KeyS") { e.preventDefault(); splitAtPlayhead(); }
+      else if (e.code === "Escape" && cutModeRef.current) { setCutMode(false); }
       else if (e.key === "Delete" || e.key === "Backspace") { if (selectedRef.current.length) { e.preventDefault(); removeMany(selectedRef.current); } }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
@@ -1543,7 +1574,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       setActiveVer(synced.length);
     }
     clearHist();
-    setStatus("New version created \u2014 you are editing it now; v1 and the others stay as they were.");
+    flashStatus("New version created \u2014 you are editing it now.");
   }, [mkSnap, syncedVersions, clearHist]);
   const duplicateVersion = useCallback((i: number) => {
     const synced = syncedVersions();
@@ -1694,6 +1725,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   };
   const isLocked = (c: EditClip) => !!layersRef.current.find((l) => l.id === c.layer)?.locked;
   const onClipPointerDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "trim" | "trimL") => {
+    if (cutModeRef.current && mode === "move" && e.button === 0) {
+      // scissors tool: split where the cursor points instead of dragging
+      e.stopPropagation();
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / Math.max(1, r.width)));
+      splitOneAt(c.id, c.start + frac * c.duration);
+      return;
+    }
     e.stopPropagation();
     if (isLocked(c)) return; (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
@@ -1771,7 +1810,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       });
       if (moved.length) {
         setClips((p) => p.map((c) => (moved.includes(c.id) ? { ...c, section: undefined } : c)));
-        setStatus("Detached from the section chain - the clip now moves freely.");
+        flashStatus("Detached from the section chain - the clip now moves freely.");
       }
     }
     if (!d || d.mode !== "move" || !hint || d.moveIds.length > 1) return;
@@ -1940,6 +1979,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const onBinDragStart = (e: React.DragEvent, a: EditorAsset) => {
     e.dataTransfer.setData("application/x-flowlab-asset", JSON.stringify({ kind: a.kind, url: a.url, label: a.label, duration: a.duration }));
     e.dataTransfer.effectAllowed = "copy";
+    setBinDragging(true);
+    const clear = () => { setBinDragging(false); window.removeEventListener("dragend", clear); window.removeEventListener("drop", clear); };
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear);
   };
   const onLaneDrop = (e: React.DragEvent, layer: Layer) => {
     e.preventDefault(); setDropHint(null);
@@ -2640,7 +2683,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           <button onClick={undo} title="Undo (Cmd/Ctrl+Z)" className="hover:text-fg text-[13px] leading-none">↺</button>
           <button onClick={redo} title="Redo (Shift+Cmd/Ctrl+Z)" className="hover:text-fg text-[13px] leading-none">↻</button>
           <span className="w-px h-4 bg-border" />
-          <button onClick={splitAtPlayhead} title="Split at playhead (S)" className="hover:text-fg"><Scissors size={13} /></button>
+          <button onClick={() => setCutMode((m) => !m)} title={cutMode ? "Cut tool ON - click a clip where you want to split it (Esc to exit); S still splits at the playhead" : "Cut tool: click, then click a clip where you want to split it. S = split at playhead"} className={`rounded px-1 -mx-1 ${cutMode ? "text-brand bg-brand/15 ring-1 ring-brand/50" : "hover:text-fg"}`}><Scissors size={13} /></button>
           <button onClick={duplicateSelected} disabled={!selectedIds.length} title="Duplicate (Cmd/Ctrl+D)" className="hover:text-fg disabled:opacity-30"><Copy size={13} /></button>
           <button onClick={() => removeMany(selectedIds)} disabled={!selectedIds.length} title="Delete selected" className="hover:text-red-400 disabled:opacity-30"><Trash2 size={13} /></button>
           <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
@@ -2676,7 +2719,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             <span className="ml-2 text-fg-subtle truncate">editing v{activeVer + 1} {"\u2014"} every change stays in this version</span>
           </div>
         )}
-        <div ref={timelineWheelRef} className="shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none" style={{ height: timelineH }}
+        <div ref={timelineWheelRef} className={`shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none ${cutMode ? "cursor-crosshair" : ""}`} style={{ height: timelineH }}
           onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
@@ -2722,7 +2765,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li}` }); }}
                     onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li}` ? null : h))}
                     onDrop={(e) => onStripDrop(e, li)}
-                    className={`flex-1 rounded transition-all ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "h-2.5 bg-brand/50 ring-1 ring-brand" : "h-0.5 bg-border/30"}`} />
+                    className={`flex-1 rounded transition-all grid place-items-center overflow-hidden ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "h-5 bg-brand/25 ring-1 ring-brand" : binDragging ? "h-3 bg-brand/10 ring-1 ring-dashed ring-brand/40" : "h-0.5 bg-border/30"}`}>
+                    {(binDragging || (dropHint?.type === "strip" && dropHint.id === `strip-${li}`)) && (
+                      <span className={`pointer-events-none inline-flex items-center gap-1 text-[9px] leading-none ${dropHint?.type === "strip" && dropHint.id === `strip-${li}` ? "text-brand font-medium" : "text-brand/70"}`}><Plus size={9} /> New layer</span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-stretch border-b border-border/40 min-h-[48px]">
                   <div data-label onClick={() => setSelectedLayer(layer.id)} onDoubleClick={() => setRenamingLayer(layer.id)}
@@ -2825,7 +2872,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                       onDragOver={(e) => { e.preventDefault(); setDropHint({ type: "strip", id: `strip-${li + 1}` }); }}
                       onDragLeave={() => setDropHint((h) => (h?.type === "strip" && h.id === `strip-${li + 1}` ? null : h))}
                       onDrop={(e) => onStripDrop(e, li + 1)}
-                      className={`flex-1 rounded transition-all ${dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}` ? "h-2.5 bg-brand/50 ring-1 ring-brand" : "h-0.5 bg-border/30"}`} />
+                      className={`flex-1 rounded transition-all grid place-items-center overflow-hidden ${dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}` ? "h-5 bg-brand/25 ring-1 ring-brand" : binDragging ? "h-3 bg-brand/10 ring-1 ring-dashed ring-brand/40" : "h-0.5 bg-border/30"}`}>
+                    {(binDragging || (dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}`)) && (
+                      <span className={`pointer-events-none inline-flex items-center gap-1 text-[9px] leading-none ${dropHint?.type === "strip" && dropHint.id === `strip-${li + 1}` ? "text-brand font-medium" : "text-brand/70"}`}><Plus size={9} /> New layer</span>
+                    )}
+                  </div>
                   </div>
                 )}
               </div>
