@@ -780,6 +780,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           };
           const newLayers: Layer[] = [];
           const newClips: EditClip[] = [];
+          let sharedSectionVideoLayer: string | null = null;
+          let sharedSectionAudioLayer: string | null = null;
           tracks.forEach((t, i) => {
             if (t.kind === "captions") {
               // word-level transcript from the canvas Subtitles node
@@ -798,8 +800,20 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             }
             const kind = kindOf(t);
             const ltype = clipLayerType(kind);
-            const lid = `${ltype[0]}imp_${Date.now()}_${i}_${_l++}`; // one fresh layer per track — guaranteed unique
-            newLayers.push({ id: lid, type: ltype, ...(t.section ? { name: t.section } : {}) });
+            // Sectioned clips (hook/body/packshot) share ONE lane per media
+            // type: the chain keeps them back-to-back, and transitions only
+            // work between neighbours on the SAME layer.
+            let lid: string;
+            if (t.section && (kind === "video" || kind === "image")) {
+              if (!sharedSectionVideoLayer) { sharedSectionVideoLayer = `vimp_sec_${Date.now()}_${_l++}`; newLayers.push({ id: sharedSectionVideoLayer, type: "video", name: "Sections" }); }
+              lid = sharedSectionVideoLayer;
+            } else if (t.section && kind === "audio") {
+              if (!sharedSectionAudioLayer) { sharedSectionAudioLayer = `aimp_sec_${Date.now()}_${_l++}`; newLayers.push({ id: sharedSectionAudioLayer, type: "audio", name: "Sections audio" }); }
+              lid = sharedSectionAudioLayer;
+            } else {
+              lid = `${ltype[0]}imp_${Date.now()}_${i}_${_l++}`; // one fresh layer per track — guaranteed unique
+              newLayers.push({ id: lid, type: ltype, ...(t.section ? { name: t.section } : {}) });
+            }
             const sec = t.section ? { section: t.section } : {};
             if (kind === "text") {
               newClips.push({ id: uid(), kind, layer: lid, label: t.label || "Text", start: 0, duration: DEFAULTS.text, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, text: t.value, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 }, ...sec });
@@ -1462,7 +1476,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       if (k === 0) return;
       const v = s.variants?.[k - 1];
       if (!v) return;
-      parts.push(`${clipLabel(s)}: ${s.kind === "text" ? `"${(v.text || "").slice(0, 22)}"` : urlLabel(v.url)}`);
+      parts.push(`${s.section ?? clipLabel(s)}: ${s.kind === "text" ? `"${(v.text || "").slice(0, 22)}"` : urlLabel(v.url)}`);
     });
     return parts.length ? parts.join(" \u00b7 ") : "base (as assembled)";
   }, [verCombos, verSlots, clipLabel, urlLabel]);
@@ -1923,7 +1937,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   for (let i = visualLayers.length - 1; i >= 0; i--) { if (visualLayers[i].hidden) continue; zClips.push(...onLayerView(visualLayers[i].id)); }
 
   return (
-    <div className="flex-1 flex min-h-0">
+    <div className="flex-1 flex min-h-0" onContextMenu={(e) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("input,textarea,[contenteditable=true]")) return; // keep native paste menu in fields
+      if (t.closest("[data-clip]")) return; // clips open their own menu
+      e.preventDefault();
+    }}>
       {/* Left rail (CapCut-style) */}
       <nav className="w-12 shrink-0 border-r border-border flex flex-col items-center py-2 gap-1 text-fg-subtle">
         {([
@@ -2268,16 +2287,27 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand mb-1 font-mono text-[10px]" />
                   <div className="flex flex-wrap gap-1 mb-2">
                     {NAMING_TOKENS.map((tk) => (
-                      <button key={tk} onClick={() => setNaming((n) => ({ ...n, template: n.template + `{${tk}}` }))}
+                      <button key={tk} onClick={() => setNaming((n) => ({ ...n, template: n.template + (n.template && !/[_{.-]$/.test(n.template) ? "_" : "") + `{${tk}}` }))}
                         className="px-1.5 py-0.5 rounded border border-dashed border-border text-fg-subtle hover:text-fg hover:border-brand text-[10px] font-mono">{`{${tk}}`}</button>
                     ))}
                   </div>
                   <div className="grid grid-cols-3 gap-2 mb-2">
-                    <div><label className="block text-fg-subtle mb-0.5">Version</label><input value={naming.version} onChange={(e) => setNaming((n) => ({ ...n, version: e.target.value }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
-                    <div><label className="block text-fg-subtle mb-0.5">Lang</label><input value={naming.lang} onChange={(e) => setNaming((n) => ({ ...n, lang: e.target.value }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
-                    <div><label className="block text-fg-subtle mb-0.5">Initials</label><input value={naming.initials} onChange={(e) => setNaming((n) => ({ ...n, initials: e.target.value }))} placeholder="AA" className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
+                    <div><label className="block text-fg-subtle mb-0.5">Version</label><input value={naming.version} onChange={(e) => setNaming((n) => ({ ...n, version: e.target.value.replace(/[^A-Za-z0-9-]/g, "").slice(0, 8) }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
+                    <div><label className="block text-fg-subtle mb-0.5">Lang</label><input value={naming.lang} onChange={(e) => setNaming((n) => ({ ...n, lang: e.target.value.replace(/[^A-Za-z-]/g, "").slice(0, 5) }))} className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
+                    <div><label className="block text-fg-subtle mb-0.5">Initials</label><input value={naming.initials} onChange={(e) => setNaming((n) => ({ ...n, initials: e.target.value.replace(/[^A-Za-z0-9]/g, "").slice(0, 8) }))} placeholder="AA" className="w-full bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" /></div>
                   </div>
-                  <div className="text-fg-subtle mb-0.5">Preview</div>
+                  {/* Live per-token breakdown - makes any junk in a field obvious at a glance */}
+                  <div className="mb-2 rounded bg-bg-subtle/50 border border-border px-2 py-1.5 text-[10px] leading-relaxed">
+                    <span className="text-fg-subtle">Tokens now: </span>
+                    <span className="font-mono">{`{project}`}</span>=<span className="text-fg-muted">{(projectName || "creative").trim()}</span>{" · "}
+                    <span className="font-mono">{`{version}`}</span>=<span className="text-fg-muted">{naming.version || "v1"}</span>{" · "}
+                    <span className="font-mono">{`{lang}`}</span>=<span className="text-fg-muted">{naming.lang || "en"}</span>{" · "}
+                    <span className="font-mono">{`{initials}`}</span>=<span className="text-fg-muted">{naming.initials || "(empty)"}</span>
+                  </div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-fg-subtle">Preview</span>
+                    <button onClick={() => setNaming({ ...NAMING_DEFAULT })} title="Restore the default template and fields" className="text-[10px] text-fg-subtle hover:text-brand underline decoration-dotted">Reset to default</button>
+                  </div>
                   <div className="rounded bg-bg-subtle border border-border px-2 py-1.5 text-brand font-mono text-[10px] break-all">{buildFileName("mp4")}</div>
                   <div className="text-fg-subtle mt-2 text-[10px]">{projectName ? <>Base <span className="text-fg-muted">{`{project}`}</span> = {projectName}</> : "Open from a project so {project} fills in automatically."}</div>
                 </div>
@@ -2333,7 +2363,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           return (
                             <div key={c.id} className="rounded-md border border-border p-2">
                               <div className="flex items-center justify-between mb-1.5">
-                                <span className="text-fg truncate">{clipLabel(c)} <span className="text-fg-subtle">· base + {c.variants?.length ?? 0} alt</span></span>
+                                <span className="text-fg truncate">{c.section ?? clipLabel(c)} <span className="text-fg-subtle">· base + {c.variants?.length ?? 0} option{(c.variants?.length ?? 0) === 1 ? "" : "s"}</span></span>
                                 <div className="flex items-center gap-2 shrink-0">
                                   {(c.variants?.length ?? 0) > 0 && <button onClick={() => clearOptions(c.id)} title="Remove all options (keep this slot)" className="text-[10px] text-fg-subtle hover:text-fg">clear options</button>}
                                   <button onClick={() => clearSlot(c.id)} title="Remove this slot from versions" className="text-fg-subtle hover:text-red-400"><X size={12} /></button>
@@ -2971,7 +3001,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         const isMedia = c.kind === "video" || c.kind === "image" || c.kind === "text";
         const isVisualMedia = c.kind === "video" || c.kind === "image";
         return (
-          <div className="fixed z-50 w-52 glass r-md p-1.5 text-[11px]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.max(8, Math.min(menu.y, window.innerHeight - 500)) }} onClick={(e) => e.stopPropagation()}>
+          <div className="fixed z-50 w-52 glass menu-solid r-md p-1.5 text-[11px]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.max(8, Math.min(menu.y, window.innerHeight - 500)) }} onClick={(e) => e.stopPropagation()}>
             {isMedia && (
               <>
                 <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Animation</div>
@@ -3020,7 +3050,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       {transMenu && (() => {
         const b = clips.find((x) => x.id === transMenu.id);
         return (
-          <div className="fixed z-50 w-44 glass r-md p-1.5 text-[11px]" style={{ left: Math.min(transMenu.x, window.innerWidth - 190), top: Math.max(8, Math.min(transMenu.y, window.innerHeight - 320)) }} onClick={(e) => e.stopPropagation()}>
+          <div className="fixed z-50 w-44 glass menu-solid r-md p-1.5 text-[11px]" style={{ left: Math.min(transMenu.x, window.innerWidth - 190), top: Math.max(8, Math.min(transMenu.y, window.innerHeight - 320)) }} onClick={(e) => e.stopPropagation()}>
             <div className="px-1.5 py-1 text-fg-subtle uppercase tracking-wider text-[9px]">Transition</div>
             <div className="grid grid-cols-2 gap-1 px-1 pb-1">
               {TRANSITIONS.map((a) => (

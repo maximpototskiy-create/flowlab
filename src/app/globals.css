@@ -276,3 +276,11 @@ select.no-native-arrow {
   border: 1px solid rgb(var(--pc) / 0.32);
   border-radius: 7px;
 }
+
+/* Context menus need a near-opaque plate: translucent glass over a black
+   viewport turns unreadable, especially on the light theme. */
+.menu-solid {
+  background-color: rgb(var(--bg-card) / 0.97) !important;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}

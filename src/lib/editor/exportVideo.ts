@@ -564,11 +564,16 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
     // pick a supported H.264 encoder config (highest profile/level first)
     const codecs = ["avc1.640033", "avc1.640028", "avc1.4d0028", "avc1.42001f"];
     let codec = "";
-    for (const cdc of codecs) {
-      try {
-        const sup = await VideoEncoder.isConfigSupported({ codec: cdc, width: W, height: H, framerate: fps, bitrate: 10_000_000 });
-        if (sup.supported) { codec = cdc; break; }
-      } catch { /* */ }
+    let hwAccel: "prefer-hardware" | "no-preference" = "no-preference";
+    // Hardware encoding is several times faster than software - probe for it
+    // first, fall back gracefully.
+    outer: for (const accel of ["prefer-hardware", "no-preference"] as const) {
+      for (const cdc of codecs) {
+        try {
+          const sup = await VideoEncoder.isConfigSupported({ codec: cdc, width: W, height: H, framerate: fps, bitrate: 10_000_000, hardwareAcceleration: accel });
+          if (sup.supported) { codec = cdc; hwAccel = accel; break outer; }
+        } catch { /* */ }
+      }
     }
     if (!codec) throw new Error("no supported H.264 encoder config");
 
@@ -586,7 +591,7 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
       output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
       error: (e) => { encError = e as Error; },
     });
-    venc.configure({ codec, width: W, height: H, framerate: fps, bitrate: 10_000_000 });
+    venc.configure({ codec, width: W, height: H, framerate: fps, bitrate: 10_000_000, hardwareAcceleration: hwAccel });
 
     if (audioBuf) {
       let aErr: Error | null = null;
