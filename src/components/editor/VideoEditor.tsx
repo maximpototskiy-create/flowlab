@@ -8,7 +8,7 @@ import { drawCaption, kfState, type ExportClip } from "@/lib/editor/exportVideo"
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock, Folder, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, ArrowUp, Minus, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
 
@@ -803,7 +803,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const libCats = Array.from(new Set(brandLib.map((a) => a.category).filter((c): c is string => !!c)));
   const selTextCount = selectedIds.filter((id) => clips.find((c) => c.id === id)?.kind === "text").length;
   // ---- undo/redo (snapshots of clips+layers, debounced) ----
-  const histRef = useRef<{ clips: EditClip[]; layers: Layer[] }[]>([]);
+  // Undo history carries clips + layers + the whole version list, so deleting
+  // or generating versions (by hand or by the agent) is Ctrl+Z-able too.
+  const histRef = useRef<{ clips: EditClip[]; layers: Layer[]; versions: TLSnapshot[]; activeVer: number }[]>([]);
   const histPosRef = useRef(-1);
   const restoringRef = useRef(false);
   useEffect(() => {
@@ -811,23 +813,27 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const tmo = setTimeout(() => {
       const h = histRef.current.slice(0, histPosRef.current + 1);
       const last = h[h.length - 1];
-      if (last && last.clips === clips && last.layers === layers) return;
-      h.push({ clips, layers });
+      if (last && last.clips === clips && last.layers === layers && last.versions === tlVersions && last.activeVer === activeVer) return;
+      h.push({ clips, layers, versions: tlVersions, activeVer });
       if (h.length > 60) h.shift();
       histRef.current = h; histPosRef.current = h.length - 1;
     }, 250);
     return () => clearTimeout(tmo);
-  }, [clips, layers]);
+  }, [clips, layers, tlVersions, activeVer]);
+  const applyHist = useCallback((st: { clips: EditClip[]; layers: Layer[]; versions: TLSnapshot[]; activeVer: number }) => {
+    restoringRef.current = true;
+    setClips(st.clips); setLayers(st.layers); setTlVersions(st.versions); setActiveVer(st.activeVer); setSelectedIds([]);
+  }, []);
   const undo = useCallback(() => {
     if (histPosRef.current <= 0) return;
-    histPosRef.current -= 1; const s = histRef.current[histPosRef.current];
-    restoringRef.current = true; setClips(s.clips); setLayers(s.layers); setSelectedIds([]);
-  }, []);
+    histPosRef.current -= 1;
+    applyHist(histRef.current[histPosRef.current]);
+  }, [applyHist]);
   const redo = useCallback(() => {
     if (histPosRef.current >= histRef.current.length - 1) return;
-    histPosRef.current += 1; const s = histRef.current[histPosRef.current];
-    restoringRef.current = true; setClips(s.clips); setLayers(s.layers); setSelectedIds([]);
-  }, []);
+    histPosRef.current += 1;
+    applyHist(histRef.current[histPosRef.current]);
+  }, [applyHist]);
 
   // generated + uploaded assets (the "Media" tab)
   const loadGen = async (over: Partial<{ q: string; brand: string; project: string; source: string }> = {}) => {
@@ -1657,7 +1663,6 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     clips: clipsRef.current,
     layers: layersRef.current,
   }), []);
-  const clearHist = useCallback(() => { histRef.current = []; histPosRef.current = -1; }, []);
   const switchVersion = useCallback((i: number) => {
     const vs = tlVersionsRef.current;
     if (!vs.length || i === activeVerRef.current || i < 0 || i >= vs.length) return;
@@ -1668,8 +1673,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     setSelectedIds([]);
     setClips(target.clips);
     setLayers(target.layers);
-    clearHist(); // undo must never cross versions
-  }, [syncedVersions, clearHist]);
+  }, [syncedVersions]);
   // "+" - snapshot the current timeline as a NEW version and keep editing it.
   const addVersionFromCurrent = useCallback(() => {
     const vs = tlVersionsRef.current;
@@ -1682,9 +1686,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       setTlVersions([...synced, mkSnap()]);
       setActiveVer(synced.length);
     }
-    clearHist();
     flashStatus("New version created \u2014 you are editing it now.");
-  }, [mkSnap, syncedVersions, clearHist]);
+  }, [mkSnap, syncedVersions]);
   const duplicateVersion = useCallback((i: number) => {
     const synced = syncedVersions();
     const src = synced[i];
@@ -1705,9 +1708,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       setSelectedIds([]);
       setClips(t.clips);
       setLayers(t.layers);
-      clearHist();
     } else if (cur > i) setActiveVer(cur - 1);
-  }, [clearHist]);
+  }, []);
   // Generate one version per bin asset of a category, replacing the given
   // clip in a copy of the CURRENT timeline (chain re-times each copy).
   const generateVersions = useCallback((clipId: string, category: string) => {
@@ -2278,6 +2280,26 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   }, [ensureCanvasUrlsLoaded]);
   const [agentInput, setAgentInput] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
+  const [agentMin, setAgentMin] = useState(false); // collapsed to a pill
+  const [agentPos, setAgentPos] = useState<{ x: number; y: number } | null>(null); // null = docked bottom-right
+  const agentDragRef = useRef<{ dx: number; dy: number } | null>(null);
+  const onAgentDragDown = (e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest("button,select,textarea")) return;
+    const panel = (e.currentTarget as HTMLElement).parentElement!;
+    const r = panel.getBoundingClientRect();
+    agentDragRef.current = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    if (!agentPos) setAgentPos({ x: r.left, y: r.top });
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+  const onAgentDragMove = (e: React.PointerEvent) => {
+    const d = agentDragRef.current;
+    if (!d) return;
+    const w = 360, margin = 8;
+    const x = Math.min(Math.max(margin, e.clientX - d.dx), window.innerWidth - w - margin);
+    const y = Math.min(Math.max(margin, e.clientY - d.dy), window.innerHeight - 56);
+    setAgentPos({ x, y });
+  };
+  const onAgentDragUp = () => { agentDragRef.current = null; };
   const agentEndRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => { agentEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [agentMsgs, agentBusy]);
 
@@ -2358,9 +2380,17 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         if (!asset) return "error: asset not found (use list_assets / semantic_search first)";
         let layerId = str("layer_id");
         if (args.new_layer === true || (layerId && !layersRef.current.some((l) => l.id === layerId))) layerId = createLayerAt(0, clipLayerType(asset.kind));
+        // explicit start when omitted: append after the last clip of the
+        // TARGET layer (never stack two clips at the same time by accident)
+        let start = num("start");
+        if (start == null) {
+          const laneType = clipLayerType(asset.kind);
+          const lane = layerId ?? layersRef.current.find((l) => l.type === laneType)?.id;
+          start = lane ? Math.max(0, ...clipsRef.current.filter((c) => c.layer === lane).map((c) => c.start + c.duration), 0) : 0;
+        }
         const before = new Set(clipsRef.current.map((c) => c.id));
-        addAssetAt({ kind: asset.kind, url: asset.url, label: asset.label, duration: num("duration") ?? asset.duration }, layerId, num("start"));
-        await new Promise((r) => setTimeout(r, 30));
+        addAssetAt({ kind: asset.kind, url: asset.url, label: asset.label, duration: num("duration") ?? asset.duration ?? frameCache.get(asset.url)?.dur ?? null }, layerId, start);
+        await new Promise((r) => setTimeout(r, 60));
         const added = clipsRef.current.find((c) => !before.has(c.id));
         if (added && str("section")) update(added.id, { section: str("section") });
         return added ? `added clip ${added.id} (${asset.kind} "${(asset.label || "").slice(0, 24)}") at ${added.start.toFixed(2)}s for ${added.duration.toFixed(2)}s` : "added (id unknown)";
@@ -2422,6 +2452,19 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         return `set ${keys.length} keyframe(s) on ${c.id}`;
       }
       case "new_version": { addVersionFromCurrent(); return "created a new version (now active)"; }
+      case "delete_version": {
+        const i = num("index");
+        if (i == null || i < 0 || i >= tlVersionsRef.current.length) return "error: bad index";
+        deleteVersion(i);
+        return `deleted v${i + 1}`;
+      }
+      case "delete_all_versions": {
+        const n = tlVersionsRef.current.length;
+        if (!n) return "no versions to delete";
+        setTlVersions([]);
+        setActiveVer(0);
+        return `deleted all ${n} versions (current timeline kept; Ctrl+Z restores them)`;
+      }
       case "switch_version": {
         const i = num("index"); if (i == null) return "error: index required";
         switchVersion(i);
@@ -3778,17 +3821,27 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       {marquee && marquee.w > 1 && marquee.h > 1 && (
         <div className="fixed z-50 border border-brand bg-brand/15 pointer-events-none" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
       )}
-      {agentOpen && (
-        <div className="fixed bottom-4 right-4 z-[70] w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-bg-card shadow-2xl flex flex-col text-[12px]" style={{ maxHeight: "min(560px, 72vh)" }}>
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
+      {agentOpen && agentMin && (
+        <button onClick={() => setAgentMin(false)}
+          className="fixed bottom-4 right-4 z-[70] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand">
+          <Sparkles size={13} className="text-brand" /> Agent
+          {agentBusy && <span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" />}
+        </button>
+      )}
+      {agentOpen && !agentMin && (
+        <div className="fixed z-[70] w-[360px] max-w-[calc(100vw-2rem)] rounded-2xl border border-border bg-bg-card shadow-2xl flex flex-col text-[12px] overflow-hidden"
+          style={agentPos ? { left: agentPos.x, top: agentPos.y, maxHeight: "min(560px, 72vh)" } : { bottom: 16, right: 16, maxHeight: "min(560px, 72vh)" }}>
+          <div onPointerDown={onAgentDragDown} onPointerMove={onAgentDragMove} onPointerUp={onAgentDragUp}
+            className="flex items-center justify-between pl-3.5 pr-2 py-2.5 border-b border-border shrink-0 cursor-grab active:cursor-grabbing select-none touch-none" title="Drag to move">
             <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> Agent</span>
             <select value={agentModel} onChange={(e) => setAgentModel(e.target.value)} title="Model that plans the actions (GPT/Gemini use your direct API keys)"
-              className="max-w-[150px] bg-bg-subtle border border-border rounded px-1.5 py-0.5 text-[10px] text-fg-muted outline-none focus:border-brand">
+              className="max-w-[140px] bg-bg-subtle border border-border rounded-md px-1.5 py-1 text-[10px] text-fg-muted outline-none focus:border-brand">
               {LLM_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label.replace(" (text only)", "")}</option>)}
             </select>
-            <div className="flex items-center gap-2">
-              {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="text-fg-subtle hover:text-fg text-[10px] underline decoration-dotted">clear</button>}
-              <button onClick={() => setAgentOpen(false)} className="text-fg-subtle hover:text-fg"><X size={14} /></button>
+            <div className="flex items-center gap-0.5">
+              {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-subtle text-[10px]">clr</button>}
+              <button onClick={() => setAgentMin(true)} title="Minimize" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-subtle"><Minus size={14} /></button>
+              <button onClick={() => setAgentOpen(false)} title="Close" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-subtle"><X size={14} /></button>
             </div>
           </div>
           <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 min-h-[120px]">
@@ -3815,12 +3868,18 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             {agentBusy && <div className="flex items-center gap-2 text-fg-subtle"><span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" /> working{"\u2026"}</div>}
             <div ref={agentEndRef} />
           </div>
-          <div className="p-2 border-t border-border shrink-0 flex items-end gap-1.5">
-            <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={2} placeholder={"Tell the agent what to do\u2026"}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if (v && !agentBusy) { setAgentInput(""); void runAgent(v); } } }}
-              className="flex-1 resize-none bg-bg-subtle border border-border rounded-lg px-2 py-1.5 text-fg outline-none focus:border-brand" />
-            <button disabled={agentBusy || !agentInput.trim()} onClick={() => { const v = agentInput.trim(); if (v) { setAgentInput(""); void runAgent(v); } }}
-              className="px-2.5 py-1.5 rounded-lg bg-brand text-black font-medium disabled:opacity-50">Go</button>
+          <div className="px-3 pb-3 pt-2 border-t border-border shrink-0">
+            <div className="flex items-end gap-2 rounded-2xl bg-bg-subtle border border-border focus-within:border-brand/60 pl-3.5 pr-1.5 py-1.5">
+              <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={1} placeholder={"Message the agent\u2026"}
+                onInput={(e) => { const t = e.currentTarget; t.style.height = "0px"; t.style.height = `${Math.min(120, t.scrollHeight)}px`; }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if (v && !agentBusy) { setAgentInput(""); e.currentTarget.style.height = "auto"; void runAgent(v); } } }}
+                className="flex-1 resize-none bg-transparent text-fg outline-none py-1 leading-relaxed max-h-[120px]" />
+              <button disabled={agentBusy || !agentInput.trim()} aria-label="Send" title="Send (Enter)"
+                onClick={() => { const v = agentInput.trim(); if (v) { setAgentInput(""); void runAgent(v); } }}
+                className="w-8 h-8 shrink-0 grid place-items-center rounded-full bg-brand text-black disabled:opacity-35 transition-opacity">
+                <ArrowUp size={16} strokeWidth={2.5} />
+              </button>
+            </div>
           </div>
         </div>
       )}
