@@ -653,6 +653,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [binDragging, setBinDragging] = useState(false); // an asset is being dragged from the bin
   const [clipDragging, setClipDragging] = useState(false); // a timeline clip is being moved
   const [railTab, setRailTab] = useState<"media" | "brand" | "audio" | "text" | "subs" | "effects" | "filters">("media");
+  const [assetsSub, setAssetsSub] = useState<"gen" | "brand">("gen"); // Assets tab: Generated | Brand library
   const [brandLib, setBrandLib] = useState<EditorAsset[]>([]);
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
@@ -2579,13 +2580,60 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       )}
       <aside style={{ width: leftW, display: leftW === 0 ? "none" : undefined }} className="relative shrink-0 border-r border-border flex flex-col min-h-0">
         <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 text-[12px] font-medium text-fg">
-          {railTab === "media" ? "Media" : railTab === "brand" ? "Brand assets" : railTab === "audio" ? "Audio" : railTab === "text" ? "Text" : railTab === "subs" ? "Captions" : railTab === "effects" ? "Effects" : "Filters"}
+          {railTab === "media" ? "Media \u00b7 from canvas" : railTab === "brand" ? "Assets" : railTab === "audio" ? "Audio" : railTab === "text" ? "Text" : railTab === "subs" ? "Captions" : railTab === "effects" ? "Effects" : "Filters"}
           <button onClick={() => setLeftW(0)} title="Hide panel" className="text-fg-subtle hover:text-fg">‹</button>
         </div>
         <div onPointerDown={dragPanel("left")} className="absolute top-0 -right-1 w-2 h-full cursor-col-resize z-20" title="Drag to resize" />
 
         {railTab === "media" && (<>
-          <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
+                    {canvasAssets.length > 0 && (() => {
+            const groups: [string, EditorAsset[]][] = [];
+            const ORDER = ["hook", "body", "packshot", "cta"];
+            for (const sec of ORDER) {
+              const list = canvasAssets.filter((a) => (a.category || "").toLowerCase() === sec);
+              if (list.length) groups.push([sec, list]);
+            }
+            const other = canvasAssets.filter((a) => !ORDER.includes((a.category || "").toLowerCase()));
+            if (other.length) groups.push(["other", other]);
+            if (!groups.length) return null;
+            const TITLE: Record<string, string> = { hook: "Hooks", body: "Bodies", packshot: "Packshots", cta: "CTAs", other: "Other" };
+            return (
+              <div className="mb-3 rounded-lg border border-brand/30 bg-brand/[0.04] p-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] font-medium text-fg inline-flex items-center gap-1.5"><Clapperboard size={11} className="text-brand" /> From canvas</span>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => { const n = assembleFromCanvas(canvasAssets); flashStatus(n ? `Assembled ${n} section clip${n === 1 ? "" : "s"}.` : "Sections are already on the timeline.", 5000); }}
+                      className="text-[10px] text-brand hover:underline">Assemble</button>
+                    <button onClick={() => { if (window.confirm("Clear the canvas media list? (does not touch the timeline)")) setCanvasAssets([]); }}
+                      className="text-[10px] text-fg-subtle hover:text-fg">clear</button>
+                  </div>
+                </div>
+                {groups.map(([sec, list]) => (
+                  <div key={sec} className="mb-1.5 last:mb-0">
+                    <div className="text-[10px] text-fg-subtle mb-1">{TITLE[sec]} ({list.length})</div>
+                    {assetGrid(list)}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+          {canvasAssets.length === 0 && (
+            <div className="p-4 text-[11px] text-fg-subtle leading-relaxed">
+              Nothing here yet. On the canvas, wire your clips into the <span className="text-fg-muted">Editor</span> node (Hook / Body / Packshot nodes group them) and press <span className="text-fg-muted">Send tracks to editor</span> {"\u2014"} the material will appear here, grouped by section. Generated and brand files live in the <span className="text-fg-muted">Assets</span> tab.
+            </div>
+          )}
+        </>)}
+
+        {railTab === "brand" && (<>
+          <div className="shrink-0 border-b border-border/50 px-2 pt-2 pb-1.5">
+            <div className="grid grid-cols-2 gap-1 p-0.5 rounded-md bg-bg-card border border-border text-[11px]">
+              {([["gen", "Generated"], ["brand", "Brand library"]] as const).map(([k, l]) => (
+                <button key={k} onClick={() => setAssetsSub(k)} className={`py-1 rounded ${assetsSub === k ? "bg-brand/15 text-brand font-medium" : "text-fg-subtle hover:text-fg"}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+          {assetsSub === "gen" && (<>
+<div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
             <div className="flex gap-1.5">
               <button onClick={() => fileInputRef.current?.click()} className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded border border-border text-fg-muted hover:text-fg hover:border-brand text-[11px]"><Plus size={12} /> Upload</button>
               <button onClick={() => loadGen()} disabled={binLoading} className="px-2 rounded border border-border text-fg-muted hover:text-fg text-[11px] disabled:opacity-50">{binLoading ? "…" : "Refresh"}</button>
@@ -2625,41 +2673,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               </div>
             </div>
           </div>
-          {canvasAssets.length > 0 && (() => {
-            const groups: [string, EditorAsset[]][] = [];
-            const ORDER = ["hook", "body", "packshot", "cta"];
-            for (const sec of ORDER) {
-              const list = canvasAssets.filter((a) => (a.category || "").toLowerCase() === sec && (binFilter === "all" || a.kind === binFilter));
-              if (list.length) groups.push([sec, list]);
-            }
-            const other = canvasAssets.filter((a) => !ORDER.includes((a.category || "").toLowerCase()) && (binFilter === "all" || a.kind === binFilter));
-            if (other.length) groups.push(["other", other]);
-            if (!groups.length) return null;
-            const TITLE: Record<string, string> = { hook: "Hooks", body: "Bodies", packshot: "Packshots", cta: "CTAs", other: "Other" };
-            return (
-              <div className="mb-3 rounded-lg border border-brand/30 bg-brand/[0.04] p-2">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[11px] font-medium text-fg inline-flex items-center gap-1.5"><Clapperboard size={11} className="text-brand" /> From canvas</span>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => { const n = assembleFromCanvas(canvasAssets); flashStatus(n ? `Assembled ${n} section clip${n === 1 ? "" : "s"}.` : "Sections are already on the timeline.", 5000); }}
-                      className="text-[10px] text-brand hover:underline">Assemble</button>
-                    <button onClick={() => { if (window.confirm("Clear the canvas media list? (does not touch the timeline)")) setCanvasAssets([]); }}
-                      className="text-[10px] text-fg-subtle hover:text-fg">clear</button>
-                  </div>
-                </div>
-                {groups.map(([sec, list]) => (
-                  <div key={sec} className="mb-1.5 last:mb-0">
-                    <div className="text-[10px] text-fg-subtle mb-1">{TITLE[sec]} ({list.length})</div>
-                    {assetGrid(list)}
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
           {assetGrid(mediaBin)}
-        </>)}
-
-        {railTab === "brand" && (<>
+          </>)}
+          {assetsSub === "brand" && (<>
           <div className="shrink-0 border-b border-border/50 p-2 space-y-1.5">
             <div className="flex gap-1.5">
               <select value={binBrand} onChange={(e) => { setBinBrand(e.target.value); loadBrand(e.target.value); }} className="flex-1 bg-bg-card border border-border rounded px-1.5 py-1.5 text-[11px] text-fg outline-none">
@@ -2713,6 +2729,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             </div>
           </div>
           {assetGrid(brandBin)}
+          </>)}
         </>)}
 
         {railTab === "audio" && (<>
