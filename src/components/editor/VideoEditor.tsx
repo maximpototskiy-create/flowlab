@@ -418,6 +418,38 @@ function Section({ id, title, open, onToggle, right, children }: {
 // (3 downloads at a time), caches it as a data-URL for the whole session and
 // renders a plain <img>. A live video is mounted only while hovered.
 const frameCache = new Map<string, { img: string | null; dur: number; w: number; h: number; live?: boolean }>();
+// Captured frames persist across sessions (localStorage, ~2.3MB budget), so
+// the bin is instant on revisit instead of re-downloading every video.
+let thumbStoreLoaded = false;
+let thumbSaveTimer: ReturnType<typeof setTimeout> | null = null;
+function loadThumbStore() {
+  if (thumbStoreLoaded || typeof window === "undefined") return;
+  thumbStoreLoaded = true;
+  try {
+    const raw = localStorage.getItem("flowlab.thumbs.v1");
+    if (!raw) return;
+    const j = JSON.parse(raw) as Record<string, { img: string; dur: number; w: number; h: number }>;
+    for (const [u, v] of Object.entries(j)) if (v?.img && !frameCache.has(u)) frameCache.set(u, v);
+  } catch { /* corrupt store */ }
+}
+function scheduleThumbSave() {
+  if (typeof window === "undefined") return;
+  if (thumbSaveTimer) clearTimeout(thumbSaveTimer);
+  thumbSaveTimer = setTimeout(() => {
+    try {
+      const out: Record<string, { img: string; dur: number; w: number; h: number }> = {};
+      let size = 0;
+      const entries = Array.from(frameCache.entries()).filter(([, v]) => v.img && !v.live);
+      for (let i = entries.length - 1; i >= 0; i--) { // newest first
+        const [u, v] = entries[i];
+        size += v.img!.length;
+        if (size > 2_300_000) break;
+        out[u] = { img: v.img!, dur: v.dur, w: v.w, h: v.h };
+      }
+      localStorage.setItem("flowlab.thumbs.v1", JSON.stringify(out));
+    } catch { /* quota - skip silently */ }
+  }, 1500);
+}
 const framePending = new Map<string, Promise<{ img: string | null; dur: number; w: number; h: number; live?: boolean } | null>>();
 let frameActive = 0;
 const frameQueue: (() => void)[] = [];
@@ -425,6 +457,7 @@ function framePump() {
   while (frameActive < 3 && frameQueue.length) { frameActive++; frameQueue.shift()!(); }
 }
 function grabFrame(url: string): Promise<{ img: string | null; dur: number; w: number; h: number; live?: boolean } | null> {
+  loadThumbStore();
   const hit = frameCache.get(url);
   if (hit) return Promise.resolve(hit);
   const pending = framePending.get(url);
@@ -442,7 +475,7 @@ function grabFrame(url: string): Promise<{ img: string | null; dur: number; w: n
         try { v.removeAttribute("src"); v.load(); } catch { /* */ }
         if (retryNoCors) { attempt(false); return; }
         frameActive--; framePump();
-        if (res) frameCache.set(url, res);
+        if (res) { frameCache.set(url, res); if (res.img) scheduleThumbSave(); }
         framePending.delete(url);
         resolve(res);
       };
@@ -471,6 +504,7 @@ function grabFrame(url: string): Promise<{ img: string | null; dur: number; w: n
   return p;
 }
 function VideoThumb({ src, className, hoverPlay, onDims }: { src: string; className?: string; hoverPlay?: boolean; onDims?: (w: number, h: number, dur: number) => void }) {
+  loadThumbStore();
   const holdRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<{ img: string | null; live: boolean } | null>(() => {
     const c = frameCache.get(src); return c ? { img: c.img, live: !!c.live } : null;
@@ -529,6 +563,23 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [binBrand, setBinBrand] = useState(brandId ?? ""); // default: the project's brand (dropdown switches to All)
   const [binProject, setBinProject] = useState(projectId ?? "");
   const [binSource, setBinSource] = useState("");
+  // Assets that came through "Send to editor" but did not land on the
+  // timeline (alternate hooks/bodies...). Kept SEPARATE from `library`
+  // because loadGen() rebuilds `library` from the assets API and would wipe
+  // them. Persisted per project.
+  const [canvasAssets, setCanvasAssets] = useState<EditorAsset[]>(() => {
+    try {
+      const raw = localStorage.getItem(`${PROJECT_KEY}:canvasAssets`);
+      const j = raw ? (JSON.parse(raw) as EditorAsset[]) : [];
+      return Array.isArray(j) ? j.slice(0, 60) : [];
+    } catch { return []; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(`${PROJECT_KEY}:canvasAssets`, JSON.stringify(canvasAssets.slice(0, 60))); } catch { /* */ }
+  }, [canvasAssets]);
+  // Alternates that just arrived from the canvas -> loud banner over the
+  // preview offering to build every combination as versions.
+  const [altNotice, setAltNotice] = useState<EditorAsset[] | null>(null);
   const [binCategory, setBinCategory] = useState("all");
   const [binSub, setBinSub] = useState("all");
   const [binSort, setBinSort] = useState<"newest" | "oldest" | "az" | "za" | "kind" | "duration">("newest");
@@ -634,7 +685,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   // filter can bucket assets even before their thumbnail scrolls into view.
   useEffect(() => {
     const els: HTMLMediaElement[] = [];
-    for (const a of [...library, ...brandLib]) {
+    for (const a of [...canvasAssets, ...library, ...brandLib]) {
       if (dims[a.url]) continue;
       if (a.kind === "image") {
         const img = new Image();
@@ -729,7 +780,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     return r < 1 ? "Portrait" : "Landscape";
   };
   const matchAspect = (a: EditorAsset) => binAspect === "all" || a.kind === "audio" || aspectBucket(a.url) === binAspect;
-  const mediaBin = sortBin(library.filter((a) => (binFilter === "all" || a.kind === binFilter) && matchAspect(a)));
+  const mediaBin = sortBin([...canvasAssets.filter((a) => !library.some((l) => l.url === a.url)), ...library].filter((a) => (binFilter === "all" || a.kind === binFilter) && matchAspect(a)));
   const brandQl = brandQ.trim().toLowerCase();
   const brandBin = sortBin(brandLib.filter((a) =>
     (!brandQl || a.label.toLowerCase().includes(brandQl) || (a.subpath || "").toLowerCase().includes(brandQl)) &&
@@ -947,18 +998,18 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             setLayers([...newLayers, ...savedLayers]);
             setClips([...savedClips, ...newClips]);
             if (newClips.some((c) => c.section)) sectionLayoutRef.current = true;
-            if (altAssets.length) setLibrary((prev) => [...altAssets, ...prev.filter((p) => !altAssets.some((a) => a.url === p.url))]);
+            if (altAssets.length) setCanvasAssets((prev) => [...altAssets, ...prev.filter((p) => !altAssets.some((a) => a.url === p.url))].slice(0, 60));
             if (canvasUrls.length) noteCanvasUrls(canvasUrls);
-            if (altAssets.length) flashStatus(`${altAssets.length} alternate section asset(s) went to the bin (not stacked on the timeline) \u2014 use Versions \u2192 Generate, or ask the Agent.`, 8000);
+            if (altAssets.length) setAltNotice(altAssets);
           } else {
             if (!newLayers.some((l) => l.type === "video")) newLayers.push({ id: `vimp_${Date.now()}_${_l++}`, type: "video" });
             if (!newLayers.some((l) => l.type === "audio")) newLayers.push({ id: `aimp_${Date.now()}_${_l++}`, type: "audio" });
             setLayers(newLayers);
             setClips(newClips);
             if (newClips.some((c) => c.section)) sectionLayoutRef.current = true; // lay out sequentially once real durations arrive
-          if (altAssets.length) setLibrary((prev) => [...altAssets, ...prev.filter((p) => !altAssets.some((a) => a.url === p.url))]);
+          if (altAssets.length) setCanvasAssets((prev) => [...altAssets, ...prev.filter((p) => !altAssets.some((a) => a.url === p.url))].slice(0, 60));
           if (canvasUrls.length) noteCanvasUrls(canvasUrls);
-          if (altAssets.length) flashStatus(`${altAssets.length} alternate section asset(s) went to the bin (not stacked on the timeline) \u2014 use Versions \u2192 Generate, or ask the Agent.`, 8000);
+          if (altAssets.length) setAltNotice(altAssets);
           }
           setSelectedIds([]);
           imported = true;
@@ -1676,6 +1727,48 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     setTlVersions([...base, ...fresh]);
     return fresh.length;
   }, [library, brandLib, syncedVersions, mkSnap]);
+
+  // Build one version per COMBINATION of section alternates (2 hooks x 2
+  // bodies -> 4 timelines). Capped to 12; the current cut stays as v1.
+  const buildComboVersions = useCallback((alts: EditorAsset[]): number => {
+    const bySec = new Map<string, EditorAsset[]>();
+    for (const a of alts) {
+      const sec = (a.category || "").toLowerCase();
+      if (!sec) continue;
+      bySec.set(sec, [...(bySec.get(sec) || []), a]);
+    }
+    const src = clipsRef.current;
+    const secClip = (sec: string) => src.find((c) => (c.section || "").toLowerCase() === sec && (c.kind === "video" || c.kind === "image"));
+    const dims: { sec: string; clipId: string; options: (EditorAsset | null)[] }[] = [];
+    for (const [sec, list] of bySec) {
+      const c = secClip(sec);
+      if (!c) continue;
+      dims.push({ sec, clipId: c.id, options: [null, ...list] }); // null = keep the placed asset
+    }
+    if (!dims.length) return 0;
+    let combos: (EditorAsset | null)[][] = [[]];
+    for (const d of dims) {
+      const next: (EditorAsset | null)[][] = [];
+      for (const c of combos) for (const o of d.options) next.push([...c, o]);
+      combos = next;
+    }
+    combos = combos.filter((c) => c.some((o) => o !== null)).slice(0, 12); // drop the all-base combo, cap
+    if (!combos.length) return 0;
+    const fresh: TLSnapshot[] = combos.map((combo, ci) => {
+      const cl = src.map((x) => {
+        const di = dims.findIndex((d) => d.clipId === x.id);
+        if (di === -1) return x;
+        const pick = combo[di];
+        if (!pick) return x;
+        const dur = pick.duration ?? frameCache.get(pick.url)?.dur;
+        return { ...x, url: pick.url, label: pick.label || x.label, inset: 0, ...(dur && x.section && x.kind === "video" ? { duration: +dur.toFixed(2), autoDur: false } : { autoDur: true }) };
+      });
+      return { id: `tvc-${Date.now().toString(36)}-${ci}`, name: "", clips: chainSections(cl), layers: layersRef.current };
+    });
+    const base = tlVersionsRef.current.length ? syncedVersions() : [mkSnap()];
+    setTlVersions([...base, ...fresh]);
+    return fresh.length;
+  }, [syncedVersions, mkSnap]);
   const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
   // Human-readable label for an asset URL (bin label, else the file name).
   const urlLabel = useCallback((u?: string) => {
@@ -2123,12 +2216,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const agentBin = useCallback((): EditorAsset[] => {
     const seen = new Set<string>();
     const out: EditorAsset[] = [];
-    for (const a of [...library, ...brandLib]) {
+    for (const a of [...canvasAssets, ...library, ...brandLib]) {
       if (!a.url || seen.has(a.url)) continue;
       seen.add(a.url); out.push(a);
     }
     return out;
-  }, [library, brandLib]);
+  }, [canvasAssets, library, brandLib]);
 
   // Compact editor snapshot for the model (kept small on purpose).
   const assetSrc = useCallback((a: EditorAsset): "canvas" | "generated" | "brand" => {
@@ -2900,7 +2993,25 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         {/* Preview */}
         <div ref={containerRef} className="flex-1 min-h-0 bg-black flex items-center justify-center overflow-hidden relative"
           onPointerDown={onPanDown}>
-          {(() => {
+                    {altNotice && altNotice.length > 0 && (() => {
+            const counts = new Map<string, number>();
+            for (const a of altNotice) counts.set(a.category || "other", (counts.get(a.category || "other") || 0) + 1);
+            const parts = Array.from(counts.entries()).map(([k, n]) => `${k} +${n}`).join(", ");
+            let combos = 1;
+            for (const n of counts.values()) combos *= n + 1;
+            combos = Math.min(12, combos - 1);
+            return (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-card border border-brand/50 shadow-xl text-[12px] max-w-[92%]">
+                <span className="text-fg">
+                  {altNotice.length} alternate clip{altNotice.length === 1 ? "" : "s"} from the canvas landed in the bin ({parts}) {"\u2014"} the timeline keeps one per section.
+                </span>
+                <button onClick={() => { const n = buildComboVersions(altNotice); setAltNotice(null); if (n) flashStatus(`${n} version${n === 1 ? "" : "s"} created \u2014 switch with the tabs under the player.`, 6000); }}
+                  className="px-2.5 py-1 rounded-md bg-brand text-black font-medium shrink-0">Create {combos} version{combos === 1 ? "" : "s"}</button>
+                <button onClick={() => setAltNotice(null)} className="text-fg-subtle hover:text-fg shrink-0"><X size={13} /></button>
+              </div>
+            );
+          })()}
+{(() => {
             const hooks = brandLib.filter((a) => a.category === "hook" && (a.kind === "video" || a.kind === "image"));
             const hookUrls = new Set(hooks.map((h) => h.url));
             const placedHook = clips.find((c) => c.url != null && hookUrls.has(c.url));
@@ -2909,7 +3020,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             // Only nudge when the user has actually placed a hook on the timeline
             // AND there are other hooks to turn into versions. Avoids popping up
             // at random moments.
-            if (!placedHook || others < 1 || hasSlot || hookBannerDismissed) return null;
+            if (altNotice || !placedHook || others < 1 || hasSlot || hookBannerDismissed) return null;
             return (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-card border border-brand/40 shadow-xl text-[12px]">
                 <span className="text-fg"><span className="text-brand font-medium">{others + 1} hook versions</span> available {"\u2014"} build them automatically?</span>
@@ -3236,7 +3347,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                             onPointerDown={(e) => e.stopPropagation()}
                             onClick={(e) => { e.stopPropagation(); setTransMenu({ x: e.clientX, y: e.clientY, id: b.id }); }}
                             style={{ left: b.start * pxPerSec - 12, display: (clipDragging || binDragging) ? "none" : undefined }} title="Transition"
-                            className="absolute top-0 h-full z-40 grid place-items-center w-6 group">
+                            className="absolute top-0 h-full z-40 grid place-items-center w-6 group opacity-45 hover:opacity-100 transition-opacity">
                             <span className={`grid place-items-center w-5 h-5 rounded-full text-[11px] leading-none border shadow-sm ${b.transType ? "bg-amber-400 text-black border-amber-200" : "bg-bg-card/95 text-fg-muted border-border group-hover:border-brand group-hover:text-brand"}`}>
                               {b.transType ? "◆" : "+"}
                             </span>
