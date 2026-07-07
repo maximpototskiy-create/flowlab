@@ -883,6 +883,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           const newClips: EditClip[] = [];
           let sharedSectionVideoLayer: string | null = null;
           let sharedSectionAudioLayer: string | null = null;
+          // Multiple assets of the SAME section (3 hooks, 2 bodies...) used to
+          // stack on top of each other at the section start - unusable mush.
+          // Now: the FIRST of each section lands on the timeline, the rest go
+          // to the bin as canvas assets (category = section) for Versions /
+          // the agent to swap in.
+          const placedSections = new Set<string>();
+          const altAssets: EditorAsset[] = [];
+          const canvasUrls: string[] = [];
           tracks.forEach((t, i) => {
             if (t.kind === "captions") {
               // word-level transcript from the canvas Subtitles node
@@ -900,6 +908,15 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               return;
             }
             const kind = kindOf(t);
+            if (kind !== "text" && t.value.startsWith("http")) canvasUrls.push(t.value);
+            if (t.section && (kind === "video" || kind === "image" || kind === "audio")) {
+              const secKey = `${t.section}:${kind === "audio" ? "a" : "v"}`;
+              if (placedSections.has(secKey)) {
+                altAssets.push({ id: `cvs-${Date.now()}-${i}`, url: t.value, kind, label: t.label || `${t.section} alt`, duration: null, category: t.section.toLowerCase() });
+                return;
+              }
+              placedSections.add(secKey);
+            }
             const ltype = clipLayerType(kind);
             // Sectioned clips (hook/body/packshot) share ONE lane per media
             // type: the chain keeps them back-to-back, and transitions only
@@ -930,12 +947,18 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             setLayers([...newLayers, ...savedLayers]);
             setClips([...savedClips, ...newClips]);
             if (newClips.some((c) => c.section)) sectionLayoutRef.current = true;
+            if (altAssets.length) setLibrary((prev) => [...altAssets, ...prev.filter((p) => !altAssets.some((a) => a.url === p.url))]);
+            if (canvasUrls.length) noteCanvasUrls(canvasUrls);
+            if (altAssets.length) flashStatus(`${altAssets.length} alternate section asset(s) went to the bin (not stacked on the timeline) \u2014 use Versions \u2192 Generate, or ask the Agent.`, 8000);
           } else {
             if (!newLayers.some((l) => l.type === "video")) newLayers.push({ id: `vimp_${Date.now()}_${_l++}`, type: "video" });
             if (!newLayers.some((l) => l.type === "audio")) newLayers.push({ id: `aimp_${Date.now()}_${_l++}`, type: "audio" });
             setLayers(newLayers);
             setClips(newClips);
             if (newClips.some((c) => c.section)) sectionLayoutRef.current = true; // lay out sequentially once real durations arrive
+          if (altAssets.length) setLibrary((prev) => [...altAssets, ...prev.filter((p) => !altAssets.some((a) => a.url === p.url))]);
+          if (canvasUrls.length) noteCanvasUrls(canvasUrls);
+          if (altAssets.length) flashStatus(`${altAssets.length} alternate section asset(s) went to the bin (not stacked on the timeline) \u2014 use Versions \u2192 Generate, or ask the Agent.`, 8000);
           }
           setSelectedIds([]);
           imported = true;
@@ -2072,8 +2095,26 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     return "anthropic/claude-sonnet-4.6";
   });
   useEffect(() => { try { localStorage.setItem("flowlab.agent.model", agentModel); } catch { /* */ } }, [agentModel]);
-  // urls that arrived as props = material wired from the canvas into this editor node
-  const canvasUrlsRef = useRef<Set<string>>(new Set(assets.map((a) => a.url)));
+  // urls that actually arrived through "Send to editor" from the canvas node -
+  // persisted per project so the agent can tell canvas material apart even
+  // after a reload.
+  const canvasUrlsRef = useRef<Set<string>>(new Set());
+  const canvasUrlsLoadedRef = useRef(false);
+  const ensureCanvasUrlsLoaded = useCallback(() => {
+    if (canvasUrlsLoadedRef.current) return;
+    canvasUrlsLoadedRef.current = true;
+    try {
+      const raw = localStorage.getItem(`${PROJECT_KEY}:canvasUrls`);
+      if (raw) { const arr = JSON.parse(raw) as string[]; if (Array.isArray(arr)) for (const u of arr) canvasUrlsRef.current.add(u); }
+    } catch { /* */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const noteCanvasUrls = useCallback((urls: string[]) => {
+    ensureCanvasUrlsLoaded();
+    for (const u of urls) canvasUrlsRef.current.add(u);
+    try { localStorage.setItem(`${PROJECT_KEY}:canvasUrls`, JSON.stringify(Array.from(canvasUrlsRef.current).slice(-400))); } catch { /* */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ensureCanvasUrlsLoaded]);
   const [agentInput, setAgentInput] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
   const agentEndRef = useRef<HTMLDivElement | null>(null);
@@ -2091,10 +2132,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
   // Compact editor snapshot for the model (kept small on purpose).
   const assetSrc = useCallback((a: EditorAsset): "canvas" | "generated" | "brand" => {
+    ensureCanvasUrlsLoaded();
     if (canvasUrlsRef.current.has(a.url)) return "canvas";
     if (brandLib.some((b) => b.url === a.url)) return "brand";
     return "generated";
-  }, [brandLib]);
+  }, [brandLib, ensureCanvasUrlsLoaded]);
   const buildAgentState = useCallback((): string => {
     const cl = clipsRef.current.map((c) => ({
       id: c.id, kind: c.kind, label: clipLabel(c).slice(0, 28), section: c.section,
@@ -3038,8 +3080,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
         {/* Timeline */}
         {tlVersions.length > 0 && (
-          <div className="shrink-0 border-t border-border bg-bg-card/60 px-2 py-1 flex items-center gap-1 overflow-x-auto text-[11px]">
-            <span className="text-fg-subtle mr-1 shrink-0">Versions:</span>
+          <div className="shrink-0 border-t border-border bg-bg-card/60 pl-2 pr-3 h-8 flex items-center gap-1.5 overflow-x-auto whitespace-nowrap text-[11px]">
+            <span className="text-fg-subtle mr-0.5 shrink-0">Versions:</span>
             {tlVersions.map((v, vi) => (
               <button key={v.id} onClick={() => switchVersion(vi)}
                 title={describeSnap(v)}
@@ -3050,7 +3092,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             ))}
             <button onClick={addVersionFromCurrent}
               title="Snapshot the current timeline as a new version" className="px-1.5 py-0.5 rounded-md border border-dashed border-border text-fg-subtle hover:text-brand hover:border-brand shrink-0"><Plus size={11} /></button>
-            <span className="ml-2 text-fg-subtle truncate">editing v{activeVer + 1} {"\u2014"} every change stays in this version</span>
+            <span className="ml-2 text-fg-subtle truncate hidden sm:inline">editing v{activeVer + 1} {"\u2014"} every change stays in this version</span>
           </div>
         )}
         <div ref={timelineWheelRef} className={`shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none ${cutMode ? "cursor-crosshair" : ""}`} style={{ height: timelineH }}
@@ -3193,9 +3235,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           <button key={`tr-${b.id}`}
                             onPointerDown={(e) => e.stopPropagation()}
                             onClick={(e) => { e.stopPropagation(); setTransMenu({ x: e.clientX, y: e.clientY, id: b.id }); }}
-                            style={{ left: b.start * pxPerSec - 14 }} title="Transition"
-                            className="absolute top-0 h-full z-40 grid place-items-center w-7 group">
-                            <span className={`grid place-items-center w-6 h-6 rounded-full text-[12px] leading-none border shadow ${b.transType ? "bg-amber-400 text-black border-amber-200" : "bg-bg-card text-fg-muted border-border group-hover:border-brand group-hover:text-brand"}`}>
+                            style={{ left: b.start * pxPerSec - 12, display: (clipDragging || binDragging) ? "none" : undefined }} title="Transition"
+                            className="absolute top-0 h-full z-40 grid place-items-center w-6 group">
+                            <span className={`grid place-items-center w-5 h-5 rounded-full text-[11px] leading-none border shadow-sm ${b.transType ? "bg-amber-400 text-black border-amber-200" : "bg-bg-card/95 text-fg-muted border-border group-hover:border-brand group-hover:text-brand"}`}>
                               {b.transType ? "◆" : "+"}
                             </span>
                           </button>
