@@ -780,7 +780,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     return r < 1 ? "Portrait" : "Landscape";
   };
   const matchAspect = (a: EditorAsset) => binAspect === "all" || a.kind === "audio" || aspectBucket(a.url) === binAspect;
-  const mediaBin = sortBin([...canvasAssets.filter((a) => !library.some((l) => l.url === a.url)), ...library].filter((a) => (binFilter === "all" || a.kind === binFilter) && matchAspect(a)));
+  const mediaBin = sortBin(library.filter((a) => (binFilter === "all" || a.kind === binFilter) && matchAspect(a) && !canvasAssets.some((c) => c.url === a.url)));
   const brandQl = brandQ.trim().toLowerCase();
   const brandBin = sortBin(brandLib.filter((a) =>
     (!brandQl || a.label.toLowerCase().includes(brandQl) || (a.subpath || "").toLowerCase().includes(brandQl)) &&
@@ -934,13 +934,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           const newClips: EditClip[] = [];
           let sharedSectionVideoLayer: string | null = null;
           let sharedSectionAudioLayer: string | null = null;
-          // Multiple assets of the SAME section (3 hooks, 2 bodies...) used to
-          // stack on top of each other at the section start - unusable mush.
-          // Now: the FIRST of each section lands on the timeline, the rest go
-          // to the bin as canvas assets (category = section) for Versions /
-          // the agent to swap in.
-          const placedSections = new Set<string>();
-          const altAssets: EditorAsset[] = [];
+          // Media from the canvas does NOT auto-build a timeline anymore: it
+          // lands in the Media panel (grouped by section) with a banner
+          // offering "Assemble" / "Create versions". Only text and captions
+          // still become clips directly (they are timeline-only things).
+          const mediaArrivals: EditorAsset[] = [];
           const canvasUrls: string[] = [];
           tracks.forEach((t, i) => {
             if (t.kind === "captions") {
@@ -959,14 +957,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               return;
             }
             const kind = kindOf(t);
-            if (kind !== "text" && t.value.startsWith("http")) canvasUrls.push(t.value);
-            if (t.section && (kind === "video" || kind === "image" || kind === "audio")) {
-              const secKey = `${t.section}:${kind === "audio" ? "a" : "v"}`;
-              if (placedSections.has(secKey)) {
-                altAssets.push({ id: `cvs-${Date.now()}-${i}`, url: t.value, kind, label: t.label || `${t.section} alt`, duration: null, category: t.section.toLowerCase() });
-                return;
-              }
-              placedSections.add(secKey);
+            if ((kind === "video" || kind === "image" || kind === "audio") && t.value.startsWith("http")) {
+              canvasUrls.push(t.value);
+              mediaArrivals.push({ id: `cvs-${Date.now()}-${i}`, url: t.value, kind, label: t.label || kind, duration: null, ...(t.section ? { category: t.section.toLowerCase() } : {}) });
+              return; // -> Media panel, not the timeline
             }
             const ltype = clipLayerType(kind);
             // Sectioned clips (hook/body/packshot) share ONE lane per media
@@ -998,18 +992,18 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             setLayers([...newLayers, ...savedLayers]);
             setClips([...savedClips, ...newClips]);
             if (newClips.some((c) => c.section)) sectionLayoutRef.current = true;
-            if (altAssets.length) setCanvasAssets((prev) => [...altAssets, ...prev.filter((p) => !altAssets.some((a) => a.url === p.url))].slice(0, 60));
+            if (mediaArrivals.length) setCanvasAssets((prev) => [...mediaArrivals, ...prev.filter((p) => !mediaArrivals.some((a) => a.url === p.url))].slice(0, 60));
             if (canvasUrls.length) noteCanvasUrls(canvasUrls);
-            if (altAssets.length) setAltNotice(altAssets);
+            if (mediaArrivals.length) setAltNotice(mediaArrivals);
           } else {
             if (!newLayers.some((l) => l.type === "video")) newLayers.push({ id: `vimp_${Date.now()}_${_l++}`, type: "video" });
             if (!newLayers.some((l) => l.type === "audio")) newLayers.push({ id: `aimp_${Date.now()}_${_l++}`, type: "audio" });
             setLayers(newLayers);
             setClips(newClips);
             if (newClips.some((c) => c.section)) sectionLayoutRef.current = true; // lay out sequentially once real durations arrive
-          if (altAssets.length) setCanvasAssets((prev) => [...altAssets, ...prev.filter((p) => !altAssets.some((a) => a.url === p.url))].slice(0, 60));
+          if (mediaArrivals.length) setCanvasAssets((prev) => [...mediaArrivals, ...prev.filter((p) => !mediaArrivals.some((a) => a.url === p.url))].slice(0, 60));
           if (canvasUrls.length) noteCanvasUrls(canvasUrls);
-          if (altAssets.length) setAltNotice(altAssets);
+          if (mediaArrivals.length) setAltNotice(mediaArrivals);
           }
           setSelectedIds([]);
           imported = true;
@@ -1769,6 +1763,40 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     setTlVersions([...base, ...fresh]);
     return fresh.length;
   }, [syncedVersions, mkSnap]);
+
+  // Lay the FIRST asset of each canvas section (Hook -> Body -> Packshot ->
+  // CTA) onto one shared "Sections" lane; sections already on the timeline
+  // are kept. Returns how many clips were placed.
+  const assembleFromCanvas = useCallback((pool: EditorAsset[]): number => {
+    const ORDER = ["hook", "body", "packshot", "cta"];
+    const CAP: Record<string, string> = { hook: "Hook", body: "Body", packshot: "Packshot", cta: "CTA" };
+    const bySec = new Map<string, EditorAsset[]>();
+    for (const a of pool) {
+      const sec = (a.category || "").toLowerCase();
+      if (!ORDER.includes(sec) || (a.kind !== "video" && a.kind !== "image")) continue;
+      bySec.set(sec, [...(bySec.get(sec) || []), a]);
+    }
+    if (!bySec.size) return 0;
+    let laneId = layersRef.current.find((l) => l.type === "video" && /^sections$/i.test(l.name || ""))?.id;
+    if (!laneId) {
+      laneId = `vsec_${Date.now().toString(36)}`;
+      setLayers((prev) => [{ id: laneId!, type: "video", name: "Sections" }, ...prev]);
+    }
+    const additions: EditClip[] = [];
+    let cursor = Math.max(0, ...clipsRef.current.filter((c) => c.layer === laneId).map((c) => c.start + c.duration), 0);
+    for (const sec of ORDER) {
+      const list = bySec.get(sec);
+      if (!list?.length) continue;
+      if (clipsRef.current.some((c) => (c.section || "").toLowerCase() === sec && (c.kind === "video" || c.kind === "image"))) continue; // already placed
+      const a = list[0];
+      const dur = a.duration ?? frameCache.get(a.url)?.dur ?? DEFAULTS[a.kind];
+      additions.push({ id: uid(), kind: a.kind, layer: laneId!, url: a.url, label: a.label || CAP[sec], start: +cursor.toFixed(2), duration: +(+dur).toFixed(2), fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: 0, section: CAP[sec], ...(a.kind === "video" && a.duration == null ? { autoDur: true } : {}) });
+      cursor += +dur;
+    }
+    if (additions.length) setClips((prev) => chainSections([...prev, ...additions]));
+    return additions.length;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
   // Human-readable label for an asset URL (bin label, else the file name).
   const urlLabel = useCallback((u?: string) => {
@@ -2597,6 +2625,37 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               </div>
             </div>
           </div>
+          {canvasAssets.length > 0 && (() => {
+            const groups: [string, EditorAsset[]][] = [];
+            const ORDER = ["hook", "body", "packshot", "cta"];
+            for (const sec of ORDER) {
+              const list = canvasAssets.filter((a) => (a.category || "").toLowerCase() === sec && (binFilter === "all" || a.kind === binFilter));
+              if (list.length) groups.push([sec, list]);
+            }
+            const other = canvasAssets.filter((a) => !ORDER.includes((a.category || "").toLowerCase()) && (binFilter === "all" || a.kind === binFilter));
+            if (other.length) groups.push(["other", other]);
+            if (!groups.length) return null;
+            const TITLE: Record<string, string> = { hook: "Hooks", body: "Bodies", packshot: "Packshots", cta: "CTAs", other: "Other" };
+            return (
+              <div className="mb-3 rounded-lg border border-brand/30 bg-brand/[0.04] p-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] font-medium text-fg inline-flex items-center gap-1.5"><Clapperboard size={11} className="text-brand" /> From canvas</span>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => { const n = assembleFromCanvas(canvasAssets); flashStatus(n ? `Assembled ${n} section clip${n === 1 ? "" : "s"}.` : "Sections are already on the timeline.", 5000); }}
+                      className="text-[10px] text-brand hover:underline">Assemble</button>
+                    <button onClick={() => { if (window.confirm("Clear the canvas media list? (does not touch the timeline)")) setCanvasAssets([]); }}
+                      className="text-[10px] text-fg-subtle hover:text-fg">clear</button>
+                  </div>
+                </div>
+                {groups.map(([sec, list]) => (
+                  <div key={sec} className="mb-1.5 last:mb-0">
+                    <div className="text-[10px] text-fg-subtle mb-1">{TITLE[sec]} ({list.length})</div>
+                    {assetGrid(list)}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           {assetGrid(mediaBin)}
         </>)}
 
@@ -2851,6 +2910,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             <span className="text-[10px] text-fg-subtle w-12 text-right">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : ""}</span>
             <button onClick={saveProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">Save</button>
             <button onClick={newProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">New</button>
+            <span className="w-px h-5 bg-border mx-1" aria-hidden />
             <select value={resKey} onChange={(e) => switchFormat(e.target.value)} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
               {RESOLUTIONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
@@ -2898,14 +2958,16 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               )}
             </div>
             <div className="relative">
+              <span className="w-px h-5 bg-border mx-1 inline-block align-middle" aria-hidden />
               <button onClick={() => setAgentOpen((o) => !o)} title="AI agent: tell it what to do with the timeline"
-                className={`px-2 py-1 rounded border text-[11px] inline-flex items-center gap-1 ${agentOpen ? "border-brand text-brand bg-brand/10" : "border-border text-fg-muted hover:text-fg hover:border-brand"}`}>
-                <Sparkles size={12} /> Agent
+                className={`px-2.5 py-1 rounded-md border text-[11px] font-medium inline-flex items-center gap-1.5 ${agentOpen ? "border-brand text-black bg-brand shadow" : "border-brand/60 text-brand bg-brand/10 hover:bg-brand/20"}`}>
+                <Sparkles size={13} /> Agent
               </button>
               <button onClick={() => setVersionsOpen((o) => !o)} title="Variants & batch render"
                 className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand inline-flex items-center gap-1">
                 <Layers size={12} /> Versions
               </button>
+              <span className="w-px h-5 bg-border mx-1 inline-block align-middle" aria-hidden />
               {versionsOpen && (() => {
                 const allVers: TLSnapshot[] = tlVersions.length ? tlVersions : [{ id: "cur", name: "", clips, layers }];
                 const replaceable = clips.filter((c) => (c.kind === "video" || c.kind === "image") && c.url).sort((a, b) => a.start - b.start);
@@ -2995,18 +3057,31 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           onPointerDown={onPanDown}>
                     {altNotice && altNotice.length > 0 && (() => {
             const counts = new Map<string, number>();
-            for (const a of altNotice) counts.set(a.category || "other", (counts.get(a.category || "other") || 0) + 1);
-            const parts = Array.from(counts.entries()).map(([k, n]) => `${k} +${n}`).join(", ");
+            for (const a of altNotice) if (a.category) counts.set(a.category, (counts.get(a.category) || 0) + 1);
+            const other = altNotice.filter((a) => !a.category).length;
+            const parts = [...Array.from(counts.entries()).map(([k, n]) => `${k} ${n}`), ...(other ? [`other ${other}`] : [])].join(" \u00b7 ");
             let combos = 1;
-            for (const n of counts.values()) combos *= n + 1;
-            combos = Math.min(12, combos - 1);
+            for (const n of counts.values()) combos *= n;
+            combos = Math.min(12, Math.max(0, combos - 1));
+            const alts = (() => { // every non-first asset of each section = a variant
+              const seen = new Set<string>();
+              return altNotice.filter((a) => {
+                if (!a.category) return false;
+                if (!seen.has(a.category)) { seen.add(a.category); return false; }
+                return true;
+              });
+            })();
             return (
-              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-card border border-brand/50 shadow-xl text-[12px] max-w-[92%]">
-                <span className="text-fg">
-                  {altNotice.length} alternate clip{altNotice.length === 1 ? "" : "s"} from the canvas landed in the bin ({parts}) {"\u2014"} the timeline keeps one per section.
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-bg-card border border-brand/50 shadow-xl text-[12px] max-w-[94%]">
+                <span className="text-fg truncate">
+                  {altNotice.length} clip{altNotice.length === 1 ? "" : "s"} from the canvas {"\u2192"} Media panel ({parts}). Nothing was placed automatically.
                 </span>
-                <button onClick={() => { const n = buildComboVersions(altNotice); setAltNotice(null); if (n) flashStatus(`${n} version${n === 1 ? "" : "s"} created \u2014 switch with the tabs under the player.`, 6000); }}
-                  className="px-2.5 py-1 rounded-md bg-brand text-black font-medium shrink-0">Create {combos} version{combos === 1 ? "" : "s"}</button>
+                <button onClick={() => { const n = assembleFromCanvas(altNotice); setAltNotice(null); flashStatus(n ? `Assembled ${n} section clip${n === 1 ? "" : "s"} on the timeline.` : "Sections are already on the timeline.", 5000); }}
+                  className="px-2.5 py-1 rounded-md bg-brand text-black font-medium shrink-0">Assemble timeline</button>
+                {combos > 0 && (
+                  <button onClick={() => { assembleFromCanvas(altNotice); setAltNotice(null); setTimeout(() => { const n = buildComboVersions(alts); if (n) flashStatus(`${n} version${n === 1 ? "" : "s"} created \u2014 switch with the tabs under the player.`, 6000); }, 80); }}
+                    className="px-2.5 py-1 rounded-md border border-brand text-brand font-medium shrink-0 hover:bg-brand/10">+ {combos} version{combos === 1 ? "" : "s"}</button>
+                )}
                 <button onClick={() => setAltNotice(null)} className="text-fg-subtle hover:text-fg shrink-0"><X size={13} /></button>
               </div>
             );
@@ -3211,7 +3286,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
               <div className="w-28 shrink-0 border-r border-border/40 sticky left-0 z-20 bg-bg-card" />
-              <div className="relative flex-1 h-6 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
+              <div className="relative flex-1 h-8 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
                 {(() => {
                   const steps = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
                   const step = steps.find((st) => st * pxPerSec >= 56) ?? 600;
@@ -3220,7 +3295,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                   return Array.from({ length: n }).map((_, i) => {
                     const sec = i * step;
                     return (
-                      <div key={i} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pointer-events-none" style={{ left: sec * pxPerSec }}>{fmtTick(sec)}</div>
+                      <div key={i} className="absolute top-0 h-full border-l border-border/50 text-[8px] text-fg-subtle pl-1 pt-px pointer-events-none" style={{ left: sec * pxPerSec }}>{fmtTick(sec)}</div>
                     );
                   });
                 })()}
@@ -3234,8 +3309,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     const s0 = Math.min(...cs.map((c) => c.start));
                     const s1 = Math.max(...cs.map((c) => c.start + c.duration));
                     return (
-                      <div key={name} className="absolute bottom-0 h-1.5 rounded-sm pointer-events-none flex items-center" style={{ left: s0 * pxPerSec, width: Math.max(8, (s1 - s0) * pxPerSec), background: (COLORS[name] ?? "#888") + "66", boxShadow: `inset 0 -1.5px 0 ${COLORS[name] ?? "#888"}` }}>
-                        <span className="text-[7px] leading-none px-1 -translate-y-2.5" style={{ color: COLORS[name] ?? "#888" }}>{name}</span>
+                      <div key={name} className="absolute bottom-0.5 h-3 rounded-sm pointer-events-none flex items-center overflow-hidden" style={{ left: s0 * pxPerSec, width: Math.max(8, (s1 - s0) * pxPerSec), background: (COLORS[name] ?? "#888") + "33", boxShadow: `inset 0 -1.5px 0 ${COLORS[name] ?? "#888"}` }}>
+                        <span className="text-[8px] font-medium leading-none px-1 truncate" style={{ color: COLORS[name] ?? "#888" }}>{name}</span>
                       </div>
                     );
                   });
@@ -3324,7 +3399,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           const pts2 = peaks.map((v, i) => `${(i / (peaks.length - 1)) * w},${h / 2 + v * (h / 2 - 2)}`).reverse().join(" ");
                           return <svg className="absolute inset-0 pointer-events-none" width={w} height={h} preserveAspectRatio="none"><polygon points={`${pts} ${pts2}`} fill="rgba(110,231,183,0.45)" /></svg>;
                         })()}
-                        <span className={`px-2 truncate leading-9 relative z-[1] ${c.kind === "video" ? "bg-black/40 rounded" : ""}`}>{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
+                        <span className={`ml-2.5 pl-1 pr-2 truncate leading-9 relative z-[1] ${c.kind === "video" ? "bg-black/40 rounded" : ""}`}>{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trimL")} className="absolute left-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-l z-[2]" />
                         {(c.kf?.length ?? 0) > 0 && c.kf!.map((k, ki) => (
                           <span key={ki} title={`transform key @ ${k.t.toFixed(2)}s - click: jump, Alt+click: delete`}
