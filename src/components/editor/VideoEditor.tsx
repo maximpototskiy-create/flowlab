@@ -1134,8 +1134,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
   // sources that have audio to transcribe
   const subSources = clips.filter((c) => (c.kind === "video" || c.kind === "audio") && c.url);
-  const generateSubtitles = async () => {
-    const src = subSources.find((c) => c.id === subSource) || subSources[0];
+  const generateSubtitles = async (srcId?: string) => {
+    const src = subSources.find((c) => c.id === (srcId || subSource)) || subSources[0];
     if (!src?.url) { setSubStatus("Add a video or audio clip first."); return; }
     setSubBusy(true); setSubStatus("Submitting…");
     try {
@@ -1526,9 +1526,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
   // Render every version (variant combo) x every chosen format, each downloaded
   // with its own templated name (version token = v1..vN per combo).
-  const renderVersions = useCallback(async (only: number | null) => {
+  const renderVersions = useCallback(async (only: number | null, fmtOverride?: Set<string>) => {
     if (batchRunning || exporting || !clipsRef.current.length) return;
-    const fmts = RESOLUTIONS.filter((r) => batchFormats.has(r.key));
+    const fmts = RESOLUTIONS.filter((r) => (fmtOverride ?? batchFormats).has(r.key));
     if (!fmts.length) { setStatus("Pick at least one format to render."); return; }
     setVersionsOpen(false); setBatchRunning(true); setProgress(0); stop();
     try {
@@ -2047,6 +2047,234 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     addAssetAt(a, id, Math.max(0, (e.clientX - r.left) / pxPerSec));
   };
 
+  // ===========================================================================
+  // Editor AI agent: chat panel + tool executor. The /api/editor-agent route
+  // plans; every action below runs through the SAME functions the UI uses,
+  // so undo, versions and the section chain all behave normally.
+  // ===========================================================================
+  type AgentAction = { tool: string; args?: Record<string, unknown> };
+  type AgentChip = { tool: string; ok: boolean; result: string };
+  type AgentMsg = { role: "user" | "assistant" | "tool"; content: string; chips?: AgentChip[] };
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentMsgs, setAgentMsgs] = useState<AgentMsg[]>([]);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentBusy, setAgentBusy] = useState(false);
+  const agentEndRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { agentEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [agentMsgs, agentBusy]);
+
+  const agentBin = useCallback((): EditorAsset[] => {
+    const seen = new Set<string>();
+    const out: EditorAsset[] = [];
+    for (const a of [...library, ...brandLib]) {
+      if (!a.url || seen.has(a.url)) continue;
+      seen.add(a.url); out.push(a);
+    }
+    return out;
+  }, [library, brandLib]);
+
+  // Compact editor snapshot for the model (kept small on purpose).
+  const buildAgentState = useCallback((): string => {
+    const cl = clipsRef.current.map((c) => ({
+      id: c.id, kind: c.kind, label: clipLabel(c).slice(0, 28), section: c.section,
+      start: +c.start.toFixed(2), dur: +c.duration.toFixed(2), layer: c.layer,
+      ...(c.kf?.length ? { keys: c.kf.length } : {}), ...(c.muted ? { muted: true } : {}),
+    }));
+    const ly = layersRef.current.map((l) => ({ id: l.id, type: l.type, ...(l.name ? { name: l.name } : {}), ...(l.hidden ? { hidden: true } : {}) }));
+    const bin = agentBin().slice(0, 80).map((a) => ({ id: a.id, kind: a.kind, label: (a.label || "").slice(0, 30), ...(a.category ? { cat: a.category } : {}), ...(a.duration ? { dur: +a.duration.toFixed(1) } : {}) }));
+    const cats = Array.from(new Set(brandLib.map((a) => a.category).filter(Boolean)));
+    return JSON.stringify({
+      format: resKey, timelineDur: +endOf(clipsRef.current).toFixed(2), playhead: +playheadRef.current.toFixed(2),
+      layersTopFirst: ly, clips: cl,
+      versions: { count: tlVersionsRef.current.length || 1, active: tlVersionsRef.current.length ? activeVerRef.current : 0 },
+      selection: selectedRef.current, binCategories: cats, bin,
+    });
+  }, [clipLabel, agentBin, brandLib, resKey]);
+
+  const agentFindAsset = useCallback((args: Record<string, unknown>): EditorAsset | null => {
+    const id = typeof args.asset_id === "string" ? args.asset_id : null;
+    const url = typeof args.url === "string" ? args.url : null;
+    const pool = agentBin();
+    if (id) { const hit = pool.find((a) => a.id === id); if (hit) return hit; }
+    if (url) {
+      const hit = pool.find((a) => a.url === url);
+      if (hit) return hit;
+      const kindGuess: EditorAsset["kind"] = /\.(mp3|wav|m4a|aac|ogg)(\?|$)/i.test(url) ? "audio" : /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url) ? "image" : "video";
+      return { id: url, url, kind: kindGuess, label: "found asset", duration: null };
+    }
+    return null;
+  }, [agentBin]);
+
+  // Execute ONE planned action; returns a short human/JSON result for the model.
+  const executeAgentAction = useCallback(async (a: AgentAction): Promise<string> => {
+    const args = a.args || {};
+    const str = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : undefined);
+    const num = (k: string) => (typeof args[k] === "number" && isFinite(args[k] as number) ? (args[k] as number) : undefined);
+    const clipOf = (k = "clip_id") => clipsRef.current.find((c) => c.id === str(k));
+    switch (a.tool) {
+      case "list_assets": {
+        const kind = str("kind"); const cat = str("category"); const q = (str("query") || "").toLowerCase();
+        const hits = agentBin().filter((x) =>
+          (!kind || x.kind === kind) && (!cat || (x.category || "").toLowerCase() === cat.toLowerCase()) &&
+          (!q || (x.label || "").toLowerCase().includes(q) || (x.category || "").toLowerCase().includes(q))).slice(0, 30)
+          .map((x) => ({ id: x.id, kind: x.kind, label: (x.label || "").slice(0, 30), cat: x.category, dur: x.duration ?? undefined }));
+        return JSON.stringify({ assets: hits });
+      }
+      case "semantic_search": {
+        const q = str("query"); if (!q) return "error: query required";
+        const r = await fetch("/api/semantic-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: q, brandId: binBrand || undefined, modality: str("kind"), limit: 12 }) });
+        const j = (await r.json()) as { results?: { assetId: string | null; url: string; modality: string; category: string | null }[]; error?: string };
+        if (!r.ok) return `error: ${j.error || "search failed"}`;
+        const res = (j.results || []).filter((x) => x.url).slice(0, 12).map((x) => ({ url: x.url, kind: x.modality, cat: x.category || undefined }));
+        return JSON.stringify({ results: res });
+      }
+      case "add_clip": {
+        const asset = agentFindAsset(args);
+        if (!asset) return "error: asset not found (use list_assets / semantic_search first)";
+        let layerId = str("layer_id");
+        if (args.new_layer === true || (layerId && !layersRef.current.some((l) => l.id === layerId))) layerId = createLayerAt(0, clipLayerType(asset.kind));
+        const before = new Set(clipsRef.current.map((c) => c.id));
+        addAssetAt({ kind: asset.kind, url: asset.url, label: asset.label, duration: num("duration") ?? asset.duration }, layerId, num("start"));
+        await new Promise((r) => setTimeout(r, 30));
+        const added = clipsRef.current.find((c) => !before.has(c.id));
+        if (added && str("section")) update(added.id, { section: str("section") });
+        return added ? `added clip ${added.id} (${asset.kind} "${(asset.label || "").slice(0, 24)}") at ${added.start.toFixed(2)}s for ${added.duration.toFixed(2)}s` : "added (id unknown)";
+      }
+      case "add_text": {
+        const text = str("text"); if (!text) return "error: text required";
+        let lid = layersRef.current.find((l) => l.type === "text" && !/subtitle/i.test(l.name || ""))?.id;
+        if (!lid) lid = createLayerAt(0, "text");
+        const id = uid();
+        const start = num("start") ?? playheadRef.current;
+        setClips((prev) => [...prev, { id, kind: "text", layer: lid!, label: text.slice(0, 24), start: +start.toFixed(2), duration: num("duration") ?? 3, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: num("y") ?? -0.25, text, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 800 } }]);
+        return `added text clip ${id} ("${text.slice(0, 30)}") at ${start.toFixed(2)}s`;
+      }
+      case "replace_clip": {
+        const c = clipOf(); if (!c) return "error: clip not found";
+        const asset = agentFindAsset(args);
+        if (!asset) return "error: replacement asset not found";
+        const durKnown = asset.duration ?? frameCache.get(asset.url)?.dur;
+        update(c.id, { url: asset.url, inset: 0, ...(durKnown && c.section && c.kind === "video" ? { duration: +durKnown.toFixed(2), autoDur: false } : { autoDur: true }) });
+        return `replaced ${c.id} with "${(asset.label || asset.url).slice(0, 30)}"${c.section ? " (chain re-times)" : ""}`;
+      }
+      case "update_clip": {
+        const c = clipOf(); if (!c) return "error: clip not found";
+        const p = (args.patch || {}) as Record<string, unknown>;
+        const patch: Partial<EditClip> = {};
+        for (const k of ["start", "duration", "inset", "volume", "fadeIn", "fadeOut", "scale", "x", "y", "rot"] as const) {
+          if (typeof p[k] === "number" && isFinite(p[k] as number)) (patch as Record<string, unknown>)[k] = p[k];
+        }
+        if (typeof p.muted === "boolean") patch.muted = p.muted;
+        if (typeof p.text === "string") patch.text = p.text as string;
+        if (typeof p.fit === "string" && ["cover", "contain", "blur"].includes(p.fit as string)) patch.fit = p.fit as EditClip["fit"];
+        if (typeof p.transType === "string") patch.transType = p.transType as EditClip["transType"];
+        if (!Object.keys(patch).length) return "error: empty/unknown patch";
+        update(c.id, patch);
+        return `updated ${c.id}: ${Object.keys(patch).join(", ")}`;
+      }
+      case "split_clip": {
+        const c = clipOf(); const at = num("at");
+        if (!c || at == null) return "error: clip/at required";
+        splitOneAt(c.id, at);
+        return `split ${c.id} at ${at.toFixed(2)}s`;
+      }
+      case "remove_clips": {
+        const ids = Array.isArray(args.clip_ids) ? (args.clip_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        if (!ids.length) return "error: clip_ids required";
+        removeMany(ids);
+        return `removed ${ids.length} clip(s)`;
+      }
+      case "add_keyframes": {
+        const c = clipOf(); if (!c) return "error: clip not found";
+        const raw = Array.isArray(args.keys) ? (args.keys as Record<string, unknown>[]) : [];
+        const keys = raw.filter((k) => typeof k.t === "number").map((k) => ({
+          t: +(k.t as number).toFixed(2),
+          ...(typeof k.x === "number" ? { x: k.x as number } : {}), ...(typeof k.y === "number" ? { y: k.y as number } : {}),
+          ...(typeof k.scale === "number" ? { scale: k.scale as number } : {}), ...(typeof k.rot === "number" ? { rot: k.rot as number } : {}),
+        })).sort((x, y) => x.t - y.t);
+        if (!keys.length) return "error: keys required";
+        update(c.id, { kf: keys });
+        return `set ${keys.length} keyframe(s) on ${c.id}`;
+      }
+      case "new_version": { addVersionFromCurrent(); return "created a new version (now active)"; }
+      case "switch_version": {
+        const i = num("index"); if (i == null) return "error: index required";
+        switchVersion(i);
+        return `switched to v${i + 1}`;
+      }
+      case "generate_versions": {
+        const c = clipOf(); const cat = str("category");
+        if (!c || !cat) return "error: clip_id/category required";
+        const n = generateVersions(c.id, cat);
+        return n ? `generated ${n} version(s) replacing ${c.section ?? c.id} with each "${cat}" asset` : "no new assets in that category";
+      }
+      case "add_subtitles": {
+        const srcId = str("source_clip_id");
+        void generateSubtitles(srcId); // long transcription - runs in background
+        return "subtitles generation started (background, ~1-2 min); captions will land on the Subtitles layer";
+      }
+      case "set_format": {
+        const key = str("key");
+        if (!key || !RESOLUTIONS.some((r) => r.key === key)) return "error: unknown format";
+        switchFormat(key);
+        return `format set to ${key}`;
+      }
+      case "render": {
+        const scope = str("scope") === "all" ? "all" : "current";
+        const fmts = Array.isArray(args.formats) ? (args.formats as unknown[]).filter((x): x is string => typeof x === "string" && RESOLUTIONS.some((r) => r.key === x)) : [];
+        const set = fmts.length ? new Set(fmts) : undefined;
+        if (set) setBatchFormats(set);
+        if (scope === "all") void renderVersions(null, set);
+        else void renderVersions(tlVersionsRef.current.length ? activeVerRef.current : 0, set);
+        return `render started (${scope}${set ? `, formats: ${fmts.join(", ")}` : ""}) - files download when ready`;
+      }
+      case "select": {
+        const ids = Array.isArray(args.clip_ids) ? (args.clip_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        setSelectedIds(ids.filter((id) => clipsRef.current.some((c) => c.id === id)));
+        return `selected ${ids.length} clip(s)`;
+      }
+      case "seek": { const t = num("t"); if (t == null) return "error: t required"; seek(Math.max(0, t)); return `playhead at ${t.toFixed(2)}s`; }
+      default: return `error: unknown tool "${a.tool}"`;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentBin, agentFindAsset, binBrand]);
+
+  // Chat loop: plan -> execute -> (optionally) feed results back, max 4 rounds.
+  const runAgent = useCallback(async (userText: string) => {
+    if (agentBusy) return;
+    setAgentBusy(true);
+    const history: AgentMsg[] = [...agentMsgs, { role: "user", content: userText }];
+    setAgentMsgs(history);
+    try {
+      let msgs = history;
+      for (let round = 0; round < 4; round++) {
+        const r = await fetch("/api/editor-agent", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: msgs.map(({ role, content }) => ({ role, content })), state: buildAgentState() }),
+        });
+        const j = (await r.json()) as { reply?: string; actions?: AgentAction[]; continue?: boolean; error?: string };
+        if (!r.ok) throw new Error(j.error || "agent request failed");
+        const actions = j.actions || [];
+        const chips: AgentChip[] = [];
+        for (const act of actions) {
+          try {
+            const res = await executeAgentAction(act);
+            chips.push({ tool: act.tool, ok: !res.startsWith("error"), result: res });
+          } catch (e) {
+            chips.push({ tool: act.tool, ok: false, result: e instanceof Error ? e.message : "failed" });
+          }
+        }
+        const asstMsg: AgentMsg = { role: "assistant", content: JSON.stringify({ reply: j.reply, actions }), chips };
+        msgs = [...msgs, asstMsg];
+        setAgentMsgs((prev) => [...prev, { ...asstMsg, content: j.reply || "" }]);
+        if (!(j.continue && actions.length) || round === 3) break;
+        await new Promise((res) => setTimeout(res, 120)); // let state effects settle
+        msgs = [...msgs, { role: "tool", content: chips.map((c) => `${c.tool}: ${c.result}`).join("\n") }];
+      }
+    } catch (e) {
+      setAgentMsgs((prev) => [...prev, { role: "assistant", content: `Agent error: ${e instanceof Error ? e.message : "unknown"}` }]);
+    } finally { setAgentBusy(false); }
+  }, [agentBusy, agentMsgs, buildAgentState, executeAgentAction]);
+
   const onClipContext = (e: React.MouseEvent, c: EditClip) => { e.preventDefault(); e.stopPropagation(); if (!selectedRef.current.includes(c.id)) setSelectedIds([c.id]); setMenu({ x: e.clientX, y: e.clientY, id: c.id }); };
 
   // transition applied via the "+" between two adjacent clips (CapCut-style)
@@ -2354,7 +2582,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               </select>
             </label>
             <label className="flex items-center gap-1.5 text-fg-muted"><input type="checkbox" checked={subEmoji} onChange={(e) => setSubEmoji(e.target.checked)} /> Auto emoji ✨</label>
-            <button onClick={generateSubtitles} disabled={subBusy || subSources.length === 0}
+            <button onClick={() => generateSubtitles()} disabled={subBusy || subSources.length === 0}
               className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 rounded-md bg-brand text-white text-[12px] font-medium disabled:opacity-50">
               {subBusy ? <><Loader2 size={14} className="animate-spin" /> Working…</> : <><Sparkles size={14} /> Generate subtitles</>}
             </button>
@@ -2512,6 +2740,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               )}
             </div>
             <div className="relative">
+              <button onClick={() => setAgentOpen((o) => !o)} title="AI agent: tell it what to do with the timeline"
+                className={`px-2 py-1 rounded border text-[11px] inline-flex items-center gap-1 ${agentOpen ? "border-brand text-brand bg-brand/10" : "border-border text-fg-muted hover:text-fg hover:border-brand"}`}>
+                <Sparkles size={12} /> Agent
+              </button>
               <button onClick={() => setVersionsOpen((o) => !o)} title="Variants & batch render"
                 className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand inline-flex items-center gap-1">
                 <Layers size={12} /> Versions
@@ -3251,6 +3483,52 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       })()}
       {marquee && marquee.w > 1 && marquee.h > 1 && (
         <div className="fixed z-50 border border-brand bg-brand/15 pointer-events-none" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
+      )}
+      {agentOpen && (
+        <div className="fixed bottom-4 right-4 z-[70] w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-bg-card shadow-2xl flex flex-col text-[12px]" style={{ maxHeight: "min(560px, 72vh)" }}>
+          <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
+            <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> Editor Agent</span>
+            <div className="flex items-center gap-2">
+              {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="text-fg-subtle hover:text-fg text-[10px] underline decoration-dotted">clear</button>}
+              <button onClick={() => setAgentOpen(false)} className="text-fg-subtle hover:text-fg"><X size={14} /></button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 min-h-[120px]">
+            {agentMsgs.length === 0 && (
+              <div className="text-fg-subtle text-[11px] leading-relaxed py-2">
+                I can operate the whole editor: find footage (semantic search), assemble Hook/Body/Packshot cuts, add text and subtitles, animate with keyframes, manage versions and render. Try:
+                <div className="mt-1.5 space-y-1">
+                  {["Make a version for every hook in the bin", "Find footage about the app UI and build a 15s ad with subtitles", "Add a punchy hook text at the start and fade all clips 0.2s"].map((ex) => (
+                    <button key={ex} onClick={() => { if (!agentBusy) void runAgent(ex); }} className="block w-full text-left px-2 py-1 rounded border border-border/60 text-fg-muted hover:border-brand hover:text-fg">{ex}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {agentMsgs.filter((m) => m.role !== "tool").map((m, i) => (
+              <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
+                <div className={`max-w-[92%] rounded-lg px-2.5 py-1.5 leading-relaxed ${m.role === "user" ? "bg-brand/15 text-fg" : "bg-bg-subtle text-fg"}`}>
+                  <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                  {m.chips && m.chips.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {m.chips.map((ch, k) => (
+                        <span key={k} title={ch.result} className={`px-1.5 py-0.5 rounded text-[9px] border ${ch.ok ? "border-emerald-500/40 text-emerald-500 bg-emerald-500/10" : "border-red-500/40 text-red-400 bg-red-500/10"}`}>{ch.tool}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {agentBusy && <div className="flex items-center gap-2 text-fg-subtle"><span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" /> working{"\u2026"}</div>}
+            <div ref={agentEndRef} />
+          </div>
+          <div className="p-2 border-t border-border shrink-0 flex items-end gap-1.5">
+            <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={2} placeholder={"Tell the agent what to do\u2026"}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if (v && !agentBusy) { setAgentInput(""); void runAgent(v); } } }}
+              className="flex-1 resize-none bg-bg-subtle border border-border rounded-lg px-2 py-1.5 text-fg outline-none focus:border-brand" />
+            <button disabled={agentBusy || !agentInput.trim()} onClick={() => { const v = agentInput.trim(); if (v) { setAgentInput(""); void runAgent(v); } }}
+              className="px-2.5 py-1.5 rounded-lg bg-brand text-black font-medium disabled:opacity-50">Go</button>
+          </div>
+        </div>
       )}
       {replaceFor && (() => {
         const c = clips.find((x) => x.id === replaceFor);
