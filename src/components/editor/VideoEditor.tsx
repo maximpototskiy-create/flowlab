@@ -639,8 +639,6 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   });
   useEffect(() => { try { localStorage.setItem(NAMING_KEY, JSON.stringify(naming)); } catch { /* */ } }, [naming]);
   const [versionsOpen, setVersionsOpen] = useState(false);
-  const [genClip, setGenClip] = useState(""); // versions generator: clip to replace
-  const [genCat, setGenCat] = useState("hook"); // versions generator: bin category
   const [replaceFor, setReplaceFor] = useState<string | null>(null); // clip id being replaced in the active version
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchFormats, setBatchFormats] = useState<Set<string>>(() => new Set(["9:16"]));
@@ -654,6 +652,17 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [clipDragging, setClipDragging] = useState(false); // a timeline clip is being moved
   const [railTab, setRailTab] = useState<"media" | "brand" | "audio" | "text" | "subs" | "effects" | "filters">("media");
   const [assetsSub, setAssetsSub] = useState<"gen" | "brand">("gen"); // Assets tab: Generated | Brand library
+  // Any click outside a [data-pop] container closes the header popovers.
+  useEffect(() => {
+    const h = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && t.closest("[data-pop]")) return;
+      setVersionsOpen(false);
+      setNamingOpen(false);
+    };
+    document.addEventListener("pointerdown", h, true);
+    return () => document.removeEventListener("pointerdown", h, true);
+  }, []);
   const [brandLib, setBrandLib] = useState<EditorAsset[]>([]);
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
@@ -1798,6 +1807,36 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     return additions.length;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Alternates among the canvas assets = every non-first asset of each section.
+  const canvasVariantCount = useCallback((): number => {
+    const counts = new Map<string, number>();
+    for (const a of canvasAssets) {
+      const sec = (a.category || "").toLowerCase();
+      if (!["hook", "body", "packshot", "cta"].includes(sec)) continue;
+      counts.set(sec, (counts.get(sec) || 0) + 1);
+    }
+    let combos = 1;
+    for (const n of counts.values()) combos *= n;
+    return Math.min(12, Math.max(0, combos - 1));
+  }, [canvasAssets]);
+  // One-button flow: make sure the base chain exists, then build a version
+  // per combination of the canvas variants.
+  const versionsFromCanvas = useCallback(() => {
+    const pool = canvasAssets;
+    assembleFromCanvas(pool);
+    const seen = new Set<string>();
+    const alts = pool.filter((a) => {
+      const sec = (a.category || "").toLowerCase();
+      if (!["hook", "body", "packshot", "cta"].includes(sec)) return false;
+      if (!seen.has(sec)) { seen.add(sec); return false; }
+      return true;
+    });
+    setTimeout(() => {
+      const n = buildComboVersions(alts);
+      flashStatus(n ? `${n} version${n === 1 ? "" : "s"} created \u2014 switch with the tabs under the player.` : "No canvas variants to build versions from.", 6000);
+    }, 80);
+  }, [canvasAssets, assembleFromCanvas, buildComboVersions, flashStatus]);
   const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
   // Human-readable label for an asset URL (bin label, else the file name).
   const urlLabel = useCallback((u?: string) => {
@@ -2922,18 +2961,18 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           <div className="flex items-center gap-2">
             {workflowId && projectId && (
               <a href={`/projects/${projectId}/workflows/${workflowId}`} title="Back to the node canvas of this project"
-                className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">← Canvas</a>
+                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">← Canvas</a>
             )}
             <span className="text-[10px] text-fg-subtle w-12 text-right">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : ""}</span>
-            <button onClick={saveProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">Save</button>
-            <button onClick={newProject} className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand">New</button>
+            <button onClick={saveProject} className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">Save</button>
+            <button onClick={newProject} className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">New</button>
             <span className="w-px h-5 bg-border mx-1" aria-hidden />
-            <select value={resKey} onChange={(e) => switchFormat(e.target.value)} className="bg-bg-card border border-border rounded-md px-2 py-1 text-[11px] text-fg-muted outline-none">
+            <select value={resKey} onChange={(e) => switchFormat(e.target.value)} className="h-7 bg-bg-card border border-border rounded-md px-2 text-[11px] text-fg-muted outline-none">
               {RESOLUTIONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
-            <div className="relative">
+            <div className="relative" data-pop>
               <button onClick={() => setNamingOpen((o) => !o)} title="Export file name"
-                className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand inline-flex items-center gap-1">
+                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">
                 <Tag size={12} /> Name
               </button>
               {namingOpen && (
@@ -2974,21 +3013,19 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 </div>
               )}
             </div>
-            <div className="relative">
+            <div className="relative" data-pop>
               <span className="w-px h-5 bg-border mx-1 inline-block align-middle" aria-hidden />
               <button onClick={() => setAgentOpen((o) => !o)} title="AI agent: tell it what to do with the timeline"
-                className={`px-2.5 py-1 rounded-md border text-[11px] font-medium inline-flex items-center gap-1.5 ${agentOpen ? "border-brand text-black bg-brand shadow" : "border-brand/60 text-brand bg-brand/10 hover:bg-brand/20"}`}>
+                className={`h-7 px-2.5 rounded-md border text-[11px] font-medium inline-flex items-center gap-1.5 ${agentOpen ? "border-brand text-black bg-brand shadow" : "border-brand/60 text-brand bg-brand/10 hover:bg-brand/20"}`}>
                 <Sparkles size={13} /> Agent
               </button>
               <button onClick={() => setVersionsOpen((o) => !o)} title="Variants & batch render"
-                className="px-2 py-1 rounded border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand inline-flex items-center gap-1">
+                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">
                 <Layers size={12} /> Versions
               </button>
               <span className="w-px h-5 bg-border mx-1 inline-block align-middle" aria-hidden />
               {versionsOpen && (() => {
                 const allVers: TLSnapshot[] = tlVersions.length ? tlVersions : [{ id: "cur", name: "", clips, layers }];
-                const replaceable = clips.filter((c) => (c.kind === "video" || c.kind === "image") && c.url).sort((a, b) => a.start - b.start);
-                const cats = Array.from(new Set(brandLib.map((a) => a.category).filter(Boolean))) as string[];
                 const fmtsChecked = RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length;
                 const total = allVers.length * fmtsChecked;
                 const exFmt = RESOLUTIONS.find((r) => batchFormats.has(r.key))?.key;
@@ -3017,22 +3054,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                     <button onClick={addVersionFromCurrent}
                       className="mb-3 px-2 py-1 rounded border border-dashed border-border text-fg-subtle hover:text-brand hover:border-brand inline-flex items-center gap-1"><Plus size={11} /> New version (snapshot of the current timeline)</button>
 
-                    {replaceable.length > 0 && brandLib.length > 0 && (
-                      <div className="mb-3 rounded-md border border-border bg-bg-subtle/40 px-2 py-2">
-                        <div className="text-fg mb-1">Generate versions from the bin</div>
-                        <div className="text-[10px] text-fg-subtle mb-1.5">One new version per asset, replacing the chosen clip in a copy of the current timeline:</div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <select value={genClip} onChange={(e) => setGenClip(e.target.value)} className="bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand max-w-[150px]">
-                            {replaceable.map((c) => <option key={c.id} value={c.id}>{c.section ?? clipLabel(c)}</option>)}
-                          </select>
-                          <select value={genCat} onChange={(e) => setGenCat(e.target.value)} className="bg-bg-subtle border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand">
-                            {cats.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
-                            <option value="all">any asset</option>
-                          </select>
-                          <button onClick={() => { const cid = genClip || replaceable[0]?.id; if (!cid) return; const n = generateVersions(cid, genCat); setStatus(n ? `${n} version${n === 1 ? "" : "s"} generated.` : "Nothing new to add from that category."); }}
-                            className="px-2 py-1 rounded bg-brand text-black font-medium">Generate</button>
-                        </div>
-                      </div>
+                    {canvasVariantCount() > 0 && (
+                      <button onClick={() => { setVersionsOpen(false); versionsFromCanvas(); }}
+                        className="mb-3 w-full py-1.5 rounded-md border border-brand text-brand font-medium hover:bg-brand/10 inline-flex items-center justify-center gap-1.5">
+                        <Clapperboard size={12} /> Create {canvasVariantCount()} version{canvasVariantCount() === 1 ? "" : "s"} from canvas variants
+                      </button>
                     )}
 
                     <div className="mt-1 mb-1.5 text-fg">Formats to render:</div>
@@ -3061,9 +3087,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{exporting ? `${progress}%` : "Export MP4"}
             </button>
             {workflowId && (
-              <button onClick={exportToCanvas} disabled={sendingToCanvas || exporting || !clips.length} title="Render and set as the Editor node's output on the canvas"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand disabled:opacity-50">
-                {sendingToCanvas ? <Loader2 size={13} className="animate-spin" /> : null}{sendingToCanvas ? `${progress}%` : "→ Canvas"}
+              <button onClick={exportToCanvas} disabled={sendingToCanvas || exporting || !clips.length} title="Render the timeline and set it as the Editor node's OUTPUT on the canvas (not navigation)"
+                className="h-7 inline-flex items-center gap-1.5 px-2.5 rounded-md border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand disabled:opacity-50">
+                {sendingToCanvas ? <Loader2 size={13} className="animate-spin" /> : null}{sendingToCanvas ? `${progress}%` : "Send to canvas"}
               </button>
             )}
           </div>
@@ -3096,7 +3122,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 <button onClick={() => { const n = assembleFromCanvas(altNotice); setAltNotice(null); flashStatus(n ? `Assembled ${n} section clip${n === 1 ? "" : "s"} on the timeline.` : "Sections are already on the timeline.", 5000); }}
                   className="px-2.5 py-1 rounded-md bg-brand text-black font-medium shrink-0">Assemble timeline</button>
                 {combos > 0 && (
-                  <button onClick={() => { assembleFromCanvas(altNotice); setAltNotice(null); setTimeout(() => { const n = buildComboVersions(alts); if (n) flashStatus(`${n} version${n === 1 ? "" : "s"} created \u2014 switch with the tabs under the player.`, 6000); }, 80); }}
+                  <button onClick={() => { setAltNotice(null); versionsFromCanvas(); }}
                     className="px-2.5 py-1 rounded-md border border-brand text-brand font-medium shrink-0 hover:bg-brand/10">+ {combos} version{combos === 1 ? "" : "s"}</button>
                 )}
                 <button onClick={() => setAltNotice(null)} className="text-fg-subtle hover:text-fg shrink-0"><X size={13} /></button>

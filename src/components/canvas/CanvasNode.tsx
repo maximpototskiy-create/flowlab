@@ -633,7 +633,7 @@ function CanvasNodeImpl({
                 Send tracks to editor
               </span>
             )}
-            <a href={editorHref} target="_blank" rel="noreferrer" draggable={false}
+            <a href={editorHref} draggable={false}
               onPointerDown={(e) => { e.stopPropagation(); composerDownRef.current = { x: e.clientX, y: e.clientY }; }}
               onClick={(e) => {
                 e.stopPropagation();
