@@ -112,7 +112,8 @@ export const LLM_MODELS = [
   // ─── Anthropic ──────────────────────────────────────────────────────
   // All confirmed working: each replies "I am Claude by Anthropic".
   // Opus is text-only (not in Vision dropdown); Sonnet does both.
-  { id: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6 (text only) ⭐", vision: false },
+  { id: "anthropic/claude-opus-4.7", label: "Claude Opus 4.7 (text only) ⭐", vision: false },
+  { id: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6 (text only)", vision: false },
   { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6", vision: true },
   { id: "anthropic/claude-sonnet-4.5", label: "Claude Sonnet 4.5", vision: true },
   // ─── OpenAI ─────────────────────────────────────────────────────────

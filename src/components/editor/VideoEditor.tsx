@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
+import { LLM_MODELS } from "@/lib/canvas/types";
 import type { TextStyle, CapWord } from "@/lib/editor/exportVideo";
 import { drawCaption, kfState, type ExportClip } from "@/lib/editor/exportVideo";
 import {
@@ -2056,7 +2057,23 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   type AgentChip = { tool: string; ok: boolean; result: string };
   type AgentMsg = { role: "user" | "assistant" | "tool"; content: string; chips?: AgentChip[] };
   const [agentOpen, setAgentOpen] = useState(false);
-  const [agentMsgs, setAgentMsgs] = useState<AgentMsg[]>([]);
+  const [agentMsgs, setAgentMsgs] = useState<AgentMsg[]>(() => {
+    try {
+      const raw = localStorage.getItem(`${PROJECT_KEY}:agentchat`);
+      const j = raw ? (JSON.parse(raw) as AgentMsg[]) : [];
+      return Array.isArray(j) ? j.slice(-60) : [];
+    } catch { return []; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(`${PROJECT_KEY}:agentchat`, JSON.stringify(agentMsgs.slice(-60))); } catch { /* quota */ }
+  }, [agentMsgs]);
+  const [agentModel, setAgentModel] = useState<string>(() => {
+    try { const m = localStorage.getItem("flowlab.agent.model"); if (m && LLM_MODELS.some((x) => x.id === m)) return m; } catch { /* */ }
+    return "anthropic/claude-sonnet-4.6";
+  });
+  useEffect(() => { try { localStorage.setItem("flowlab.agent.model", agentModel); } catch { /* */ } }, [agentModel]);
+  // urls that arrived as props = material wired from the canvas into this editor node
+  const canvasUrlsRef = useRef<Set<string>>(new Set(assets.map((a) => a.url)));
   const [agentInput, setAgentInput] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
   const agentEndRef = useRef<HTMLDivElement | null>(null);
@@ -2073,6 +2090,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   }, [library, brandLib]);
 
   // Compact editor snapshot for the model (kept small on purpose).
+  const assetSrc = useCallback((a: EditorAsset): "canvas" | "generated" | "brand" => {
+    if (canvasUrlsRef.current.has(a.url)) return "canvas";
+    if (brandLib.some((b) => b.url === a.url)) return "brand";
+    return "generated";
+  }, [brandLib]);
   const buildAgentState = useCallback((): string => {
     const cl = clipsRef.current.map((c) => ({
       id: c.id, kind: c.kind, label: clipLabel(c).slice(0, 28), section: c.section,
@@ -2080,7 +2102,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       ...(c.kf?.length ? { keys: c.kf.length } : {}), ...(c.muted ? { muted: true } : {}),
     }));
     const ly = layersRef.current.map((l) => ({ id: l.id, type: l.type, ...(l.name ? { name: l.name } : {}), ...(l.hidden ? { hidden: true } : {}) }));
-    const bin = agentBin().slice(0, 80).map((a) => ({ id: a.id, kind: a.kind, label: (a.label || "").slice(0, 30), ...(a.category ? { cat: a.category } : {}), ...(a.duration ? { dur: +a.duration.toFixed(1) } : {}) }));
+    const bin = agentBin().slice(0, 80).map((a) => ({ id: a.id, kind: a.kind, label: (a.label || "").slice(0, 30), src: assetSrc(a), ...(a.category ? { cat: a.category } : {}), ...(a.duration ? { dur: +a.duration.toFixed(1) } : {}) }));
     const cats = Array.from(new Set(brandLib.map((a) => a.category).filter(Boolean)));
     return JSON.stringify({
       format: resKey, timelineDur: +endOf(clipsRef.current).toFixed(2), playhead: +playheadRef.current.toFixed(2),
@@ -2088,7 +2110,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       versions: { count: tlVersionsRef.current.length || 1, active: tlVersionsRef.current.length ? activeVerRef.current : 0 },
       selection: selectedRef.current, binCategories: cats, bin,
     });
-  }, [clipLabel, agentBin, brandLib, resKey]);
+  }, [clipLabel, agentBin, brandLib, resKey, assetSrc]);
 
   const agentFindAsset = useCallback((args: Record<string, unknown>): EditorAsset | null => {
     const id = typeof args.asset_id === "string" ? args.asset_id : null;
@@ -2112,11 +2134,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const clipOf = (k = "clip_id") => clipsRef.current.find((c) => c.id === str(k));
     switch (a.tool) {
       case "list_assets": {
-        const kind = str("kind"); const cat = str("category"); const q = (str("query") || "").toLowerCase();
+        const kind = str("kind"); const cat = str("category"); const q = (str("query") || "").toLowerCase(); const src = str("source");
         const hits = agentBin().filter((x) =>
           (!kind || x.kind === kind) && (!cat || (x.category || "").toLowerCase() === cat.toLowerCase()) &&
+          (!src || assetSrc(x) === src) &&
           (!q || (x.label || "").toLowerCase().includes(q) || (x.category || "").toLowerCase().includes(q))).slice(0, 30)
-          .map((x) => ({ id: x.id, kind: x.kind, label: (x.label || "").slice(0, 30), cat: x.category, dur: x.duration ?? undefined }));
+          .map((x) => ({ id: x.id, kind: x.kind, label: (x.label || "").slice(0, 30), src: assetSrc(x), cat: x.category, dur: x.duration ?? undefined }));
         return JSON.stringify({ assets: hits });
       }
       case "semantic_search": {
@@ -2236,7 +2259,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       default: return `error: unknown tool "${a.tool}"`;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentBin, agentFindAsset, binBrand]);
+  }, [agentBin, agentFindAsset, binBrand, assetSrc]);
 
   // Chat loop: plan -> execute -> (optionally) feed results back, max 4 rounds.
   const runAgent = useCallback(async (userText: string) => {
@@ -2249,7 +2272,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       for (let round = 0; round < 4; round++) {
         const r = await fetch("/api/editor-agent", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: msgs.map(({ role, content }) => ({ role, content })), state: buildAgentState() }),
+          body: JSON.stringify({ messages: msgs.map(({ role, content }) => ({ role, content })), state: buildAgentState(), model: agentModel }),
         });
         const j = (await r.json()) as { reply?: string; actions?: AgentAction[]; continue?: boolean; error?: string };
         if (!r.ok) throw new Error(j.error || "agent request failed");
@@ -2273,7 +2296,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     } catch (e) {
       setAgentMsgs((prev) => [...prev, { role: "assistant", content: `Agent error: ${e instanceof Error ? e.message : "unknown"}` }]);
     } finally { setAgentBusy(false); }
-  }, [agentBusy, agentMsgs, buildAgentState, executeAgentAction]);
+  }, [agentBusy, agentMsgs, buildAgentState, executeAgentAction, agentModel]);
 
   const onClipContext = (e: React.MouseEvent, c: EditClip) => { e.preventDefault(); e.stopPropagation(); if (!selectedRef.current.includes(c.id)) setSelectedIds([c.id]); setMenu({ x: e.clientX, y: e.clientY, id: c.id }); };
 
@@ -3487,7 +3510,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       {agentOpen && (
         <div className="fixed bottom-4 right-4 z-[70] w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-bg-card shadow-2xl flex flex-col text-[12px]" style={{ maxHeight: "min(560px, 72vh)" }}>
           <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
-            <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> Editor Agent</span>
+            <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> Agent</span>
+            <select value={agentModel} onChange={(e) => setAgentModel(e.target.value)} title="Model that plans the actions (GPT/Gemini use your direct API keys)"
+              className="max-w-[150px] bg-bg-subtle border border-border rounded px-1.5 py-0.5 text-[10px] text-fg-muted outline-none focus:border-brand">
+              {LLM_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label.replace(" (text only)", "")}</option>)}
+            </select>
             <div className="flex items-center gap-2">
               {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="text-fg-subtle hover:text-fg text-[10px] underline decoration-dotted">clear</button>}
               <button onClick={() => setAgentOpen(false)} className="text-fg-subtle hover:text-fg"><X size={14} /></button>
@@ -3508,12 +3535,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
                 <div className={`max-w-[92%] rounded-lg px-2.5 py-1.5 leading-relaxed ${m.role === "user" ? "bg-brand/15 text-fg" : "bg-bg-subtle text-fg"}`}>
                   <div className="whitespace-pre-wrap break-words">{m.content}</div>
-                  {m.chips && m.chips.length > 0 && (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {m.chips.map((ch, k) => (
-                        <span key={k} title={ch.result} className={`px-1.5 py-0.5 rounded text-[9px] border ${ch.ok ? "border-emerald-500/40 text-emerald-500 bg-emerald-500/10" : "border-red-500/40 text-red-400 bg-red-500/10"}`}>{ch.tool}</span>
-                      ))}
-                    </div>
+                  {m.chips && m.chips.some((ch) => !ch.ok) && (
+                    <div className="mt-1 text-[10px] text-red-400/90">{m.chips.filter((ch) => !ch.ok).map((ch) => `${ch.tool}: ${ch.result}`).join("; ")}</div>
                   )}
                 </div>
               </div>

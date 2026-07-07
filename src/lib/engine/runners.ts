@@ -16,7 +16,7 @@ import { isDirectLLM } from "@/lib/canvas/types";
 // Route first-party OpenAI/Gemini node models through the user's own keys
 // (direct API); everything else (Anthropic, OSS, etc.) stays on fal's LLM
 // endpoint. Same signature as falLLM so call sites just swap the name.
-async function llmCall(
+export async function llmCall(
   prompt: string,
   model: string,
   temperature: number,
