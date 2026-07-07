@@ -1447,9 +1447,19 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   // supports real gain. Wired lazily inside a user-gesture-driven loop.
   const boostCtxRef = useRef<AudioContext | null>(null);
   const boostGainsRef = useRef<Map<HTMLMediaElement, GainNode>>(new Map());
+  // If a source has no CORS headers, a crossOrigin element errors out - drop
+  // the attribute and reload so it still plays (volume then clamps to 100%).
+  const dropCors = (e: React.SyntheticEvent<HTMLMediaElement>) => {
+    const el = e.currentTarget;
+    if (el.getAttribute("crossorigin") != null && el.error) { el.removeAttribute("crossorigin"); el.load(); }
+  };
   const applyVolume = useCallback((el: HTMLMediaElement, vol: number) => {
     const wired = boostGainsRef.current.get(el);
     if (!wired && vol <= 1) { try { el.volume = Math.max(0, vol); } catch { /* */ } return; }
+    // A media element WITHOUT proper CORS turns permanently SILENT once piped
+    // through WebAudio (tainted). Only boost CORS-enabled elements; otherwise
+    // clamp to the native 0..1 range.
+    if (!wired && el.crossOrigin !== "anonymous") { try { el.volume = Math.max(0, Math.min(1, vol)); } catch { /* */ } return; }
     try {
       let ctx = boostCtxRef.current;
       if (!ctx) {
@@ -2999,23 +3009,23 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 gap-2">
-          <div className="flex items-center gap-2 text-fg text-[13px] font-medium"><Clapperboard size={14} className="text-brand" /> Editor</div>
-          <div className="flex items-center gap-2">
+        <div className="h-11 shrink-0 border-b border-border flex items-center justify-between px-3 gap-2 overflow-x-auto overflow-y-hidden">
+          <div className="flex items-center gap-2 text-fg text-[13px] font-medium whitespace-nowrap shrink-0"><Clapperboard size={14} className="text-brand" /> Editor</div>
+          <div className="flex items-center gap-2 flex-nowrap">
             {workflowId && projectId && (
               <a href={`/projects/${projectId}/workflows/${workflowId}`} title="Back to the node canvas of this project"
-                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">← Canvas</a>
+                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 border-border text-fg-muted hover:text-fg hover:border-brand">← Canvas</a>
             )}
-            <span className="text-[10px] text-fg-subtle w-12 text-right">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : ""}</span>
-            <button onClick={saveProject} className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">Save</button>
-            <button onClick={newProject} className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">New</button>
-            <span className="w-px h-5 bg-border mx-1" aria-hidden />
-            <select value={resKey} onChange={(e) => switchFormat(e.target.value)} className="h-7 bg-bg-card border border-border rounded-md px-2 text-[11px] text-fg-muted outline-none">
+            <span className="text-[10px] text-fg-subtle w-12 text-right shrink-0 whitespace-nowrap">{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : ""}</span>
+            <button onClick={saveProject} className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 border-border text-fg-muted hover:text-fg hover:border-brand">Save</button>
+            <button onClick={newProject} className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 border-border text-fg-muted hover:text-fg hover:border-brand">New</button>
+            <span className="w-px h-5 bg-border mx-1 shrink-0" aria-hidden />
+            <select value={resKey} onChange={(e) => switchFormat(e.target.value)} className="h-7 shrink-0 bg-bg-card border border-border rounded-md px-2 text-[11px] text-fg-muted outline-none">
               {RESOLUTIONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
-            <div className="relative" data-pop>
+            <div className="relative shrink-0" data-pop>
               <button onClick={() => setNamingOpen((o) => !o)} title="Export file name"
-                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">
+                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 border-border text-fg-muted hover:text-fg hover:border-brand">
                 <Tag size={12} /> Name
               </button>
               {namingOpen && (
@@ -3056,17 +3066,17 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 </div>
               )}
             </div>
-            <div className="relative" data-pop>
-              <span className="w-px h-5 bg-border mx-1 inline-block align-middle" aria-hidden />
+            <div className="relative shrink-0 flex items-center gap-2" data-pop>
+              <span className="w-px h-5 bg-border shrink-0" aria-hidden />
               <button onClick={() => setAgentOpen((o) => !o)} title="AI agent: tell it what to do with the timeline"
-                className={`h-7 px-2.5 rounded-md border text-[11px] font-medium inline-flex items-center gap-1.5 ${agentOpen ? "border-brand text-black bg-brand shadow" : "border-brand/60 text-brand bg-brand/10 hover:bg-brand/20"}`}>
+                className={`h-7 px-2.5 rounded-md border text-[11px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${agentOpen ? "border-brand text-black bg-brand shadow" : "border-brand/60 text-brand bg-brand/10 hover:bg-brand/20"}`}>
                 <Sparkles size={13} /> Agent
               </button>
               <button onClick={() => setVersionsOpen((o) => !o)} title="Variants & batch render"
-                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 border-border text-fg-muted hover:text-fg hover:border-brand">
+                className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 border-border text-fg-muted hover:text-fg hover:border-brand">
                 <Layers size={12} /> Versions
               </button>
-              <span className="w-px h-5 bg-border mx-1 inline-block align-middle" aria-hidden />
+              <span className="w-px h-5 bg-border shrink-0" aria-hidden />
               {versionsOpen && (() => {
                 const allVers: TLSnapshot[] = tlVersions.length ? tlVersions : [{ id: "cur", name: "", clips, layers }];
                 const fmtsChecked = RESOLUTIONS.filter((r) => batchFormats.has(r.key)).length;
@@ -3126,12 +3136,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 );
               })()}
             </div>
-            <button onClick={exportMp4} disabled={exporting || !clips.length} className="px-3 py-1.5 rounded-md bg-brand text-black font-medium text-[12px] disabled:opacity-50 inline-flex items-center gap-1.5">
+            <button onClick={exportMp4} disabled={exporting || !clips.length} className="h-7 px-3 rounded-md bg-brand text-black font-medium text-[11px] disabled:opacity-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0">
               {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}{exporting ? `${progress}%` : "Export MP4"}
             </button>
             {workflowId && (
               <button onClick={exportToCanvas} disabled={sendingToCanvas || exporting || !clips.length} title="Render the timeline and set it as the Editor node's OUTPUT on the canvas (not navigation)"
-                className="h-7 inline-flex items-center gap-1.5 px-2.5 rounded-md border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand disabled:opacity-50">
+                className="h-7 inline-flex items-center gap-1.5 px-2.5 rounded-md border border-border text-[11px] text-fg-muted hover:text-fg hover:border-brand whitespace-nowrap shrink-0 disabled:opacity-50">
                 {sendingToCanvas ? <Loader2 size={13} className="animate-spin" /> : null}{sendingToCanvas ? `${progress}%` : "Send to canvas"}
               </button>
             )}
@@ -3264,7 +3274,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                               className="absolute inset-0 w-full h-full object-cover pointer-events-none" style={{ filter: "blur(22px)", transform: "scale(1.08)" }} />
                           )}
                           {c.kind === "video" && !c.keyColor && (
-                            <video src={near || c.autoDur ? c.url : undefined} playsInline preload={active ? "auto" : "metadata"} onLoadedMetadata={(e) => { onMeta(c.id, e.currentTarget.duration); noteClipDims(c.id, e.currentTarget.videoWidth, e.currentTarget.videoHeight); }} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
+                            <video src={near || c.autoDur ? c.url : undefined} crossOrigin="anonymous" onError={dropCors} playsInline preload={active ? "auto" : "metadata"} onLoadedMetadata={(e) => { onMeta(c.id, e.currentTarget.duration); noteClipDims(c.id, e.currentTarget.videoWidth, e.currentTarget.videoHeight); }} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }}
                               className={`absolute inset-0 w-full h-full ${boxStyle ? "object-fill" : objFit} pointer-events-none`} />
                           )}
                           {c.kind === "video" && c.keyColor && (
@@ -3309,7 +3319,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 </div>
               </div>
               {viewClips.filter((c) => c.kind === "audio").map((c) => (
-                <audio key={c.id} src={c.url} preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }} />
+                <audio key={c.id} src={c.url} crossOrigin="anonymous" onError={dropCors} preload="metadata" onLoadedMetadata={(e) => onMeta(c.id, e.currentTarget.duration)} ref={(el) => { if (el) mediaRefs.current.set(c.id, el); else mediaRefs.current.delete(c.id); }} />
               ))}
             </div>
           ) : (<div className="text-fg-subtle text-[12px]">Add or drag assets from the left to start.</div>)}
