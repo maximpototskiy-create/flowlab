@@ -2138,6 +2138,30 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
+  // Auto-keyframing when transforming in the viewport:
+  //  - on transform START, if the clip has NO keyframes yet, drop the FIRST
+  //    (baseline) keyframe at t=0 capturing the pose BEFORE the drag, so the
+  //    animation runs from the original pose (no jump);
+  //  - on transform END, write/update a keyframe at the current playhead with
+  //    the resulting transform.
+  const kfSeedBaseline = (c: EditClip) => {
+    if (c.kind !== "video" && c.kind !== "image" && c.kind !== "shape") return;
+    if (c.kf && c.kf.length) return; // already animated - leave as is
+    const base = { t: 0, x: c.x ?? 0, y: c.y ?? 0, scale: c.scale ?? 1, rot: c.rot ?? 0 };
+    update(c.id, { kf: [base] });
+  };
+  const kfWriteAtPlayhead = (id: string) => {
+    setClips((prev) => prev.map((cc) => {
+      if (cc.id !== id) return cc;
+      if (cc.kind !== "video" && cc.kind !== "image" && cc.kind !== "shape") return cc;
+      const local = +(Math.min(Math.max(playheadRef.current - cc.start, 0), cc.duration)).toFixed(2);
+      const existing = cc.kf && cc.kf.length ? cc.kf : [{ t: 0, x: cc.x ?? 0, y: cc.y ?? 0, scale: cc.scale ?? 1, rot: cc.rot ?? 0 }];
+      const key = { t: local, x: cc.x ?? 0, y: cc.y ?? 0, scale: cc.scale ?? 1, rot: cc.rot ?? 0 };
+      const kf = [...existing.filter((k) => Math.abs(k.t - local) >= 0.03), key].sort((a, b) => a.t - b.t);
+      return { ...cc, kf };
+    }));
+  };
+
   const onVpDown = (e: React.PointerEvent, c: EditClip, mode: "move" | "scale" | "rotate") => {
     if (e.button === 1) return; // middle button → let the viewport pan
     e.stopPropagation();
@@ -2155,6 +2179,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const cy0 = box ? box.top + box.height / 2 : e.clientY;
     const angleAt = (px: number, py: number) => (Math.atan2(py - cy0, px - cx0) * 180) / Math.PI;
     const a0 = angleAt(e.clientX, e.clientY);
+    // seed the baseline (first) keyframe for every clip about to be transformed
+    for (const id of groupIds) { const cc = clipsRef.current.find((x) => x.id === id); if (cc) kfSeedBaseline(cc); }
     const move = (ev: PointerEvent) => {
       const z = viewZoomRef.current || 1; const dxr = (ev.clientX - s.sx) / z, dyr = (ev.clientY - s.sy) / z;
       if (mode === "rotate") {
@@ -2180,7 +2206,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         update(c.id, { scale: Math.min(8, Math.max(0.05, ns)) });
       }
     };
-    const up = () => { setSnap({ v: false, h: false }); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    const up = () => {
+      setSnap({ v: false, h: false });
+      // commit a keyframe at the playhead capturing the new transform
+      for (const id of groupIds) kfWriteAtPlayhead(id);
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
   const resetTransform = (id: string) => update(id, { x: 0, y: 0, scale: 1, rot: 0 });
