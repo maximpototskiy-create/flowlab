@@ -46,6 +46,9 @@ const SYSTEM_PROMPT = `You are the FlowLab Canvas Agent - an expert AI producer 
 7. Destructive asks (delete many nodes, rewire everything) - confirm in "reply" with no actions first.
 8. CHAT LANGUAGE: mirror the user - detect the language of THEIR messages and reply in it for the whole session. Prompts you write INTO generator configs should be in English unless the user dictates otherwise.
 
+## VISION
+When the user attaches images, they are provided to you directly as image inputs - look at them and use what you see (describe the reference, match its style, place the logo, etc.). Attached videos/audio are given as URLs (you cannot watch them here - for a video reference, build/point to a Video Analysis node).
+
 ## OUTPUT FORMAT - ABSOLUTE RULE
 Respond with ONE JSON object and NOTHING else. No markdown fences, no prose outside JSON:
 { "reply": "message to the user in their language", "actions": [ { "tool": "...", "args": { ... } } ], "continue": false }
@@ -66,7 +69,7 @@ function extractJson(text: string): { reply?: string; actions?: { tool: string; 
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { messages?: ChatMsg[]; state?: string; model?: string };
+    const body = (await req.json()) as { messages?: ChatMsg[]; state?: string; model?: string; images?: string[] };
     const messages = (body.messages || []).slice(-24);
     const state = (body.state || "").slice(0, 14000);
     if (!messages.length) return NextResponse.json({ error: "messages required" }, { status: 400 });
@@ -76,8 +79,12 @@ export async function POST(req: NextRequest) {
       .join("\n\n");
     const prompt = `CURRENT CANVAS STATE:\n${state}\n\n---\nCONVERSATION:\n${convo}\n\n---\nRespond now with the single JSON object (reply / actions / continue).`;
 
-    const model = body.model && LLM_MODELS.some((m) => m.id === body.model) ? body.model : "anthropic/claude-sonnet-4.6";
-    const raw = await llmCall(prompt, model, 0.2, [], SYSTEM_PROMPT);
+    let model = body.model && LLM_MODELS.some((m) => m.id === body.model) ? body.model : "anthropic/claude-sonnet-4.6";
+    const images = Array.isArray(body.images) ? body.images.filter((u) => typeof u === "string" && u.startsWith("http")).slice(0, 6) : [];
+    // If the user attached images but picked a text-only model, fall back to a
+    // vision-capable default so the model can actually SEE them.
+    if (images.length && !LLM_MODELS.find((m) => m.id === model)?.vision) model = "anthropic/claude-sonnet-4.6";
+    const raw = await llmCall(prompt, model, 0.2, images, SYSTEM_PROMPT);
     const parsed = extractJson(raw);
     if (!parsed || typeof parsed.reply !== "string") {
       return NextResponse.json({ reply: raw.slice(0, 1200), actions: [], continue: false });

@@ -61,6 +61,9 @@ Return them in "actions"; they run in order. Args must match exactly.
 10. TEXT PLACEMENT & SAFE ZONES (critical for 9:16 TikTok/Reels): never cover the subject (face, phone screen, product - usually the centre). Put hooks in the upper third (y around -0.25 ... -0.18) and CTAs in the lower-middle (y around 0.08 ... 0.15). NEVER place text at y > 0.18 (bottom ~25% is TikTok UI: captions, buttons) or y < -0.32 (top bar). Keep x = 0 (centered). For 16:9 the safe band is wider (y -0.35 ... 0.3).
 11. ASSET SOURCES: every bin asset has "src": "canvas" (came from the canvas workflow wired into THIS editor node - the user's freshly generated material), "generated" (other generations in the project) or "brand" (brand library). When the user says "из канваса", "то что нагенерили", "connected to the editor" - use ONLY src:"canvas" assets (list_assets { source: "canvas" }). When they want brand footage - src:"brand". Canvas assets appear after the user presses "Send to editor" on the canvas Editor node; they land in the MEDIA PANEL grouped by section (nothing is placed on the timeline automatically). To build a cut from them: add_clip each section's asset in Hook -> Body -> Packshot order (one shared layer, pass section), or the user can press "Assemble timeline" themselves. If list_assets{source:"canvas"} is empty, say exactly that: material must be sent from the canvas node first (or offer generated/brand assets instead).
 
+## VISION
+When the user attaches images, they are provided to you directly as image inputs - look at them and use what you see (describe the reference, match its style, place the logo, etc.). Attached videos/audio are given as URLs (you cannot watch them here - for a video reference, build/point to a Video Analysis node).
+
 ## OUTPUT FORMAT - ABSOLUTE RULE
 Respond with ONE JSON object and NOTHING else. No markdown fences, no prose outside JSON:
 { "reply": "message to the user in their language", "actions": [ { "tool": "...", "args": { ... } } ], "continue": false }
@@ -81,7 +84,7 @@ function extractJson(text: string): { reply?: string; actions?: { tool: string; 
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { messages?: ChatMsg[]; state?: string; model?: string };
+    const body = (await req.json()) as { messages?: ChatMsg[]; state?: string; model?: string; images?: string[] };
     const messages = (body.messages || []).slice(-24); // keep the prompt bounded
     const state = (body.state || "").slice(0, 14000);
     if (!messages.length) return NextResponse.json({ error: "messages required" }, { status: 400 });
@@ -92,8 +95,12 @@ export async function POST(req: NextRequest) {
 
     const prompt = `CURRENT EDITOR STATE:\n${state}\n\n---\nCONVERSATION:\n${convo}\n\n---\nRespond now with the single JSON object (reply / actions / continue).`;
 
-    const model = body.model && LLM_MODELS.some((m) => m.id === body.model) ? body.model : "anthropic/claude-sonnet-4.6";
-    const raw = await llmCall(prompt, model, 0.2, [], SYSTEM_PROMPT);
+    let model = body.model && LLM_MODELS.some((m) => m.id === body.model) ? body.model : "anthropic/claude-sonnet-4.6";
+    const images = Array.isArray(body.images) ? body.images.filter((u) => typeof u === "string" && u.startsWith("http")).slice(0, 6) : [];
+    // If the user attached images but picked a text-only model, fall back to a
+    // vision-capable default so the model can actually SEE them.
+    if (images.length && !LLM_MODELS.find((m) => m.id === model)?.vision) model = "anthropic/claude-sonnet-4.6";
+    const raw = await llmCall(prompt, model, 0.2, images, SYSTEM_PROMPT);
     const parsed = extractJson(raw);
     if (!parsed || typeof parsed.reply !== "string") {
       // Model broke the contract - surface its text as a plain reply instead of failing.

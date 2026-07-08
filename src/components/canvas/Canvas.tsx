@@ -1842,19 +1842,21 @@ export default function Canvas({
     if (agentBusy) return;
     setAgentBusy(true);
     const attached = agentFiles;
+    const imgCount = attached.filter((a) => a.kind === "image").length;
     const attachNote = attached.length
-      ? `\n\n[The user attached ${attached.length} file(s) - use their URLs directly (e.g. add_node uploadVideo/uploadImage/uploadAudio with config.url, then wire in):\n${attached.map((a) => `- ${a.kind}: ${a.url} (${a.name})`).join("\n")}]`
+      ? `\n\n[The user attached ${attached.length} file(s)${imgCount ? ` - the ${imgCount} image(s) are shown to you directly, describe/use what you see` : ""}. Use their URLs directly when building (add_node uploadVideo/uploadImage/uploadAudio with config.url, then wire in):\n${attached.map((a) => `- ${a.kind}: ${a.url} (${a.name})`).join("\n")}]`
       : "";
     const shownText = attached.length ? `${userText}${userText ? "\n" : ""}📎 ${attached.map((a) => a.name).join(", ")}` : userText;
     const history: CAgentMsg[] = [...agentMsgs, { role: "user", content: shownText }];
     setAgentMsgs(history);
     setAgentFiles([]);
     try {
+      const imageUrls = attached.filter((a) => a.kind === "image").map((a) => a.url);
       let msgs: CAgentMsg[] = [...agentMsgs, { role: "user", content: `${userText}${attachNote}` }];
       for (let round = 0; round < 4; round++) {
         const r = await fetch("/api/canvas-agent", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: msgs.map(({ role, content }) => ({ role, content })), state: buildCanvasState(), model: agentModel }),
+          body: JSON.stringify({ messages: msgs.map(({ role, content }) => ({ role, content })), state: buildCanvasState(), model: agentModel, images: round === 0 ? imageUrls : [] }),
         });
         const j = (await r.json()) as { reply?: string; actions?: CAgentAction[]; continue?: boolean; error?: string };
         if (!r.ok) throw new Error(j.error || "agent request failed");

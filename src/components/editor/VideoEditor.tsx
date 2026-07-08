@@ -8,7 +8,7 @@ import { drawCaption, kfState, type ExportClip } from "@/lib/editor/exportVideo"
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock, Folder, ArrowUp, Minus, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, ArrowUp, Minus, Paperclip, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
 
@@ -2294,6 +2294,26 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [agentInput, setAgentInput] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentMin, setAgentMin] = useState(false); // collapsed to a pill
+  const [agentFiles, setAgentFiles] = useState<{ name: string; url: string; kind: "video" | "image" | "audio"; id: string }[]>([]);
+  const [agentUploading, setAgentUploading] = useState(false);
+  const agentFileInputRef = useRef<HTMLInputElement | null>(null);
+  const onAgentFiles = useCallback(async (files: FileList | null) => {
+    if (!files?.length) return;
+    setAgentUploading(true);
+    try {
+      for (const file of Array.from(files).slice(0, 8)) {
+        const fd = new FormData(); fd.append("file", file);
+        const r = await fetch("/api/upload", { method: "POST", body: fd });
+        const j = (await r.json()) as { id?: string; cdnUrl?: string; kind?: string };
+        if (r.ok && j.cdnUrl && j.id) {
+          const kind = j.kind === "video" || j.kind === "audio" ? j.kind : "image";
+          // also drop it into the bin so the agent's list_assets can find it
+          setLibrary((p) => [{ id: j.id!, url: j.cdnUrl!, kind: kind as EditorAsset["kind"], label: file.name, duration: null }, ...p]);
+          setAgentFiles((prev) => [...prev, { name: file.name, url: j.cdnUrl!, kind: kind as "video" | "image" | "audio", id: j.id! }]);
+        }
+      }
+    } catch { /* */ } finally { setAgentUploading(false); }
+  }, []);
   const [agentPos, setAgentPos] = useState<{ x: number; y: number } | null>(null); // null = docked bottom-right
   const agentDragRef = useRef<{ dx: number; dy: number } | null>(null);
   const onAgentDragDown = (e: React.PointerEvent) => {
@@ -2542,14 +2562,21 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const runAgent = useCallback(async (userText: string) => {
     if (agentBusy) return;
     setAgentBusy(true);
-    const history: AgentMsg[] = [...agentMsgs, { role: "user", content: userText }];
-    setAgentMsgs(history);
+    const attached = agentFiles;
+    const imageUrls = attached.filter((a) => a.kind === "image").map((a) => a.url);
+    const imgCount = imageUrls.length;
+    const attachNote = attached.length
+      ? `\n\n[The user attached and added to the bin ${attached.length} file(s)${imgCount ? ` - the ${imgCount} image(s) are shown to you directly` : ""}: ${attached.map((a) => `${a.kind} "${a.name}" (asset_id ${a.id})`).join(", ")}. Use these asset_ids with add_clip/replace_clip.]`
+      : "";
+    const shownText = attached.length ? `${userText}${userText ? "\n" : ""}\ud83d\udcce ${attached.map((a) => a.name).join(", ")}` : userText;
+    setAgentMsgs([...agentMsgs, { role: "user", content: shownText }]);
+    setAgentFiles([]);
     try {
-      let msgs = history;
+      let msgs: AgentMsg[] = [...agentMsgs, { role: "user", content: `${userText}${attachNote}` }];
       for (let round = 0; round < 4; round++) {
         const r = await fetch("/api/editor-agent", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: msgs.map(({ role, content }) => ({ role, content })), state: buildAgentState(), model: agentModel }),
+          body: JSON.stringify({ messages: msgs.map(({ role, content }) => ({ role, content })), state: buildAgentState(), model: agentModel, images: round === 0 ? imageUrls : [] }),
         });
         const j = (await r.json()) as { reply?: string; actions?: AgentAction[]; continue?: boolean; error?: string };
         if (!r.ok) throw new Error(j.error || "agent request failed");
@@ -2575,7 +2602,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     } catch (e) {
       setAgentMsgs((prev) => [...prev, { role: "assistant", content: `Agent error: ${e instanceof Error ? e.message : "unknown"}` }]);
     } finally { setAgentBusy(false); }
-  }, [agentBusy, agentMsgs, buildAgentState, executeAgentAction, agentModel]);
+  }, [agentBusy, agentMsgs, agentFiles, buildAgentState, executeAgentAction, agentModel]);
 
   const onClipContext = (e: React.MouseEvent, c: EditClip) => { e.preventDefault(); e.stopPropagation(); if (!selectedRef.current.includes(c.id)) setSelectedIds([c.id]); setMenu({ x: e.clientX, y: e.clientY, id: c.id }); };
 
@@ -3983,13 +4010,28 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             <div ref={agentEndRef} />
           </div>
           <div className="px-3 pb-3 pt-2 border-t border-border shrink-0">
-            <div className="flex items-center gap-2 rounded-[20px] bg-bg-subtle border border-border transition-colors [&:focus-within]:border-brand/60 pl-4 pr-1.5 py-1.5">
+            {(agentFiles.length > 0 || agentUploading) && (
+              <div className="flex flex-wrap gap-1 mb-1.5">
+                {agentFiles.map((f, i) => (
+                  <span key={i} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-bg-subtle border border-border text-[10px] text-fg-muted max-w-[160px]">
+                    <span className="truncate">{f.kind === "image" ? "\ud83d\uddbc" : f.kind === "audio" ? "\ud83c\udfb5" : "\ud83c\udfac"} {f.name}</span>
+                    <button onClick={() => setAgentFiles((prev) => prev.filter((_, k) => k !== i))} className="text-fg-subtle hover:text-fg"><X size={11} /></button>
+                  </span>
+                ))}
+                {agentUploading && <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] text-fg-subtle"><span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" /> uploading</span>}
+              </div>
+            )}
+            <input ref={agentFileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { void onAgentFiles(e.target.files); e.currentTarget.value = ""; }} />
+            <div className="flex items-center gap-1.5 rounded-[20px] bg-bg-subtle border border-border transition-colors [&:focus-within]:border-brand/60 pl-1.5 pr-1.5 py-1.5">
+              <button onClick={() => agentFileInputRef.current?.click()} title="Attach video/image/audio" className="w-8 h-8 shrink-0 self-end grid place-items-center rounded-full text-fg-subtle hover:text-fg hover:bg-bg-hover">
+                <Paperclip size={15} />
+              </button>
               <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={1} placeholder="Message the agent"
                 onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(120, t.scrollHeight)}px`; }}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if (v && !agentBusy) { setAgentInput(""); e.currentTarget.style.height = "auto"; void runAgent(v); } } }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if ((v || agentFiles.length) && !agentBusy) { setAgentInput(""); e.currentTarget.style.height = "auto"; void runAgent(v); } } }}
                 className="flex-1 resize-none bg-transparent text-fg outline-none border-0 focus:ring-0 leading-[1.4] py-[5px] max-h-[120px] placeholder:text-fg-subtle" />
-              <button disabled={agentBusy || !agentInput.trim()} aria-label="Send" title="Send (Enter)"
-                onClick={() => { const v = agentInput.trim(); if (v) { setAgentInput(""); void runAgent(v); } }}
+              <button disabled={agentBusy || (!agentInput.trim() && !agentFiles.length)} aria-label="Send" title="Send (Enter)"
+                onClick={() => { const v = agentInput.trim(); if (v || agentFiles.length) { setAgentInput(""); void runAgent(v); } }}
                 className="w-8 h-8 shrink-0 self-end grid place-items-center rounded-full bg-brand text-black disabled:opacity-35 transition-opacity">
                 <ArrowUp size={16} strokeWidth={2.5} />
               </button>
