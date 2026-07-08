@@ -74,10 +74,10 @@ export default function CanvasToolbar({
           <button
             onClick={onBuildAI}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-brand/40 bg-brand/10 hover:bg-brand/20 text-brand text-[12px] font-medium"
-            title="Build a workflow from a text brief"
+            title="AI agent: build and run this workflow by chat"
           >
             <Sparkles size={12} />
-            Build with AI
+            AI Agent
           </button>
         )}
 

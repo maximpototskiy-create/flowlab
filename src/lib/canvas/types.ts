@@ -324,7 +324,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     ],
     outputs: [{ name: "analysis", type: "text" }],
     defaults: {
-      instructions: "Analyse the ad. Extract: 1) main hook 2) target emotion 3) visual style 4) what makes it work 5) ideas for variations.",
+      instructions: "You are a senior performance-creative strategist. Analyse this ad reference DEEPLY and return a structured breakdown:\n1) MARKETING: target audience, core promise, main hook (first 1-3s), persuasion angle, CTA.\n2) STRUCTURE & TIMING: section-by-section (Hook / Body / Packshot-CTA) with approximate timings and what each beat does.\n3) VISUAL: style, framing, colours, on-screen text placement, editing pace, transitions.\n4) MOOD & AUDIO: emotional tone, music energy, voiceover style.\n5) WHY IT WORKS: 3-5 concrete mechanics.\n6) HOW TO REPRODUCE IT IN FLOWLAB - NEXT NODES: recommend the exact next nodes and what to put in them, e.g. Script/Hooks Generation for copy -> Image/Video Generation (write the prompt) or Upload Video for real footage -> Hook / Body / Pack Shot section nodes -> Editor. Keep it actionable; the user can ask the AI Agent to build this plan automatically.",
       // Was claude-sonnet-latest which doesn't exist on fal-OR wrapper.
       // Opus 4.6 is the top vision model now available there.
       model: "anthropic/claude-opus-4.6",

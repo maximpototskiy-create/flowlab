@@ -2542,12 +2542,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             chips.push({ tool: act.tool, ok: false, result: e instanceof Error ? e.message : "failed" });
           }
         }
-        const asstMsg: AgentMsg = { role: "assistant", content: JSON.stringify({ reply: j.reply, actions }), chips };
-        msgs = [...msgs, asstMsg];
+        const hadErrors = chips.some((c) => !c.ok);
+        const willContinue = actions.length > 0 && (j.continue || hadErrors) && round < 3;
+        const asstMsg: AgentMsg = { role: "assistant", content: JSON.stringify({ reply: j.reply, actions }), chips: willContinue ? undefined : chips };
+        msgs = [...msgs, { ...asstMsg, chips }];
         setAgentMsgs((prev) => [...prev, { ...asstMsg, content: j.reply || "" }]);
-        if (!(j.continue && actions.length) || round === 3) break;
+        if (!willContinue) break;
         await new Promise((res) => setTimeout(res, 120)); // let state effects settle
-        msgs = [...msgs, { role: "tool", content: chips.map((c) => `${c.tool}: ${c.result}`).join("\n") }];
+        msgs = [...msgs, { role: "tool", content: chips.map((c) => `${c.tool}: ${c.result}${!c.ok ? " - FIX THIS: adjust and retry now" : ""}`).join("\n") }];
       }
     } catch (e) {
       setAgentMsgs((prev) => [...prev, { role: "assistant", content: `Agent error: ${e instanceof Error ? e.message : "unknown"}` }]);
@@ -3070,7 +3072,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               <span className="w-px h-5 bg-border shrink-0" aria-hidden />
               <button onClick={() => setAgentOpen((o) => !o)} title="AI agent: tell it what to do with the timeline"
                 className={`h-7 px-2.5 rounded-md border text-[11px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${agentOpen ? "border-brand text-black bg-brand shadow" : "border-brand/60 text-brand bg-brand/10 hover:bg-brand/20"}`}>
-                <Sparkles size={13} /> Agent
+                <Sparkles size={13} /> AI Agent
               </button>
               <button onClick={() => setVersionsOpen((o) => !o)} title="Variants & batch render"
                 className="h-7 px-2.5 rounded-md border text-[11px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 border-border text-fg-muted hover:text-fg hover:border-brand">
@@ -3834,7 +3836,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       {agentOpen && agentMin && (
         <button onClick={() => setAgentMin(false)}
           className="fixed bottom-4 right-4 z-[70] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand">
-          <Sparkles size={13} className="text-brand" /> Agent
+          <Sparkles size={13} className="text-brand" /> AI Agent
           {agentBusy && <span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" />}
         </button>
       )}
@@ -3843,7 +3845,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           style={agentPos ? { left: agentPos.x, top: agentPos.y, maxHeight: "min(560px, 72vh)" } : { bottom: 16, right: 16, maxHeight: "min(560px, 72vh)" }}>
           <div onPointerDown={onAgentDragDown} onPointerMove={onAgentDragMove} onPointerUp={onAgentDragUp}
             className="flex items-center justify-between pl-3.5 pr-2 py-2.5 border-b border-border shrink-0 cursor-grab active:cursor-grabbing select-none touch-none" title="Drag to move">
-            <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> Agent</span>
+            <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> AI Agent</span>
             <select value={agentModel} onChange={(e) => setAgentModel(e.target.value)} title="Model that plans the actions (GPT/Gemini use your direct API keys)"
               className="max-w-[140px] bg-bg-subtle border border-border rounded-md px-1.5 py-1 text-[10px] text-fg-muted outline-none focus:border-brand">
               {LLM_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label.replace(" (text only)", "")}</option>)}

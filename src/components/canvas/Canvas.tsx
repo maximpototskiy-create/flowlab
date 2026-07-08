@@ -19,7 +19,6 @@ import type { AssetItem } from "@/lib/assetsQuery";
 import ConnectionPicker from "./ConnectionPicker";
 import NodeExpandedModal from "./NodeExpandedModal";
 import CanvasToolbar from "./CanvasToolbar";
-import WorkflowBuilderPanel from "./WorkflowBuilderPanel";
 import RunsPanel, { type RunSummary } from "./RunsPanel";
 import { estimateCost } from "@/lib/fal/pricing";
 import ActiveRunsBar from "./ActiveRunsBar";
@@ -426,26 +425,6 @@ export default function Canvas({
   );
 
   // ── AI Workflow Builder ──
-  const [builderOpen, setBuilderOpen] = useState(false);
-  const applyBuiltGraph = useCallback((built: Graph, mode: "insert" | "replace") => {
-    setGraph((g) => {
-      if (mode === "replace") {
-        return { nodes: built.nodes, edges: built.edges, groups: [] };
-      }
-      // Insert: drop the generated graph to the right of existing nodes so it
-      // doesn't overlap. Generated ids are random (n_…) so they won't collide.
-      const maxX = g.nodes.reduce((m, n) => Math.max(m, n.position.x), 0);
-      const dx = g.nodes.length ? maxX + 400 : 0;
-      const shifted = built.nodes.map((n) => ({ ...n, position: { x: n.position.x + dx, y: n.position.y } }));
-      return {
-        nodes: [...g.nodes, ...shifted],
-        edges: [...g.edges, ...built.edges],
-        groups: g.groups,
-      };
-    });
-    setBuilderOpen(false);
-  }, []);
-
   const deleteNode = useCallback((nodeId: string) => {
     setGraph((g) => {
       const nodes = g.nodes.filter((n) => n.id !== nodeId);
@@ -1089,15 +1068,12 @@ export default function Canvas({
         setDrag(null);
       }
       if (edgeDraft) {
-        // 1. Direct hit on an input port — let the port's own pointerup handler take it.
-        const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-        const portEl = target?.closest?.("[data-port-side]");
-        if (portEl?.getAttribute("data-port-side") === "in") {
-          setEdgeDraft(null);
-          return;
-        }
+        // NOTE: a drop DIRECTLY on the input chip never fires the chip's own
+        // pointerup (the drag source holds pointer capture, so all pointer
+        // events retarget to it). The snap search below handles that case
+        // naturally - the distance to the chip centre is ~0.
 
-        // 2. SNAP: find the nearest input port within radius and connect to it.
+        // SNAP: find the nearest input port within radius and connect to it.
         // 14px circles are tiny — being lenient here makes connection feel much
         // better. We search across the whole document; the snap radius is in
         // viewport pixels.
@@ -1722,13 +1698,18 @@ export default function Canvas({
 
   const buildCanvasState = useCallback((): string => {
     const g = graphRef.current;
-    const nodes = g.nodes.slice(0, 60).map((n) => ({
-      id: n.id, type: n.type, name: NODE_TYPES[n.type]?.name || n.type,
-      ...(typeof n.config?.label === "string" && n.config.label ? { label: (n.config.label as string).slice(0, 24) } : {}),
-      status: n.status || "idle",
-      out: n.results?.length ? `${n.results.length} results` : n.outputs ? Object.keys(n.outputs).join(",").slice(0, 40) : "",
-      x: Math.round(n.position.x), y: Math.round(n.position.y),
-    }));
+    const nodes = g.nodes.slice(0, 60).map((n) => {
+      const d = NODE_TYPES[n.type];
+      return {
+        id: n.id, type: n.type, name: d?.name || n.type,
+        ...(typeof n.config?.label === "string" && n.config.label ? { label: (n.config.label as string).slice(0, 24) } : {}),
+        status: n.status || "idle",
+        ports_in: (d?.inputs || []).map((p) => `${p.name}:${p.type}${p.multi ? "*" : ""}`).join(" "),
+        ports_out: (d?.outputs || []).map((p) => `${p.name}:${p.type}`).join(" "),
+        out: n.results?.length ? `${n.results.length} results` : n.outputs ? Object.keys(n.outputs).join(",").slice(0, 40) : "",
+        x: Math.round(n.position.x), y: Math.round(n.position.y),
+      };
+    });
     const edges = g.edges.slice(0, 120).map((e) => `${e.from.nodeId}.${e.from.port} -> ${e.to.nodeId}.${e.to.port}`);
     const cats = Array.from(new Set(Object.values(NODE_TYPES).map((d) => d.category)));
     return JSON.stringify({ workflowId: workflowId || null, nodeTypeCategories: cats, nodes, edges });
@@ -1863,12 +1844,16 @@ export default function Canvas({
           try { const res = await executeCanvasAction(act); chips.push({ tool: act.tool, ok: !res.startsWith("error"), result: res }); }
           catch (e) { chips.push({ tool: act.tool, ok: false, result: e instanceof Error ? e.message : "failed" }); }
         }
-        const asst: CAgentMsg = { role: "assistant", content: JSON.stringify({ reply: j.reply, actions }), chips };
-        msgs = [...msgs, asst];
+        const hadErrors = chips.some((c) => !c.ok);
+        // Keep going if the model asked to, OR if something failed - the agent
+        // sees the errors next round and repairs its own work.
+        const willContinue = actions.length > 0 && (j.continue || hadErrors) && round < 3;
+        const asst: CAgentMsg = { role: "assistant", content: JSON.stringify({ reply: j.reply, actions }), chips: willContinue ? undefined : chips };
+        msgs = [...msgs, { ...asst, chips }];
         setAgentMsgs((prev) => [...prev, { ...asst, content: j.reply || "" }]);
-        if (!(j.continue && actions.length) || round === 3) break;
+        if (!willContinue) break;
         await new Promise((res) => setTimeout(res, 120));
-        msgs = [...msgs, { role: "tool", content: chips.map((c) => `${c.tool}: ${c.result}`).join("\n") }];
+        msgs = [...msgs, { role: "tool", content: chips.map((c) => `${c.tool}: ${c.result}${!c.ok ? " - FIX THIS: rewire/adjust and retry now" : ""}`).join("\n") }];
       }
     } catch (e) {
       setAgentMsgs((prev) => [...prev, { role: "assistant", content: `Agent error: ${e instanceof Error ? e.message : "unknown"}` }]);
@@ -2095,19 +2080,12 @@ export default function Canvas({
         runCount={runs.length}
         onRunAll={() => startRun()}
         onStopAll={() => stopAllRuns()}
-        onBuildAI={() => setBuilderOpen(true)}
+        onBuildAI={() => { setAgentOpen(true); setAgentMin(false); }}
         brandSlug={workflowMeta.brandSlug}
         projectId={workflowMeta.projectId}
         workflowId={workflowId}
       />
 
-      {builderOpen && (
-        <WorkflowBuilderPanel
-          brandHint={workflowMeta.brandSlug}
-          onApply={applyBuiltGraph}
-          onClose={() => setBuilderOpen(false)}
-        />
-      )}
 
       <div className="flex-1 flex min-h-0">
         <NodePalette
@@ -2339,6 +2317,10 @@ export default function Canvas({
                 onDelete={() => deleteNode(node.id)}
                 onConfigChange={(k, v) => updateNodeConfig(node.id, k, v)}
                 onRun={() => startRun(node.id)}
+                onAskAgent={() => {
+                  setAgentOpen(true); setAgentMin(false);
+                  void runCanvasAgent(`Read the analysis output of node ${node.id} with read_node, then propose (in my language) a concrete FlowLab structure to reproduce it: which nodes, what prompts/config, how sections wire into the Editor. Present the plan and ask before building.`);
+                }}
                 onStop={() => {
                   // Find any active run that touches this node and cancel it
                   const targetRun = runs.find(
@@ -2616,13 +2598,13 @@ export default function Canvas({
       {!agentOpen && (
         <button onClick={() => { setAgentOpen(true); setAgentMin(false); }}
           className="fixed bottom-5 right-5 z-[90] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand">
-          <Sparkles size={13} className="text-brand" /> Agent
+          <Sparkles size={13} className="text-brand" /> AI Agent
         </button>
       )}
       {agentOpen && agentMin && (
         <button onClick={() => setAgentMin(false)}
           className="fixed bottom-5 right-5 z-[90] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand">
-          <Sparkles size={13} className="text-brand" /> Agent
+          <Sparkles size={13} className="text-brand" /> AI Agent
           {agentBusy && <span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" />}
         </button>
       )}
@@ -2631,7 +2613,7 @@ export default function Canvas({
           style={agentPos ? { left: agentPos.x, top: agentPos.y, maxHeight: "min(560px, 72vh)" } : { bottom: 20, right: 20, maxHeight: "min(560px, 72vh)" }}>
           <div onPointerDown={onAgentDragDown} onPointerMove={onAgentDragMove} onPointerUp={onAgentDragUp}
             className="flex items-center justify-between pl-3.5 pr-2 py-2.5 border-b border-border shrink-0 cursor-grab active:cursor-grabbing select-none touch-none" title="Drag to move">
-            <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> Agent</span>
+            <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> AI Agent</span>
             <select value={agentModel} onChange={(e) => setAgentModel(e.target.value)} title="Model that plans the actions"
               className="max-w-[140px] bg-bg border border-border rounded-md px-1.5 py-1 text-[10px] text-fg-muted outline-none focus:border-brand">
               {LLM_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label.replace(" (text only)", "")}</option>)}

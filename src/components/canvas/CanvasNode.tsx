@@ -60,6 +60,7 @@ function CanvasNodeImpl({
   onDelete,
   onConfigChange,
   onRun,
+  onAskAgent,
   onStop,
   onExpand,
   onUploadFile,
@@ -87,6 +88,7 @@ function CanvasNodeImpl({
   onDelete: () => void;
   onConfigChange: (key: string, value: unknown) => void;
   onRun: () => void;
+  onAskAgent?: () => void;
   onStop?: () => void;
   onExpand: () => void;
   onUploadFile: (file: File, onProgress?: (pct: number) => void) => Promise<{ cdnUrl: string }>;
@@ -679,6 +681,15 @@ function CanvasNodeImpl({
             title="Visually correct the screen track with keyframes"
           >
             <Move size={12} /> Adjust track
+          </button>
+        )}
+        {node.type === "adAnalysis" && node.status === "done" && node.outputs && onAskAgent && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onAskAgent(); }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md border border-brand/50 bg-brand/10 hover:bg-brand/20 text-brand text-[11px] font-medium"
+            title="Send this analysis to the AI Agent - it will plan and build the workflow structure">
+            Build structure with AI Agent
           </button>
         )}
         {((node.outputs && Object.keys(node.outputs).length > 0) ||
