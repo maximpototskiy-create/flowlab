@@ -31,13 +31,13 @@ export default function RunsPanel({
   projectSpentUsd?: number;
   workflowEstimateUsd?: number;
 }) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Draggable position — offset (px) from the default bottom-right anchor.
   // Default dy lifts the panel above the minimap (which sits bottom-right,
   // ~120px tall + margins) so the two don't overlap out of the box. User
   // can still drag it anywhere.
-  const [offset, setOffset] = useState({ dx: 0, dy: -136 });
+  const [offset, setOffset] = useState({ dx: 0, dy: 0 });
   const dragState = useRef<{ startX: number; startY: number; baseDx: number; baseDy: number } | null>(null);
 
   const activeCount = runs.filter((r) => r.status === "running").length;

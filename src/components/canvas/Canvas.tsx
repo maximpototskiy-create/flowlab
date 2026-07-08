@@ -25,7 +25,7 @@ import ActiveRunsBar from "./ActiveRunsBar";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { autoLayout } from "@/lib/canvas/autoLayout";
-import { Minus, Plus, Maximize, Sparkles, ArrowUp, X as XIcon, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2, Images } from "lucide-react";
+import { Minus, Plus, Maximize, Sparkles, ArrowUp, Paperclip, X as XIcon, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2, Images } from "lucide-react";
 
 type Drag = {
   nodeId: string;
@@ -1672,6 +1672,20 @@ export default function Canvas({
   useEffect(() => { try { localStorage.setItem(AGENT_CHAT_KEY, JSON.stringify(agentMsgs.slice(-60))); } catch { /* */ } }, [agentMsgs, AGENT_CHAT_KEY]);
   const [agentInput, setAgentInput] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
+  const [agentFiles, setAgentFiles] = useState<{ name: string; url: string; kind: "video" | "image" | "audio" }[]>([]);
+  const [agentUploading, setAgentUploading] = useState(false);
+  const agentFileInputRef = useRef<HTMLInputElement | null>(null);
+  const onAgentFiles = useCallback(async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    setAgentUploading(true);
+    try {
+      for (const f of Array.from(files).slice(0, 8)) {
+        const kind: "video" | "image" | "audio" = f.type.startsWith("image") ? "image" : f.type.startsWith("audio") ? "audio" : "video";
+        try { const { cdnUrl } = await uploadFile(f); setAgentFiles((prev) => [...prev, { name: f.name, url: cdnUrl, kind }]); }
+        catch { /* skip a failed file */ }
+      }
+    } finally { setAgentUploading(false); }
+  }, []);
   const [agentModel, setAgentModel] = useState<string>(() => {
     try { const m = localStorage.getItem("flowlab.agent.model"); if (m && LLM_MODELS.some((x) => x.id === m)) return m; } catch { /* */ }
     return "anthropic/claude-sonnet-4.6";
@@ -1712,8 +1726,8 @@ export default function Canvas({
     });
     const edges = g.edges.slice(0, 120).map((e) => `${e.from.nodeId}.${e.from.port} -> ${e.to.nodeId}.${e.to.port}`);
     const cats = Array.from(new Set(Object.values(NODE_TYPES).map((d) => d.category)));
-    return JSON.stringify({ workflowId: workflowId || null, nodeTypeCategories: cats, nodes, edges });
-  }, [workflowId]);
+    return JSON.stringify({ workflowId: workflowId || null, brand: workflowMeta.brandSlug || null, nodeTypeCategories: cats, nodes, edges });
+  }, [workflowId, workflowMeta.brandSlug]);
 
   const executeCanvasAction = useCallback(async (a: CAgentAction): Promise<string> => {
     const args = a.args || {};
@@ -1827,10 +1841,16 @@ export default function Canvas({
   const runCanvasAgent = useCallback(async (userText: string) => {
     if (agentBusy) return;
     setAgentBusy(true);
-    const history: CAgentMsg[] = [...agentMsgs, { role: "user", content: userText }];
+    const attached = agentFiles;
+    const attachNote = attached.length
+      ? `\n\n[The user attached ${attached.length} file(s) - use their URLs directly (e.g. add_node uploadVideo/uploadImage/uploadAudio with config.url, then wire in):\n${attached.map((a) => `- ${a.kind}: ${a.url} (${a.name})`).join("\n")}]`
+      : "";
+    const shownText = attached.length ? `${userText}${userText ? "\n" : ""}📎 ${attached.map((a) => a.name).join(", ")}` : userText;
+    const history: CAgentMsg[] = [...agentMsgs, { role: "user", content: shownText }];
     setAgentMsgs(history);
+    setAgentFiles([]);
     try {
-      let msgs = history;
+      let msgs: CAgentMsg[] = [...agentMsgs, { role: "user", content: `${userText}${attachNote}` }];
       for (let round = 0; round < 4; round++) {
         const r = await fetch("/api/canvas-agent", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -1858,7 +1878,7 @@ export default function Canvas({
     } catch (e) {
       setAgentMsgs((prev) => [...prev, { role: "assistant", content: `Agent error: ${e instanceof Error ? e.message : "unknown"}` }]);
     } finally { setAgentBusy(false); }
-  }, [agentBusy, agentMsgs, buildCanvasState, executeCanvasAction, agentModel]);
+  }, [agentBusy, agentMsgs, agentFiles, buildCanvasState, executeCanvasAction, agentModel]);
 
   async function startRun(scopeNodeId?: string) {
     const scopeKey = scopeNodeId ?? "__all__";
@@ -2594,16 +2614,13 @@ export default function Canvas({
         />
       )}
 
-      {/* Canvas AI agent */}
-      {!agentOpen && (
+      {/* Canvas AI agent - floating pill sits ABOVE the minimap (bottom-right)
+          so the two never overlap. Shown only when the panel is closed or
+          minimized. */}
+      {(!agentOpen || agentMin) && (
         <button onClick={() => { setAgentOpen(true); setAgentMin(false); }}
-          className="fixed bottom-5 right-5 z-[90] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand">
-          <Sparkles size={13} className="text-brand" /> AI Agent
-        </button>
-      )}
-      {agentOpen && agentMin && (
-        <button onClick={() => setAgentMin(false)}
-          className="fixed bottom-5 right-5 z-[90] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand">
+          className="fixed right-5 z-[90] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand"
+          style={{ bottom: graph.nodes.length > 0 ? 168 : 20 }}>
           <Sparkles size={13} className="text-brand" /> AI Agent
           {agentBusy && <span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" />}
         </button>
@@ -2649,13 +2666,28 @@ export default function Canvas({
             <div ref={agentEndRef} />
           </div>
           <div className="px-3 pb-3 pt-2 shrink-0">
-            <div className="flex items-center gap-2 rounded-[20px] bg-bg border border-border transition-colors [&:focus-within]:border-brand/60 pl-4 pr-1.5 py-1.5">
+            {(agentFiles.length > 0 || agentUploading) && (
+              <div className="flex flex-wrap gap-1 mb-1.5">
+                {agentFiles.map((f, i) => (
+                  <span key={i} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-bg border border-border text-[10px] text-fg-muted max-w-[160px]">
+                    <span className="truncate">{f.kind === "image" ? "🖼" : f.kind === "audio" ? "🎵" : "🎬"} {f.name}</span>
+                    <button onClick={() => setAgentFiles((prev) => prev.filter((_, k) => k !== i))} className="text-fg-subtle hover:text-fg"><XIcon size={11} /></button>
+                  </span>
+                ))}
+                {agentUploading && <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] text-fg-subtle"><span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" /> uploading</span>}
+              </div>
+            )}
+            <input ref={agentFileInputRef} type="file" accept="video/*,image/*,audio/*" multiple className="hidden" onChange={(e) => { void onAgentFiles(e.target.files); e.currentTarget.value = ""; }} />
+            <div className="flex items-center gap-1.5 rounded-[20px] bg-bg border border-border transition-colors [&:focus-within]:border-brand/60 pl-1.5 pr-1.5 py-1.5">
+              <button onClick={() => agentFileInputRef.current?.click()} title="Attach video/image/audio" className="w-8 h-8 shrink-0 self-end grid place-items-center rounded-full text-fg-subtle hover:text-fg hover:bg-bg-hover">
+                <Paperclip size={15} />
+              </button>
               <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={1} placeholder="Message the agent"
                 onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(120, t.scrollHeight)}px`; }}
-                onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if (v && !agentBusy) { setAgentInput(""); e.currentTarget.style.height = "auto"; void runCanvasAgent(v); } } }}
+                onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if ((v || agentFiles.length) && !agentBusy) { setAgentInput(""); e.currentTarget.style.height = "auto"; void runCanvasAgent(v); } } }}
                 className="flex-1 resize-none bg-transparent text-fg outline-none border-0 focus:ring-0 leading-[1.4] py-[5px] max-h-[120px] placeholder:text-fg-subtle" />
-              <button disabled={agentBusy || !agentInput.trim()} aria-label="Send" title="Send (Enter)"
-                onClick={() => { const v = agentInput.trim(); if (v) { setAgentInput(""); void runCanvasAgent(v); } }}
+              <button disabled={agentBusy || (!agentInput.trim() && !agentFiles.length)} aria-label="Send" title="Send (Enter)"
+                onClick={() => { const v = agentInput.trim(); if (v || agentFiles.length) { setAgentInput(""); void runCanvasAgent(v); } }}
                 className="w-8 h-8 shrink-0 self-end grid place-items-center rounded-full bg-brand text-white disabled:opacity-35 transition-opacity">
                 <ArrowUp size={16} strokeWidth={2.5} />
               </button>
