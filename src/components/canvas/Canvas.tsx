@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti,
+  NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti, LLM_MODELS,
   type Graph, type GraphNode, type PortKind, type Group, EMPTY_GRAPH,
 } from "@/lib/canvas/types";
 import { getVideoModel, defaultModelForMode, clampDuration, type VideoMode } from "@/lib/canvas/videoModels";
@@ -26,7 +26,7 @@ import ActiveRunsBar from "./ActiveRunsBar";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { autoLayout } from "@/lib/canvas/autoLayout";
-import { Minus, Plus, Maximize, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2, Images } from "lucide-react";
+import { Minus, Plus, Maximize, Sparkles, ArrowUp, X as XIcon, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2, Images } from "lucide-react";
 
 type Drag = {
   nodeId: string;
@@ -1597,6 +1597,276 @@ export default function Canvas({
   // when the user accidentally double-clicks or clicks again while a run is going.
   const inflightScopes = useRef<Set<string>>(new Set());
 
+  // Resolve everything wired into a composer node as an ordered track list.
+  // Used by the composer's "Send tracks to editor" button AND the canvas
+  // agent's send_to_editor tool.
+  const buildComposerTracks = useCallback((nodeId: string): { kind: string; value: string; label: string; section?: string }[] => {
+                const incoming = graph.edges.filter((e) => e.to.nodeId === nodeId);
+                const items: { y: number; kind: string; value: string; label: string; section?: string }[] = [];
+                const SECTION_TYPES: Record<string, string> = { hook: "Hook", body: "Body", packShot: "Packshot", cta: "CTA" };
+                const SECTION_ORDER = ["Hook", "Body", "Packshot", "CTA"];
+                const resolveNodeVals = (n: typeof graph.nodes[number], port: string, push: (v: unknown, pt: string) => void) => {
+                  const d = NODE_TYPES[n.type];
+                  const pt = d?.outputs.find((p) => p.name === port)?.type ?? "any";
+                  if (n.results && n.results.length > 1) {
+                    const idx = typeof n.config?._selectedResultIdx === "number" ? (n.config._selectedResultIdx as number) : -1;
+                    if (n.type === "brandAssets") for (const r of n.results) push(r.value, pt);
+                    else if (idx >= 0 && n.results[idx]) push(n.results[idx].value, pt);
+                    else push(n.outputs?.[port], pt);
+                  } else if (n.outputs && n.outputs[port] != null) push(n.outputs[port], pt);
+                  else {
+                    const cfg = n.config ?? {};
+                    if (n.type === "uploadVideo" || n.type === "uploadAudio") push((cfg.cdnUrl as string) || (cfg.url as string), pt);
+                    else if (n.type === "uploadImage") push(cfg.cdnUrl as string, pt);
+                    else if (n.type === "brandAssets") { const sel = cfg.selected; if (Array.isArray(sel)) for (const u of sel) push(u as string, pt); }
+                    else if (n.type === "yourText") push(cfg.text as string, pt);
+                  }
+                };
+                for (const e of incoming) {
+                  const from = graph.nodes.find((n) => n.id === e.from.nodeId);
+                  if (!from) continue;
+                  const fdef = NODE_TYPES[from.type];
+                  if (from.type === "subtitles") {
+                    const wj = from.outputs?.words;
+                    if (typeof wj === "string" && wj.startsWith("[")) items.push({ y: from.position.y, kind: "captions", value: wj, label: "Subtitles" });
+                    continue;
+                  }
+                  const portType = fdef?.outputs.find((p) => p.name === e.from.port)?.type ?? "any";
+                  const section = SECTION_TYPES[from.type];
+                  const label = (typeof from.config?.label === "string" && from.config.label) || fdef?.name || from.type;
+                  const pushVal = (v: unknown, pt: string = portType, lbl: string = label) => {
+                    if (typeof v !== "string" || !v) return;
+                    const isUrl = v.startsWith("http");
+                    let kind: string;
+                    if (!isUrl) kind = "text";
+                    else if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(v)) kind = "video";
+                    else if (/\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/i.test(v)) kind = "audio";
+                    else if (/\.(png|jpe?g|webp|gif|avif|svg)(\?|$)/i.test(v)) kind = "image";
+                    else kind = pt === "any" || pt === "text" ? "image" : pt;
+                    items.push({ y: from.position.y, kind, value: v, label: lbl, section });
+                  };
+                  if (section) {
+                    // a structural section node: forward the materials wired INTO it, tagged with the section
+                    for (const se of graph.edges.filter((x) => x.to.nodeId === from.id)) {
+                      const src = graph.nodes.find((n) => n.id === se.from.nodeId);
+                      if (!src) continue;
+                      const srcLabel = NODE_TYPES[src.type]?.name || src.type;
+                      resolveNodeVals(src, se.from.port, (v, pt) => pushVal(v, pt, `${section}: ${srcLabel}`));
+                    }
+                    continue;
+                  }
+                  if (from.results && from.results.length > 1) {
+                    const idx = typeof from.config?._selectedResultIdx === "number" ? (from.config._selectedResultIdx as number) : -1;
+                    if (from.type === "brandAssets") for (const r of from.results) pushVal(r.value);
+                    else if (idx >= 0 && from.results[idx]) pushVal(from.results[idx].value);
+                    else pushVal(from.outputs?.[e.from.port]);
+                  } else if (from.outputs && from.outputs[e.from.port] != null) {
+                    pushVal(from.outputs[e.from.port]);
+                  } else {
+                    // node never ran — fall back to its config (uploads, brand picks, raw text)
+                    const cfg = from.config ?? {};
+                    if (from.type === "uploadVideo" || from.type === "uploadAudio") pushVal((cfg.cdnUrl as string) || (cfg.url as string));
+                    else if (from.type === "uploadImage") pushVal(cfg.cdnUrl as string);
+                    else if (from.type === "brandAssets") { const sel = cfg.selected; if (Array.isArray(sel)) for (const u of sel) pushVal(u as string); }
+                    else if (from.type === "yourText") pushVal(cfg.text as string);
+                  }
+                }
+                items.sort((a, b) => {
+                  const sa = a.section ? SECTION_ORDER.indexOf(a.section) : 99;
+                  const sb = b.section ? SECTION_ORDER.indexOf(b.section) : 99;
+                  return sa - sb || a.y - b.y;
+                });
+                return items.map(({ kind, value, label, section }) => ({ kind, value, label, section }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph]);
+
+  // ===========================================================================
+  // Canvas AI agent: same chat/loop pattern as the editor agent, but the
+  // tools operate on the GRAPH (nodes, edges, configs, runs, send-to-editor).
+  // ===========================================================================
+  type CAgentAction = { tool: string; args?: Record<string, unknown> };
+  type CAgentChip = { tool: string; ok: boolean; result: string };
+  type CAgentMsg = { role: "user" | "assistant" | "tool"; content: string; chips?: CAgentChip[] };
+  const AGENT_CHAT_KEY = `flowlab.canvasagent.v1:${workflowId || "scratch"}`;
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentMin, setAgentMin] = useState(false);
+  const [agentMsgs, setAgentMsgs] = useState<CAgentMsg[]>(() => {
+    try { const raw = localStorage.getItem(AGENT_CHAT_KEY); const j = raw ? (JSON.parse(raw) as CAgentMsg[]) : []; return Array.isArray(j) ? j.slice(-60) : []; } catch { return []; }
+  });
+  useEffect(() => { try { localStorage.setItem(AGENT_CHAT_KEY, JSON.stringify(agentMsgs.slice(-60))); } catch { /* */ } }, [agentMsgs, AGENT_CHAT_KEY]);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentModel, setAgentModel] = useState<string>(() => {
+    try { const m = localStorage.getItem("flowlab.agent.model"); if (m && LLM_MODELS.some((x) => x.id === m)) return m; } catch { /* */ }
+    return "anthropic/claude-sonnet-4.6";
+  });
+  useEffect(() => { try { localStorage.setItem("flowlab.agent.model", agentModel); } catch { /* */ } }, [agentModel]);
+  const [agentPos, setAgentPos] = useState<{ x: number; y: number } | null>(null);
+  const agentDragRef2 = useRef<{ dx: number; dy: number } | null>(null);
+  const agentEndRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { agentEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [agentMsgs, agentBusy]);
+  const onAgentDragDown = (e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest("button,select,textarea")) return;
+    const panel = (e.currentTarget as HTMLElement).parentElement!;
+    const r = panel.getBoundingClientRect();
+    agentDragRef2.current = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    if (!agentPos) setAgentPos({ x: r.left, y: r.top });
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+  const onAgentDragMove = (e: React.PointerEvent) => {
+    const d = agentDragRef2.current; if (!d) return;
+    const w = 360, m = 8;
+    setAgentPos({ x: Math.min(Math.max(m, e.clientX - d.dx), window.innerWidth - w - m), y: Math.min(Math.max(m, e.clientY - d.dy), window.innerHeight - 56) });
+  };
+  const onAgentDragUp = () => { agentDragRef2.current = null; };
+
+  const buildCanvasState = useCallback((): string => {
+    const g = graphRef.current;
+    const nodes = g.nodes.slice(0, 60).map((n) => ({
+      id: n.id, type: n.type, name: NODE_TYPES[n.type]?.name || n.type,
+      ...(typeof n.config?.label === "string" && n.config.label ? { label: (n.config.label as string).slice(0, 24) } : {}),
+      status: n.status || "idle",
+      out: n.results?.length ? `${n.results.length} results` : n.outputs ? Object.keys(n.outputs).join(",").slice(0, 40) : "",
+      x: Math.round(n.position.x), y: Math.round(n.position.y),
+    }));
+    const edges = g.edges.slice(0, 120).map((e) => `${e.from.nodeId}.${e.from.port} -> ${e.to.nodeId}.${e.to.port}`);
+    const cats = Array.from(new Set(Object.values(NODE_TYPES).map((d) => d.category)));
+    return JSON.stringify({ workflowId: workflowId || null, nodeTypeCategories: cats, nodes, edges });
+  }, [workflowId]);
+
+  const executeCanvasAction = useCallback(async (a: CAgentAction): Promise<string> => {
+    const args = a.args || {};
+    const str = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : undefined);
+    const num = (k: string) => (typeof args[k] === "number" && isFinite(args[k] as number) ? (args[k] as number) : undefined);
+    const nodeOf = (k = "node_id") => graphRef.current.nodes.find((n) => n.id === str(k));
+    switch (a.tool) {
+      case "list_node_types": {
+        const cat = str("category"); const q = (str("query") || "").toLowerCase();
+        const defs = Object.entries(NODE_TYPES)
+          .filter(([, d]) => (!cat || d.category === cat) && (!q || d.name.toLowerCase().includes(q) || d.description.toLowerCase().includes(q)))
+          .slice(0, 40)
+          .map(([t, d]) => ({
+            type: t, name: d.name, cat: d.category, desc: d.description.slice(0, 90),
+            inputs: d.inputs.map((p) => `${p.name}:${p.type}${p.multi ? "*" : ""}`),
+            outputs: d.outputs.map((p) => `${p.name}:${p.type}`),
+            fields: d.fields.slice(0, 14).map((fd) => fd.name),
+          }));
+        return JSON.stringify({ types: defs });
+      }
+      case "list_nodes":
+        return buildCanvasState();
+      case "add_node": {
+        const type = str("type");
+        if (!type || !NODE_TYPES[type]) return `error: unknown type "${type}" (use list_node_types)`;
+        const g = graphRef.current;
+        const maxX = g.nodes.length ? Math.max(...g.nodes.map((n) => n.position.x)) : 100;
+        const node = makeNode(type, { x: num("x") ?? maxX + 340, y: num("y") ?? 160 + (g.nodes.length % 5) * 150 });
+        const patch = (args.config && typeof args.config === "object") ? (args.config as Record<string, unknown>) : null;
+        if (patch) node.config = { ...node.config, ...patch };
+        setGraph((gr) => ({ ...gr, nodes: [...gr.nodes, node] }));
+        await new Promise((r) => setTimeout(r, 30));
+        return `added node ${node.id} (${NODE_TYPES[type].name})`;
+      }
+      case "set_config": {
+        const n = nodeOf(); if (!n) return "error: node not found";
+        const patch = (args.patch && typeof args.patch === "object") ? (args.patch as Record<string, unknown>) : null;
+        if (!patch || !Object.keys(patch).length) return "error: patch required";
+        setGraph((gr) => ({ ...gr, nodes: gr.nodes.map((x) => (x.id === n.id ? { ...x, config: { ...x.config, ...patch } } : x)) }));
+        return `updated config of ${n.id}: ${Object.keys(patch).join(", ")}`;
+      }
+      case "connect": {
+        const fn = str("from_node"), fp = str("from_port"), tn = str("to_node"), tp = str("to_port");
+        const g = graphRef.current;
+        const from = g.nodes.find((n) => n.id === fn), to = g.nodes.find((n) => n.id === tn);
+        if (!from || !to || !fp || !tp) return "error: from_node/from_port/to_node/to_port required";
+        const ft = NODE_TYPES[from.type]?.outputs.find((p) => p.name === fp)?.type;
+        const tt = NODE_TYPES[to.type]?.inputs.find((p) => p.name === tp)?.type;
+        if (!ft) return `error: ${from.type} has no output "${fp}"`;
+        if (!tt) return `error: ${to.type} has no input "${tp}"`;
+        if (!portsCompatible(ft, tt)) return `error: can't connect ${ft} -> ${tt}`;
+        setGraph((gr) => ({ ...gr, edges: addEdgeRespectingMulti(gr.edges, makeEdge(from.id, fp, to.id, tp), gr) }));
+        return `connected ${from.id}.${fp} -> ${to.id}.${tp}`;
+      }
+      case "disconnect": {
+        const tn = str("to_node"), tp = str("to_port"), fn = str("from_node");
+        if (!tn) return "error: to_node required";
+        let removed = 0;
+        setGraph((gr) => {
+          const keep = gr.edges.filter((e) => {
+            const hit = e.to.nodeId === tn && (!tp || e.to.port === tp) && (!fn || e.from.nodeId === fn);
+            if (hit) removed++;
+            return !hit;
+          });
+          return { ...gr, edges: keep };
+        });
+        await new Promise((r) => setTimeout(r, 20));
+        return `removed ${removed} edge(s)`;
+      }
+      case "delete_nodes": {
+        const ids = Array.isArray(args.node_ids) ? (args.node_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        if (!ids.length) return "error: node_ids required";
+        const set = new Set(ids);
+        setGraph((gr) => ({ ...gr, nodes: gr.nodes.filter((n) => !set.has(n.id)), edges: gr.edges.filter((e) => !set.has(e.from.nodeId) && !set.has(e.to.nodeId)) }));
+        return `deleted ${ids.length} node(s)`;
+      }
+      case "run": {
+        const id = str("node_id");
+        if (id && !nodeOf()) return "error: node not found";
+        void startRun(id);
+        return id ? `run started for ${id} (async - check with read_node later)` : "full run started (async)";
+      }
+      case "read_node": {
+        const n = nodeOf(); if (!n) return "error: node not found";
+        const outs: Record<string, string> = {};
+        if (n.outputs) for (const [k, v] of Object.entries(n.outputs)) outs[k] = String(v).slice(0, 140);
+        return JSON.stringify({ id: n.id, status: n.status || "idle", error: n.error?.slice(0, 200), outputs: outs, results: n.results?.slice(0, 6).map((r) => r.value.slice(0, 120)) });
+      }
+      case "send_to_editor": {
+        const g = graphRef.current;
+        const comp = str("node_id") ? nodeOf() : g.nodes.find((n) => n.type === "composer");
+        if (!comp || comp.type !== "composer") return "error: no composer (Editor) node on the canvas";
+        const tracks = buildComposerTracks(comp.id);
+        if (!tracks.length) return "error: nothing is wired into the Editor node";
+        try { localStorage.setItem(`flowlab.editor.import.v1:${workflowId}`, JSON.stringify({ tracks })); } catch { return "error: could not store the handoff"; }
+        return `sent ${tracks.length} track(s) to the editor - open it via the Editor node to see them in Media`;
+      }
+      default: return `error: unknown tool "${a.tool}"`;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildCanvasState, buildComposerTracks, workflowId]);
+
+  const runCanvasAgent = useCallback(async (userText: string) => {
+    if (agentBusy) return;
+    setAgentBusy(true);
+    const history: CAgentMsg[] = [...agentMsgs, { role: "user", content: userText }];
+    setAgentMsgs(history);
+    try {
+      let msgs = history;
+      for (let round = 0; round < 4; round++) {
+        const r = await fetch("/api/canvas-agent", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: msgs.map(({ role, content }) => ({ role, content })), state: buildCanvasState(), model: agentModel }),
+        });
+        const j = (await r.json()) as { reply?: string; actions?: CAgentAction[]; continue?: boolean; error?: string };
+        if (!r.ok) throw new Error(j.error || "agent request failed");
+        const actions = j.actions || [];
+        const chips: CAgentChip[] = [];
+        for (const act of actions) {
+          try { const res = await executeCanvasAction(act); chips.push({ tool: act.tool, ok: !res.startsWith("error"), result: res }); }
+          catch (e) { chips.push({ tool: act.tool, ok: false, result: e instanceof Error ? e.message : "failed" }); }
+        }
+        const asst: CAgentMsg = { role: "assistant", content: JSON.stringify({ reply: j.reply, actions }), chips };
+        msgs = [...msgs, asst];
+        setAgentMsgs((prev) => [...prev, { ...asst, content: j.reply || "" }]);
+        if (!(j.continue && actions.length) || round === 3) break;
+        await new Promise((res) => setTimeout(res, 120));
+        msgs = [...msgs, { role: "tool", content: chips.map((c) => `${c.tool}: ${c.result}`).join("\n") }];
+      }
+    } catch (e) {
+      setAgentMsgs((prev) => [...prev, { role: "assistant", content: `Agent error: ${e instanceof Error ? e.message : "unknown"}` }]);
+    } finally { setAgentBusy(false); }
+  }, [agentBusy, agentMsgs, buildCanvasState, executeCanvasAction, agentModel]);
+
   async function startRun(scopeNodeId?: string) {
     const scopeKey = scopeNodeId ?? "__all__";
     if (inflightScopes.current.has(scopeKey)) {
@@ -2007,84 +2277,7 @@ export default function Canvas({
               }
               // Composer: resolve connected upstream outputs into an ordered track list
               let composerTracks: { kind: string; value: string; label: string }[] | undefined;
-              if (node.type === "composer") {
-                const incoming = graph.edges.filter((e) => e.to.nodeId === node.id);
-                const items: { y: number; kind: string; value: string; label: string; section?: string }[] = [];
-                const SECTION_TYPES: Record<string, string> = { hook: "Hook", body: "Body", packShot: "Packshot", cta: "CTA" };
-                const SECTION_ORDER = ["Hook", "Body", "Packshot", "CTA"];
-                const resolveNodeVals = (n: typeof graph.nodes[number], port: string, push: (v: unknown, pt: string) => void) => {
-                  const d = NODE_TYPES[n.type];
-                  const pt = d?.outputs.find((p) => p.name === port)?.type ?? "any";
-                  if (n.results && n.results.length > 1) {
-                    const idx = typeof n.config?._selectedResultIdx === "number" ? (n.config._selectedResultIdx as number) : -1;
-                    if (n.type === "brandAssets") for (const r of n.results) push(r.value, pt);
-                    else if (idx >= 0 && n.results[idx]) push(n.results[idx].value, pt);
-                    else push(n.outputs?.[port], pt);
-                  } else if (n.outputs && n.outputs[port] != null) push(n.outputs[port], pt);
-                  else {
-                    const cfg = n.config ?? {};
-                    if (n.type === "uploadVideo" || n.type === "uploadAudio") push((cfg.cdnUrl as string) || (cfg.url as string), pt);
-                    else if (n.type === "uploadImage") push(cfg.cdnUrl as string, pt);
-                    else if (n.type === "brandAssets") { const sel = cfg.selected; if (Array.isArray(sel)) for (const u of sel) push(u as string, pt); }
-                    else if (n.type === "yourText") push(cfg.text as string, pt);
-                  }
-                };
-                for (const e of incoming) {
-                  const from = graph.nodes.find((n) => n.id === e.from.nodeId);
-                  if (!from) continue;
-                  const fdef = NODE_TYPES[from.type];
-                  if (from.type === "subtitles") {
-                    const wj = from.outputs?.words;
-                    if (typeof wj === "string" && wj.startsWith("[")) items.push({ y: from.position.y, kind: "captions", value: wj, label: "Subtitles" });
-                    continue;
-                  }
-                  const portType = fdef?.outputs.find((p) => p.name === e.from.port)?.type ?? "any";
-                  const section = SECTION_TYPES[from.type];
-                  const label = (typeof from.config?.label === "string" && from.config.label) || fdef?.name || from.type;
-                  const pushVal = (v: unknown, pt: string = portType, lbl: string = label) => {
-                    if (typeof v !== "string" || !v) return;
-                    const isUrl = v.startsWith("http");
-                    let kind: string;
-                    if (!isUrl) kind = "text";
-                    else if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(v)) kind = "video";
-                    else if (/\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/i.test(v)) kind = "audio";
-                    else if (/\.(png|jpe?g|webp|gif|avif|svg)(\?|$)/i.test(v)) kind = "image";
-                    else kind = pt === "any" || pt === "text" ? "image" : pt;
-                    items.push({ y: from.position.y, kind, value: v, label: lbl, section });
-                  };
-                  if (section) {
-                    // a structural section node: forward the materials wired INTO it, tagged with the section
-                    for (const se of graph.edges.filter((x) => x.to.nodeId === from.id)) {
-                      const src = graph.nodes.find((n) => n.id === se.from.nodeId);
-                      if (!src) continue;
-                      const srcLabel = NODE_TYPES[src.type]?.name || src.type;
-                      resolveNodeVals(src, se.from.port, (v, pt) => pushVal(v, pt, `${section}: ${srcLabel}`));
-                    }
-                    continue;
-                  }
-                  if (from.results && from.results.length > 1) {
-                    const idx = typeof from.config?._selectedResultIdx === "number" ? (from.config._selectedResultIdx as number) : -1;
-                    if (from.type === "brandAssets") for (const r of from.results) pushVal(r.value);
-                    else if (idx >= 0 && from.results[idx]) pushVal(from.results[idx].value);
-                    else pushVal(from.outputs?.[e.from.port]);
-                  } else if (from.outputs && from.outputs[e.from.port] != null) {
-                    pushVal(from.outputs[e.from.port]);
-                  } else {
-                    // node never ran — fall back to its config (uploads, brand picks, raw text)
-                    const cfg = from.config ?? {};
-                    if (from.type === "uploadVideo" || from.type === "uploadAudio") pushVal((cfg.cdnUrl as string) || (cfg.url as string));
-                    else if (from.type === "uploadImage") pushVal(cfg.cdnUrl as string);
-                    else if (from.type === "brandAssets") { const sel = cfg.selected; if (Array.isArray(sel)) for (const u of sel) pushVal(u as string); }
-                    else if (from.type === "yourText") pushVal(cfg.text as string);
-                  }
-                }
-                items.sort((a, b) => {
-                  const sa = a.section ? SECTION_ORDER.indexOf(a.section) : 99;
-                  const sb = b.section ? SECTION_ORDER.indexOf(b.section) : 99;
-                  return sa - sb || a.y - b.y;
-                });
-                composerTracks = items.map(({ kind, value, label, section }) => ({ kind, value, label, section }));
-              }
+              if (node.type === "composer") composerTracks = buildComposerTracks(node.id);
               // videoGen: resolve connected reference inputs (with thumbnail
               // URLs) so the node can show numbered chips and insert
               // @Image1 / [Video1] tokens into the prompt by click. Order
@@ -2409,6 +2602,76 @@ export default function Canvas({
             setExpandedNodeId(null);
           }}
         />
+      )}
+
+      {/* Canvas AI agent */}
+      {!agentOpen && (
+        <button onClick={() => { setAgentOpen(true); setAgentMin(false); }}
+          className="fixed bottom-5 right-5 z-[90] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand">
+          <Sparkles size={13} className="text-brand" /> Agent
+        </button>
+      )}
+      {agentOpen && agentMin && (
+        <button onClick={() => setAgentMin(false)}
+          className="fixed bottom-5 right-5 z-[90] h-9 pl-3 pr-3.5 rounded-full bg-bg-card border border-brand/50 shadow-xl inline-flex items-center gap-2 text-[12px] text-fg hover:border-brand">
+          <Sparkles size={13} className="text-brand" /> Agent
+          {agentBusy && <span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" />}
+        </button>
+      )}
+      {agentOpen && !agentMin && (
+        <div className="fixed z-[90] w-[360px] max-w-[calc(100vw-2rem)] rounded-2xl border border-border bg-bg-card shadow-2xl flex flex-col text-[12px] overflow-hidden"
+          style={agentPos ? { left: agentPos.x, top: agentPos.y, maxHeight: "min(560px, 72vh)" } : { bottom: 20, right: 20, maxHeight: "min(560px, 72vh)" }}>
+          <div onPointerDown={onAgentDragDown} onPointerMove={onAgentDragMove} onPointerUp={onAgentDragUp}
+            className="flex items-center justify-between pl-3.5 pr-2 py-2.5 border-b border-border shrink-0 cursor-grab active:cursor-grabbing select-none touch-none" title="Drag to move">
+            <span className="inline-flex items-center gap-1.5 text-fg font-medium"><Sparkles size={13} className="text-brand" /> Agent</span>
+            <select value={agentModel} onChange={(e) => setAgentModel(e.target.value)} title="Model that plans the actions"
+              className="max-w-[140px] bg-bg border border-border rounded-md px-1.5 py-1 text-[10px] text-fg-muted outline-none focus:border-brand">
+              {LLM_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label.replace(" (text only)", "")}</option>)}
+            </select>
+            <div className="flex items-center gap-0.5">
+              {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg text-[10px]">clr</button>}
+              <button onClick={() => setAgentMin(true)} title="Minimize" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-hover"><Minus size={14} /></button>
+              <button onClick={() => setAgentOpen(false)} title="Close" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-hover"><XIcon size={14} /></button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 min-h-[120px]">
+            {agentMsgs.length === 0 && (
+              <div className="text-fg-subtle text-[11px] leading-relaxed py-2">
+                I can build and run this workflow: create and wire nodes, write generator prompts, group clips into Hook/Body/Packshot, run generations and send tracks to the editor. Try:
+                <div className="mt-1.5 space-y-1">
+                  {["Build a pipeline: 2 hooks + a body + a packshot into the Editor node", "Write a punchy prompt for the video generator and run it", "What is on this canvas? Anything failed?"].map((ex) => (
+                    <button key={ex} onClick={() => { if (!agentBusy) void runCanvasAgent(ex); }} className="block w-full text-left px-2 py-1 rounded border border-border/60 text-fg-muted hover:border-brand hover:text-fg">{ex}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {agentMsgs.filter((m) => m.role !== "tool").map((m, i) => (
+              <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
+                <div className={`max-w-[92%] rounded-lg px-2.5 py-1.5 leading-relaxed ${m.role === "user" ? "bg-brand/15 text-fg" : "bg-bg text-fg"}`}>
+                  <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                  {m.chips && m.chips.some((ch) => !ch.ok) && (
+                    <div className="mt-1 text-[10px] text-red-400/90">{m.chips.filter((ch) => !ch.ok).map((ch) => `${ch.tool}: ${ch.result}`).join("; ")}</div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {agentBusy && <div className="flex items-center gap-2 text-fg-subtle"><span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" /> working{"\u2026"}</div>}
+            <div ref={agentEndRef} />
+          </div>
+          <div className="px-3 pb-3 pt-2 border-t border-border shrink-0">
+            <div className="flex items-end gap-2 rounded-2xl bg-bg border border-border focus-within:border-brand/60 pl-3.5 pr-1.5 py-1.5">
+              <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={1} placeholder={"Message the agent\u2026"}
+                onInput={(e) => { const t = e.currentTarget; t.style.height = "0px"; t.style.height = `${Math.min(120, t.scrollHeight)}px`; }}
+                onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if (v && !agentBusy) { setAgentInput(""); e.currentTarget.style.height = "auto"; void runCanvasAgent(v); } } }}
+                className="flex-1 resize-none bg-transparent text-fg outline-none py-1 leading-relaxed max-h-[120px]" />
+              <button disabled={agentBusy || !agentInput.trim()} aria-label="Send" title="Send (Enter)"
+                onClick={() => { const v = agentInput.trim(); if (v) { setAgentInput(""); void runCanvasAgent(v); } }}
+                className="w-8 h-8 shrink-0 grid place-items-center rounded-full bg-brand text-white disabled:opacity-35 transition-opacity">
+                <ArrowUp size={16} strokeWidth={2.5} />
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
