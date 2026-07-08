@@ -84,7 +84,7 @@ export default function RunsPanel({
 
   return (
     <div
-      className="absolute left-4 bottom-4 z-20 w-80 glass r-lg overflow-hidden"
+      data-overlay className="absolute left-4 bottom-4 z-20 w-80 glass r-lg overflow-hidden"
       style={{ transform: `translate(${offset.dx}px, ${offset.dy}px)` }}
     >
       <div

@@ -121,7 +121,7 @@ export default function Minimap({
 
   return (
     <div
-      className="absolute bottom-4 right-4 z-10 glass r-md overflow-hidden cursor-pointer"
+      data-overlay className="absolute bottom-4 right-4 z-10 glass r-md overflow-hidden cursor-pointer"
       style={{ width: MM_W, height: MM_H }}
       onClick={handleClick}
       onPointerDown={(e) => e.stopPropagation()}

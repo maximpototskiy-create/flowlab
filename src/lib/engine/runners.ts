@@ -338,6 +338,39 @@ export async function runNode(
       return { outputs: { analysis: text }, costUsd: estimateCost("any-llm"), durationMs: Date.now() - t0 };
     }
 
+    case "textSplit": {
+      const src = String(inputs.text || "").trim();
+      if (!src) throw new Error("Connect a text input to split");
+      const mode = String(config.mode || "auto");
+      let parts: string[] = [];
+      if (mode === "delimiter") {
+        const delim = String(config.delimiter || "\n\n") || "\n\n";
+        parts = src.split(delim).map((p) => p.trim()).filter(Boolean);
+      } else if (mode === "lines") {
+        parts = src.split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
+      } else if (mode === "numbered") {
+        parts = src.split(/\n?\s*\d+[.)]\s+/).map((p) => p.trim()).filter(Boolean);
+      } else {
+        // AI smart split -> strict JSON array of strings
+        const count = Math.max(2, Math.min(6, Number(config.count ?? 3)));
+        const model = String(config.model || "anthropic/claude-sonnet-4.6");
+        const instr = String(config.instructions || "Split into distinct, self-contained parts.");
+        const sys = "You split text into parts for a content pipeline. Return ONLY a JSON array of strings (no prose, no fences). Each element is one self-contained part, ready to feed a generator.";
+        const prompt = `${instr}\n\nSplit the following into at most ${count} parts. Return a JSON array of strings ONLY.\n\nTEXT:\n${src}`;
+        const raw = await llmCall(prompt, model, 0.2, [], sys);
+        const cleaned = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+        const a = cleaned.indexOf("["), b = cleaned.lastIndexOf("]");
+        try {
+          const arr = JSON.parse(a !== -1 && b > a ? cleaned.slice(a, b + 1) : cleaned) as unknown[];
+          parts = arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 6);
+        } catch { parts = src.split(/\n\n+/).map((p) => p.trim()).filter(Boolean).slice(0, count); }
+      }
+      if (!parts.length) parts = [src];
+      const outputs: Record<string, string> = {};
+      parts.slice(0, 6).forEach((p, i) => { outputs[`part${i + 1}`] = p; });
+      return { outputs, costUsd: mode === "auto" ? estimateCost("any-llm") : 0, durationMs: Date.now() - t0 };
+    }
+
     case "videoAnalysis": {
       // Gemini natively watches video (frames + audio). Pipeline: download the
       // reference -> Files API resumable upload -> wait ACTIVE -> generateContent.

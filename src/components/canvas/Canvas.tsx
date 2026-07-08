@@ -1169,9 +1169,11 @@ export default function Canvas({
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
     // Listeners are registered ONCE on mount — state is read via refs above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1316,6 +1318,7 @@ export default function Canvas({
       t.closest("[data-node-id]") ||
       t.closest("[data-port-side]") ||
       t.closest("[data-group-box]") ||
+      t.closest("[data-overlay]") ||
       t.closest("button, input, textarea, select, a");
     if (!onInteractive) {
       const additive = e.shiftKey || e.metaKey || e.ctrlKey;
@@ -1762,13 +1765,60 @@ export default function Canvas({
         const type = str("type");
         if (!type || !NODE_TYPES[type]) return `error: unknown type "${type}" (use list_node_types)`;
         const g = graphRef.current;
-        const maxX = g.nodes.length ? Math.max(...g.nodes.map((n) => n.position.x)) : 100;
-        const node = makeNode(type, { x: num("x") ?? maxX + 340, y: num("y") ?? 160 + (g.nodes.length % 5) * 150 });
+        let px = num("x"); let py = num("y");
+        if (px == null || py == null) {
+          // auto-place on a grid, skipping cells that overlap existing nodes
+          const COL = 360, ROW = 230, NW = 300, NH = 190;
+          const startX = g.nodes.length ? Math.max(...g.nodes.map((n) => n.position.x)) + COL : 140;
+          const overlaps = (x: number, y: number) => g.nodes.some((n) => Math.abs(n.position.x - x) < NW && Math.abs(n.position.y - y) < NH);
+          let placed = false;
+          for (let col = 0; col < 6 && !placed; col++) {
+            for (let row = 0; row < 6 && !placed; row++) {
+              const x = startX + col * COL, y = 120 + row * ROW;
+              if (!overlaps(x, y)) { px = x; py = y; placed = true; }
+            }
+          }
+          if (!placed) { px = startX + 6 * COL; py = 120; }
+        }
+        const node = makeNode(type, { x: px as number, y: py as number });
         const patch = (args.config && typeof args.config === "object") ? (args.config as Record<string, unknown>) : null;
         if (patch) node.config = { ...node.config, ...patch };
         setGraph((gr) => ({ ...gr, nodes: [...gr.nodes, node] }));
         await new Promise((r) => setTimeout(r, 30));
-        return `added node ${node.id} (${NODE_TYPES[type].name})`;
+        return `added node ${node.id} (${NODE_TYPES[type].name}) at (${Math.round(px as number)}, ${Math.round(py as number)})`;
+      }
+      case "group_nodes": {
+        const ids = Array.isArray(args.node_ids) ? (args.node_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        const valid = ids.filter((id) => graphRef.current.nodes.some((n) => n.id === id));
+        if (valid.length < 2) return "error: need at least 2 existing node_ids to group";
+        const label = str("label");
+        const color = str("color");
+        const group = { id: `grp-${Date.now().toString(36)}`, nodeIds: valid, ...(label ? { label } : {}), ...(color ? { color } : {}) };
+        setGraph((gr) => ({ ...gr, groups: [...(gr.groups ?? []), group] }));
+        return `grouped ${valid.length} nodes${label ? ` as "${label}"` : ""}`;
+      }
+      case "arrange": {
+        // Tidy the whole graph into columns by dependency depth (sources left).
+        const g = graphRef.current;
+        const depth = new Map<string, number>();
+        const inc = new Map<string, string[]>();
+        for (const e of g.edges) inc.set(e.to.nodeId, [...(inc.get(e.to.nodeId) || []), e.from.nodeId]);
+        const calc = (id: string, seen: Set<string>): number => {
+          if (depth.has(id)) return depth.get(id)!;
+          if (seen.has(id)) return 0;
+          seen.add(id);
+          const parents = inc.get(id) || [];
+          const d = parents.length ? Math.max(...parents.map((p) => calc(p, seen))) + 1 : 0;
+          depth.set(id, d); return d;
+        };
+        for (const n of g.nodes) calc(n.id, new Set());
+        const cols = new Map<number, string[]>();
+        for (const n of g.nodes) { const d = depth.get(n.id) || 0; cols.set(d, [...(cols.get(d) || []), n.id]); }
+        const COL = 360, ROW = 230;
+        const pos = new Map<string, { x: number; y: number }>();
+        for (const [d, list] of cols) list.forEach((id, i) => pos.set(id, { x: 140 + d * COL, y: 120 + i * ROW }));
+        setGraph((gr) => ({ ...gr, nodes: gr.nodes.map((n) => ({ ...n, position: pos.get(n.id) || n.position })) }));
+        return `arranged ${g.nodes.length} nodes into ${cols.size} columns`;
       }
       case "set_config": {
         const n = nodeOf(); if (!n) return "error: node not found";

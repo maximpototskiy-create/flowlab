@@ -1232,6 +1232,11 @@ function Port({
         onPointerDown={(e) => {
           if (side === "out") {
             e.stopPropagation();
+            // Release the implicit pointer capture the browser puts on this
+            // <button> (esp. touch/pen), otherwise the window-level pointerup
+            // that finalizes the edge never fires and the wire keeps trailing
+            // the cursor after release.
+            try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId); } catch { /* */ }
             onDown?.(e);
           }
         }}
