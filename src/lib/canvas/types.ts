@@ -337,6 +337,30 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     quickFields: ["model"],
   },
 
+  videoAnalysis: {
+    name: "Video Analysis",
+    category: "text",
+    icon: "file-search",
+    description: "Gemini WATCHES a reference video (visuals + audio) and returns a deep, timestamped breakdown with next-node suggestions.",
+    inputs: [
+      { name: "video", type: "video" },
+      { name: "focus", type: "text", optional: true },
+    ],
+    outputs: [{ name: "analysis", type: "text" }],
+    defaults: {
+      instructions: "You are a senior performance-creative strategist. WATCH this reference video carefully (both visuals and audio) and return a structured, deeply detailed breakdown:\n1) TIMELINE: second-by-second (or beat-by-beat) description of what happens - visuals, on-screen text (quote it), voiceover lines, sounds.\n2) MARKETING: target audience, core promise, the hook of the first 1-3 seconds and why it stops the scroll, persuasion angle, CTA (wording + timing).\n3) STRUCTURE: map it to Hook / Body / Packshot-CTA with exact timings and the job of each beat.\n4) VISUAL: style, framing, camera motion, colours, text placement and animation, editing pace (cuts per second), transitions.\n5) MOOD & AUDIO: emotional tone, music genre/energy/BPM feel, voiceover style, sound effects.\n6) WHY IT WORKS: 3-5 concrete mechanics.\n7) HOW TO REPRODUCE IT IN FLOWLAB - NEXT NODES: the exact next nodes and what to put in them: Script/Hooks Generation for copy -> Video/Image Generation (write the actual prompts) or Upload Video for real footage -> Hook / Body / Pack Shot section nodes -> Editor. Actionable; the user can ask the AI Agent to build this plan automatically.",
+      model: "gemini-3.5-flash",
+    },
+    fields: [
+      { name: "instructions", label: "Instructions", type: "textarea", placeholder: "What to analyse and how deep\u2026" },
+      { name: "model", label: "Model", type: "select", options: [{ value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" }, { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" }], help: "Runs on your direct Gemini key; the model natively watches the video (frames + audio)." },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Instructions",
+    examples: ["Break down this winning TikTok ref"],
+    quickFields: ["model"],
+  },
+
   imageAdPrompt: llmNode({
     name: "Image Ad Prompt",
     icon: "megaphone",

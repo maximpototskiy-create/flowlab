@@ -683,7 +683,7 @@ function CanvasNodeImpl({
             <Move size={12} /> Adjust track
           </button>
         )}
-        {node.type === "adAnalysis" && node.status === "done" && node.outputs && onAskAgent && (
+        {(node.type === "adAnalysis" || node.type === "videoAnalysis") && node.status === "done" && node.outputs && onAskAgent && (
           <button
             onClick={(e) => { e.stopPropagation(); onAskAgent(); }}
             onPointerDown={(e) => e.stopPropagation()}

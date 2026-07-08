@@ -338,6 +338,81 @@ export async function runNode(
       return { outputs: { analysis: text }, costUsd: estimateCost("any-llm"), durationMs: Date.now() - t0 };
     }
 
+    case "videoAnalysis": {
+      // Gemini natively watches video (frames + audio). Pipeline: download the
+      // reference -> Files API resumable upload -> wait ACTIVE -> generateContent.
+      const key = process.env.GEMINI_API_KEY;
+      if (!key) throw new Error("GEMINI_API_KEY not set - Video Analysis runs on your direct Gemini key");
+      const videoUrl = String(inputs.video || "");
+      if (!videoUrl.startsWith("http")) throw new Error("Connect a video (Upload Video or a generator) into the video input");
+      const instructions = String(config.instructions ?? "Analyse this video in depth.");
+      const focus = typeof inputs.focus === "string" && inputs.focus ? `\n\nFOCUS: ${inputs.focus}` : "";
+      const model = String(config.model ?? "gemini-3.5-flash");
+
+      const dl = await fetch(videoUrl, { cache: "no-store" });
+      if (!dl.ok) throw new Error(`Could not download the video (HTTP ${dl.status})`);
+      const buf = Buffer.from(await dl.arrayBuffer());
+      const MAX = 120 * 1024 * 1024;
+      if (buf.length > MAX) throw new Error(`Video is too large for analysis (${(buf.length / 1e6).toFixed(0)}MB > 120MB) - trim it first`);
+      const mime = dl.headers.get("content-type")?.split(";")[0] || (videoUrl.includes(".webm") ? "video/webm" : videoUrl.includes(".mov") ? "video/quicktime" : "video/mp4");
+
+      // 1) resumable upload: start
+      const startRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${key}`, {
+        method: "POST",
+        headers: {
+          "X-Goog-Upload-Protocol": "resumable",
+          "X-Goog-Upload-Command": "start",
+          "X-Goog-Upload-Header-Content-Length": String(buf.length),
+          "X-Goog-Upload-Header-Content-Type": mime,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ file: { display_name: `flowlab-ref-${Date.now()}` } }),
+      });
+      if (!startRes.ok) throw new Error(`Gemini upload start failed: ${startRes.status} ${(await startRes.text()).slice(0, 200)}`);
+      const uploadUrl = startRes.headers.get("x-goog-upload-url");
+      if (!uploadUrl) throw new Error("Gemini upload start: no upload url returned");
+      // 2) upload bytes + finalize
+      const upRes = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "0", "Content-Length": String(buf.length) },
+        body: buf,
+      });
+      if (!upRes.ok) throw new Error(`Gemini upload failed: ${upRes.status} ${(await upRes.text()).slice(0, 200)}`);
+      const upJson = (await upRes.json()) as { file?: { name?: string; uri?: string; state?: string; mimeType?: string } };
+      const fileName = upJson.file?.name;
+      let fileUri = upJson.file?.uri;
+      let state = upJson.file?.state || "PROCESSING";
+      if (!fileName || !fileUri) throw new Error("Gemini upload: malformed response");
+      // 3) wait until the file is ACTIVE (Gemini pre-processes the video)
+      const waitUntil = Date.now() + 180_000;
+      while (state === "PROCESSING" && Date.now() < waitUntil) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const st = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${key}`, { cache: "no-store" });
+        if (!st.ok) throw new Error(`Gemini file status failed: ${st.status}`);
+        const sj = (await st.json()) as { state?: string; uri?: string };
+        state = sj.state || "PROCESSING";
+        if (sj.uri) fileUri = sj.uri;
+      }
+      if (state !== "ACTIVE") throw new Error(`Gemini did not finish processing the video (state: ${state}) - try a shorter clip`);
+      // 4) ask the model to watch it
+      const sys = "You are a world-class performance-creative strategist and video editor. You are watching an ad reference video. Be extremely specific: quote on-screen text, give timestamps, name concrete techniques. Answer in clean readable sections.";
+      const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: sys }] },
+          contents: [{ role: "user", parts: [{ file_data: { file_uri: fileUri, mime_type: mime } }, { text: `${instructions}${focus}` }] }],
+          generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
+        }),
+        cache: "no-store",
+      });
+      if (!genRes.ok) throw new Error(`Gemini analysis failed: ${genRes.status} ${(await genRes.text()).slice(0, 300)}`);
+      const gj = (await genRes.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const text = gj.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+      if (!text.trim()) throw new Error("Gemini returned an empty analysis");
+      return { outputs: { analysis: text }, costUsd: 0.01, durationMs: Date.now() - t0 };
+    }
+
     // ─────────────────────── IMAGE
     case "imageGen": {
       const rawPrompt = String(config.instructions || inputs.prompt || "").trim();
