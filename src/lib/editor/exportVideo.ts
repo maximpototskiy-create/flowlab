@@ -46,7 +46,7 @@ export type ExportClip = {
   x: number;
   y: number;
   rot?: number;
-  kf?: { t: number; x?: number; y?: number; scale?: number; rot?: number }[];
+  kf?: { t: number; x?: number; y?: number; scale?: number; rot?: number; ease?: KfEase }[];
   fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
   fadeIn: number;
   fadeOut: number;
@@ -339,8 +339,24 @@ export function drawCaption(ctx: CanvasRenderingContext2D, c: ExportClip, tt: nu
 // Keyframe interpolation (After-Effects-style, linear): each key pins any of
 // x / y / scale / rot at a clip-local time; between keys the value blends.
 // Static clip values act as the base when a property has no keys.
+export type KfEase = "linear" | "in" | "out" | "inOut" | "hold";
+export type Keyframe = { t: number; x?: number; y?: number; scale?: number; rot?: number; ease?: KfEase };
+
+// Map a 0..1 progress through the segment's easing curve. The curve belongs to
+// the DESTINATION keyframe (how the motion arrives AT it); default is linear.
+export function applyEase(f: number, ease: KfEase | undefined): number {
+  const t = f < 0 ? 0 : f > 1 ? 1 : f;
+  switch (ease) {
+    case "hold": return 0;                     // step: hold the previous value until b
+    case "in": return t * t * t;               // cubic ease-in (slow start)
+    case "out": return 1 - Math.pow(1 - t, 3); // cubic ease-out (slow end)
+    case "inOut": return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    default: return t;                          // linear
+  }
+}
+
 export function kfState(
-  c: { x?: number; y?: number; scale?: number; rot?: number; kf?: { t: number; x?: number; y?: number; scale?: number; rot?: number }[] },
+  c: { x?: number; y?: number; scale?: number; rot?: number; kf?: Keyframe[] },
   local: number,
 ): { x: number; y: number; scale: number; rot: number } {
   const out = { x: c.x || 0, y: c.y || 0, scale: c.scale || 1, rot: c.rot || 0 };
@@ -354,7 +370,8 @@ export function kfState(
     for (let i2 = 0; i2 < pts.length - 1; i2++) {
       const a = pts[i2], b = pts[i2 + 1];
       if (local >= a.t && local <= b.t) {
-        const f = (local - a.t) / Math.max(1e-6, b.t - a.t);
+        const raw = (local - a.t) / Math.max(1e-6, b.t - a.t);
+        const f = applyEase(raw, b.ease);
         out[p] = a[p]! + (b[p]! - a[p]!) * f;
         break;
       }

@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
 import { LLM_MODELS } from "@/lib/canvas/types";
 import type { TextStyle, CapWord } from "@/lib/editor/exportVideo";
-import { drawCaption, kfState, type ExportClip } from "@/lib/editor/exportVideo";
+import { drawCaption, kfState, type ExportClip, type KfEase } from "@/lib/editor/exportVideo";
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
@@ -274,7 +274,7 @@ type EditClip = {
   y: number;
   fit?: "cover" | "contain" | "blur"; // how media adapts to the canvas aspect
   rot?: number; // rotation in degrees (media clips)
-  kf?: { t: number; x?: number; y?: number; scale?: number; rot?: number }[]; // transform keyframes (clip-local time)
+  kf?: { t: number; x?: number; y?: number; scale?: number; rot?: number; ease?: KfEase }[]; // transform keyframes (clip-local time)
   // Alternatives for batch "versions": extra options beyond this clip's base
   // value. Each version swaps in one option's text (captions) or url (media).
   variants?: { id: string; text?: string; url?: string; dur?: number }[];
@@ -2155,8 +2155,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       if (cc.id !== id) return cc;
       if (cc.kind !== "video" && cc.kind !== "image" && cc.kind !== "shape") return cc;
       const local = +(Math.min(Math.max(playheadRef.current - cc.start, 0), cc.duration)).toFixed(2);
-      const existing = cc.kf && cc.kf.length ? cc.kf : [{ t: 0, x: cc.x ?? 0, y: cc.y ?? 0, scale: cc.scale ?? 1, rot: cc.rot ?? 0 }];
-      const key = { t: local, x: cc.x ?? 0, y: cc.y ?? 0, scale: cc.scale ?? 1, rot: cc.rot ?? 0 };
+      const existing = cc.kf && cc.kf.length ? cc.kf : [{ t: 0, x: cc.x ?? 0, y: cc.y ?? 0, scale: cc.scale ?? 1, rot: cc.rot ?? 0, ease: "inOut" as KfEase }];
+      const prevAt = existing.find((k) => Math.abs(k.t - local) < 0.03);
+      const key = { t: local, x: cc.x ?? 0, y: cc.y ?? 0, scale: cc.scale ?? 1, rot: cc.rot ?? 0, ease: prevAt?.ease ?? ("inOut" as KfEase) };
       const kf = [...existing.filter((k) => Math.abs(k.t - local) >= 0.03), key].sort((a, b) => a.t - b.t);
       return { ...cc, kf };
     }));
@@ -2524,10 +2525,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       case "add_keyframes": {
         const c = clipOf(); if (!c) return "error: clip not found";
         const raw = Array.isArray(args.keys) ? (args.keys as Record<string, unknown>[]) : [];
+        const EASES = ["linear", "in", "out", "inOut", "hold"];
         const keys = raw.filter((k) => typeof k.t === "number").map((k) => ({
           t: +(k.t as number).toFixed(2),
           ...(typeof k.x === "number" ? { x: k.x as number } : {}), ...(typeof k.y === "number" ? { y: k.y as number } : {}),
           ...(typeof k.scale === "number" ? { scale: k.scale as number } : {}), ...(typeof k.rot === "number" ? { rot: k.rot as number } : {}),
+          ...(typeof k.ease === "string" && EASES.includes(k.ease as string) ? { ease: k.ease as KfEase } : { ease: "inOut" as KfEase }),
         })).sort((x, y) => x.t - y.t);
         if (!keys.length) return "error: keys required";
         update(c.id, { kf: keys });
@@ -3797,13 +3800,24 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         <span>keys</span>
                         <button title={near ? "Update the keyframe at the playhead with the current transform" : "Add a transform keyframe (x/y/scale/rotate) at the playhead"}
                           onClick={() => {
-                            const key = { t: local, x: cur.x, y: cur.y, scale: cur.scale, rot: cur.rot };
+                            const key = { t: local, x: cur.x, y: cur.y, scale: cur.scale, rot: cur.rot, ease: (near?.ease ?? "inOut") as KfEase };
                             updateSel(sel.id, { kf: [...(sel.kf || []).filter((k) => Math.abs(k.t - local) >= 0.05), key].sort((a, b) => a.t - b.t) });
                           }}
                           className={`w-5 h-5 grid place-items-center rounded border ${near ? "border-brand text-brand bg-brand/15" : "border-border text-fg-subtle hover:text-brand hover:border-brand"}`}>
                           <span className="block w-2 h-2 rotate-45 border border-current" style={{ background: near ? "currentColor" : "transparent" }} />
                         </button>
-                        <span className="text-fg-subtle text-[10px] flex-1">{(sel.kf?.length ?? 0)} key{(sel.kf?.length ?? 0) === 1 ? "" : "s"} {"\u00b7"} diamonds on the clip: click = jump, Alt+click = delete</span>
+                        {near ? (
+                          <select value={near.ease ?? "inOut"} title="Easing curve for the motion arriving at this keyframe"
+                            onChange={(e) => { const ez = e.target.value as KfEase; updateSel(sel.id, { kf: (sel.kf || []).map((k) => (Math.abs(k.t - local) < 0.05 ? { ...k, ease: ez } : k)) }); }}
+                            className="bg-bg-card border border-border rounded px-1.5 py-1 text-[10px] text-fg outline-none focus:border-brand">
+                            <option value="linear">Linear</option>
+                            <option value="in">Ease in</option>
+                            <option value="out">Ease out</option>
+                            <option value="inOut">Ease in-out</option>
+                            <option value="hold">Hold (step)</option>
+                          </select>
+                        ) : null}
+                        <span className="text-fg-subtle text-[10px] flex-1">{(sel.kf?.length ?? 0)} key{(sel.kf?.length ?? 0) === 1 ? "" : "s"} {"\u00b7"} click a diamond = jump, Alt+click = delete{near ? " \u00b7 curve applies to the segment INTO this key" : ""}</span>
                         {(sel.kf?.length ?? 0) > 0 && <button onClick={() => updateSel(sel.id, { kf: undefined })} className="text-fg-subtle hover:text-red-400 text-[10px] underline decoration-dotted">clear</button>}
                       </div>
                     );
