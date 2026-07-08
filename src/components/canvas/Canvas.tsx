@@ -1755,6 +1755,14 @@ export default function Canvas({
       }
       case "list_nodes":
         return buildCanvasState();
+      case "semantic_search": {
+        const q = str("query"); if (!q) return "error: query required";
+        const r = await fetch("/api/semantic-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: q, brandId: workflowMeta.brandId || undefined, modality: str("kind"), limit: 12 }) });
+        const j = (await r.json()) as { results?: { assetId: string | null; url: string; modality: string; category: string | null }[]; error?: string };
+        if (!r.ok) return `error: ${j.error || "search failed"}`;
+        const res = (j.results || []).filter((x) => x.url).slice(0, 12).map((x) => ({ url: x.url, kind: x.modality, cat: x.category || undefined }));
+        return JSON.stringify({ results: res });
+      }
       case "add_node": {
         const type = str("type");
         if (!type || !NODE_TYPES[type]) return `error: unknown type "${type}" (use list_node_types)`;
@@ -1833,7 +1841,7 @@ export default function Canvas({
       default: return `error: unknown tool "${a.tool}"`;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildCanvasState, buildComposerTracks, workflowId]);
+  }, [buildCanvasState, buildComposerTracks, workflowId, workflowMeta.brandId]);
 
   const runCanvasAgent = useCallback(async (userText: string) => {
     if (agentBusy) return;
