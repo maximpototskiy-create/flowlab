@@ -340,9 +340,32 @@ export async function runNode(
 
     case "textSplit": {
       const src = String(inputs.text || "").trim();
-      if (!src) throw new Error("Connect a text input to split");
       const mode = String(config.mode || "auto");
+      const norm = (m: string) => (/^gemini-(1\.5|2\.0)/.test(m) ? "gemini-3.5-flash" : m);
       let parts: string[] = [];
+      if (mode === "generate") {
+        // No input needed: produce N distinct items straight from the instruction.
+        const count = Math.max(2, Math.min(6, Number(config.count ?? 5)));
+        const model = norm(String(config.model || "anthropic/claude-sonnet-4.6"));
+        const instr = String(config.instructions || "Generate distinct, self-contained items.");
+        const ctx = src ? `\n\nContext to base them on:\n${src}` : "";
+        const sys = "You produce a set of distinct, self-contained items for a content pipeline (e.g. image-generation prompts). Return ONLY a JSON array of strings - no prose, no fences, no numbering. Each element is one complete item.";
+        const prompt = `${instr}${ctx}\n\nReturn EXACTLY ${count} items as a JSON array of strings ONLY.`;
+        const raw = await llmCall(prompt, model, 0.7, [], sys);
+        const cleaned = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+        const a = cleaned.indexOf("["), b = cleaned.lastIndexOf("]");
+        try {
+          const arr = JSON.parse(a !== -1 && b > a ? cleaned.slice(a, b + 1) : cleaned) as unknown[];
+          parts = arr.map((x) => String(x).trim()).filter(Boolean).slice(0, count);
+        } catch {
+          parts = cleaned.split(/\n\s*\n|\n?\s*\d+[.)]\s+/).map((p) => p.trim()).filter(Boolean).slice(0, count);
+        }
+        if (!parts.length) throw new Error("Could not generate items - try rephrasing the instruction");
+        const outputs: Record<string, string> = {};
+        parts.forEach((p, i) => { outputs[`part${i + 1}`] = p; });
+        return { outputs, costUsd: estimateCost("any-llm"), durationMs: Date.now() - t0 };
+      }
+      if (!src) throw new Error("Connect a text input to split (or switch mode to 'AI generate N items')");
       if (mode === "delimiter") {
         const delim = String(config.delimiter || "\n\n") || "\n\n";
         parts = src.split(delim).map((p) => p.trim()).filter(Boolean);
@@ -353,7 +376,7 @@ export async function runNode(
       } else {
         // AI smart split -> strict JSON array of strings
         const count = Math.max(2, Math.min(6, Number(config.count ?? 3)));
-        const model = String(config.model || "anthropic/claude-sonnet-4.6");
+        const model = norm(String(config.model || "anthropic/claude-sonnet-4.6"));
         const instr = String(config.instructions || "Split into distinct, self-contained parts.");
         const sys = "You split text into parts for a content pipeline. Return ONLY a JSON array of strings (no prose, no fences). Each element is one self-contained part, ready to feed a generator.";
         const prompt = `${instr}\n\nSplit the following into at most ${count} parts. Return a JSON array of strings ONLY.\n\nTEXT:\n${src}`;
@@ -380,7 +403,9 @@ export async function runNode(
       if (!videoUrl.startsWith("http")) throw new Error("Connect a video (Upload Video or a generator) into the video input");
       const instructions = String(config.instructions ?? "Analyse this video in depth.");
       const focus = typeof inputs.focus === "string" && inputs.focus ? `\n\nFOCUS: ${inputs.focus}` : "";
-      const model = String(config.model ?? "gemini-3.5-flash");
+      let model = String(config.model ?? "gemini-3.5-flash");
+      // Gemini 1.5 / 2.0 are shut down (404). Silently upgrade legacy configs.
+      if (/^gemini-(1\.5|2\.0)/.test(model) || model === "gemini-pro" || model === "gemini-flash") model = "gemini-3.5-flash";
 
       const dl = await fetch(videoUrl, { cache: "no-store" });
       if (!dl.ok) throw new Error(`Could not download the video (HTTP ${dl.status})`);
@@ -429,7 +454,7 @@ export async function runNode(
       if (state !== "ACTIVE") throw new Error(`Gemini did not finish processing the video (state: ${state}) - try a shorter clip`);
       // 4) ask the model to watch it
       const sys = "You are a world-class performance-creative strategist and video editor. You are watching an ad reference video. Be extremely specific: quote on-screen text, give timestamps, name concrete techniques. Answer in clean readable sections.";
-      const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+      const callGen = (m: string) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -439,6 +464,8 @@ export async function runNode(
         }),
         cache: "no-store",
       });
+      let genRes = await callGen(model);
+      if (genRes.status === 404 && model !== "gemini-3.5-flash") { model = "gemini-3.5-flash"; genRes = await callGen(model); }
       if (!genRes.ok) throw new Error(`Gemini analysis failed: ${genRes.status} ${(await genRes.text()).slice(0, 300)}`);
       const gj = (await genRes.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
       const text = gj.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";

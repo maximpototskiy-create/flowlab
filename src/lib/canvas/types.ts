@@ -362,11 +362,11 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
   },
 
   textSplit: {
-    name: "Text Split",
+    name: "Split / Generate Parts",
     category: "text",
     icon: "scissors",
-    description: "Split one text (a script, an analysis, a list of hooks) into separate parts - each part has its own output you can wire to a different generator.",
-    inputs: [{ name: "text", type: "text" }],
+    description: "Turn ONE text into several separate outputs (part1..part6) you can wire to different generators. Split an existing text (script, analysis, list of prompts), or generate N distinct items from an instruction.",
+    inputs: [{ name: "text", type: "text", optional: true }],
     outputs: [
       { name: "part1", type: "text" },
       { name: "part2", type: "text" },
@@ -375,18 +375,18 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
       { name: "part5", type: "text" },
       { name: "part6", type: "text" },
     ],
-    defaults: { mode: "auto", count: 3, delimiter: "\n\n", instructions: "Split into distinct, self-contained parts (e.g. one hook per part, or scene-by-scene). Keep each part usable on its own.", model: "anthropic/claude-sonnet-4.6" },
+    defaults: { mode: "auto", count: 5, delimiter: "---", instructions: "Split the input into distinct, self-contained parts - one per output (e.g. one image prompt per part, one hook per part, scene by scene). Each part must be usable on its own.", model: "anthropic/claude-sonnet-4.6" },
     fields: [
-      { name: "mode", label: "Split by", type: "select", options: [{ value: "auto", label: "AI (smart split)" }, { value: "delimiter", label: "Delimiter" }, { value: "lines", label: "Lines" }, { value: "numbered", label: "Numbered list" }] },
-      { name: "count", label: "Max parts (AI mode)", type: "number" },
-      { name: "delimiter", label: "Delimiter (delimiter mode)", type: "text", placeholder: "e.g. --- or blank line" },
-      { name: "instructions", label: "How to split (AI mode)", type: "textarea" },
-      { name: "model", label: "Model (AI mode)", type: "select", options: [{ value: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6" }, { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" }] },
+      { name: "mode", label: "Mode", type: "select", options: [{ value: "auto", label: "AI split (from connected text)" }, { value: "generate", label: "AI generate N items (no input)" }, { value: "numbered", label: "Numbered list (1. 2. 3.)" }, { value: "delimiter", label: "Delimiter" }, { value: "lines", label: "Lines" }] },
+      { name: "count", label: "How many parts (2-6)", type: "number" },
+      { name: "instructions", label: "Instruction (AI modes)", type: "textarea", placeholder: "e.g. 5 image prompts for an app-ad, cinematic, varied scenes" },
+      { name: "delimiter", label: "Delimiter (delimiter mode)", type: "text", placeholder: "e.g. --- or a blank line" },
+      { name: "model", label: "Model (AI modes)", type: "select", options: [{ value: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6" }, { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" }] },
     ],
-    primaryField: "mode",
-    primaryLabel: "Split by",
-    examples: ["Split a script into scenes"],
-    quickFields: ["mode"],
+    primaryField: "instructions",
+    primaryLabel: "Instruction",
+    examples: ["5 image prompts, one per output"],
+    quickFields: ["mode", "count"],
   },
 
   imageAdPrompt: llmNode({
