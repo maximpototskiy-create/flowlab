@@ -37,7 +37,7 @@ export type CapWord = { text: string; t: number; d: number }; // relative to cli
 export type ExportClip = {
   id: string;
   layer: string;
-  kind: "video" | "image" | "audio" | "text" | "fx" | "adjust";
+  kind: "video" | "image" | "audio" | "text" | "fx" | "adjust" | "shape";
   url?: string;
   text?: string;
   start: number;
@@ -61,6 +61,7 @@ export type ExportClip = {
   keyTol?: number;   // 0..1 tolerance (default 0.3)
   tstyle?: TextStyle;
   words?: CapWord[];
+  shape?: { kind: "rect" | "ellipse"; color: string; radius: number; w: number; h: number; opacity: number };
 };
 
 type Params = {
@@ -510,6 +511,19 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         }
       } else if (c.kind === "text") {
         drawCaption(ctx, c, tt, W, H, sx, { opacity: v.opacity, scaleMul: 1, offX: 0, offY: 0 });
+      } else if (c.kind === "shape" && c.shape) {
+        const sh = c.shape;
+        const kf = kfState(c, tt - c.start);
+        const cw = W * sh.w * (kf.scale ?? c.scale ?? 1);
+        const ch = H * sh.h * (kf.scale ?? c.scale ?? 1);
+        const cx = W / 2 + (kf.x ?? c.x ?? 0) * W - cw / 2;
+        const cy = H / 2 + (kf.y ?? c.y ?? 0) * H - ch / 2;
+        ctx.globalAlpha = v.opacity * (sh.opacity ?? 1);
+        ctx.fillStyle = sh.color;
+        if (kf.rot ?? c.rot) { ctx.save(); ctx.translate(cx + cw / 2, cy + ch / 2); ctx.rotate(((kf.rot ?? c.rot ?? 0) * Math.PI) / 180); ctx.translate(-(cx + cw / 2), -(cy + ch / 2)); }
+        if (sh.kind === "ellipse") { ctx.beginPath(); ctx.ellipse(cx + cw / 2, cy + ch / 2, cw / 2, ch / 2, 0, 0, Math.PI * 2); ctx.fill(); }
+        else { const r = Math.min(sh.radius, cw / 2, ch / 2); ctx.beginPath(); ctx.moveTo(cx + r, cy); ctx.arcTo(cx + cw, cy, cx + cw, cy + ch, r); ctx.arcTo(cx + cw, cy + ch, cx, cy + ch, r); ctx.arcTo(cx, cy + ch, cx, cy, r); ctx.arcTo(cx, cy, cx + cw, cy, r); ctx.closePath(); ctx.fill(); }
+        if (kf.rot ?? c.rot) ctx.restore();
       }
       ctx.restore();
     }

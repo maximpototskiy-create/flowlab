@@ -24,10 +24,10 @@ export type EditorAsset = {
 
 type LayerType = "video" | "image" | "text" | "effect" | "audio";
 type Layer = { id: string; name?: string; type: LayerType; hidden?: boolean; locked?: boolean };
-type Kind = "video" | "image" | "audio" | "text" | "fx" | "adjust";
+type Kind = "video" | "image" | "audio" | "text" | "fx" | "adjust" | "shape";
 const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3, audio: 4 };
 const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
-const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" ? "text" : k === "image" ? "image" : "video");
+const clipLayerType = (k: Kind): LayerType => (k === "fx" || k === "adjust" ? "effect" : k === "audio" ? "audio" : k === "text" || k === "shape" ? "text" : k === "image" ? "image" : "video");
 const CAT_LABEL: Record<string, string> = { logo: "Logo", ui: "UI", store: "Store", graphic: "Graphic", overlay: "Overlay", music: "Music", sound: "Sound", reference: "Reference", hook: "Hook", body: "Body", packshot: "Packshot", other: "Other" };
 const CAP_FONTS: { label: string; value: string }[] = [
   { label: "SF / System", value: "-apple-system, \"SF Pro Display\", system-ui, sans-serif" },
@@ -294,6 +294,8 @@ type EditClip = {
   keyTol?: number;   // 0..1
   tstyle?: TextStyle;
   words?: CapWord[];
+  // Shape/plate clip: a solid or rounded rectangle behind other layers.
+  shape?: { kind: "rect" | "ellipse"; color: string; radius: number; w: number; h: number; opacity: number };
   // Server-rendered screen replace (node-quality): green source + content + track.
   sr?: {
     green: string; content?: string; contentVideo?: boolean;
@@ -309,7 +311,7 @@ const RESOLUTIONS = [
   { key: "16:9", label: "Landscape 16:9", w: 1920, h: 1080 },
   { key: "1:1", label: "Square 1:1", w: 1080, h: 1080 },
 ];
-const DEFAULTS = { image: 4, audio: 6, video: 4, text: 3, fx: 1.5, adjust: 3 };
+const DEFAULTS = { image: 4, audio: 6, video: 4, text: 3, fx: 1.5, adjust: 3, shape: 4 };
 // Export filename templating. Tokens: {project} {type} {version} {resolution}
 // {duration} {lang} {initials}. "__" separates the concept block from render
 // specs (matches the team's CCA naming convention). Persisted per browser.
@@ -1192,6 +1194,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const PLAIN_TEXT: TextStyle = { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 };
   // plain text layer by default — animations/styles are applied afterwards (Captions tab / Properties)
   const addText = (style?: TextStyle, label = "Text", text = "Your text") => addClipKind("text", { text, tstyle: { ...(style ?? PLAIN_TEXT) } }, DEFAULTS.text, label);
+  const addShape = (shape: "rect" | "ellipse", color: string) => addClipKind("shape", { shape: { kind: shape, color, radius: 18, w: 0.6, h: 0.18, opacity: 1 } }, DEFAULTS.shape, shape === "ellipse" ? "Ellipse" : "Plate");
   // live style: update the template AND apply to selected captions (or all if none selected)
   const applyStyle = (next: TextStyle) => {
     setCapStyle(next);
@@ -1849,7 +1852,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       flashStatus(n ? `${n} version${n === 1 ? "" : "s"} created \u2014 switch with the tabs under the player.` : "No canvas variants to build versions from.", 6000);
     }, 80);
   }, [canvasAssets, assembleFromCanvas, buildComboVersions, flashStatus]);
-  const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
+  const clipLabel = useCallback((c: EditClip) => (c.kind === "text" ? `"${(c.text || "text").slice(0, 22)}"` : c.kind === "shape" ? (c.label || "Shape") : (assets.find((a) => a.url === c.url)?.label || c.kind)), [assets]);
   // Human-readable label for an asset URL (bin label, else the file name).
   const urlLabel = useCallback((u?: string) => {
     if (!u) return "?";
@@ -2414,6 +2417,24 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         setClips((prev) => [...prev, { id, kind: "text", layer: lid!, label: text.slice(0, 24), start: +start.toFixed(2), duration: num("duration") ?? 3, fadeIn: 0, fadeOut: 0, scale: 1, x: 0, y: num("y") ?? -0.25, text, tstyle: { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 800 } }]);
         return `added text clip ${id} ("${text.slice(0, 30)}") at ${start.toFixed(2)}s`;
       }
+      case "add_shape": {
+        const kind = str("shape") === "ellipse" ? "ellipse" : "rect";
+        const color = str("color") || "rgba(0,0,0,0.72)";
+        const before = new Set(clipsRef.current.map((c) => c.id));
+        addShape(kind, color);
+        await new Promise((r) => setTimeout(r, 30));
+        const added = clipsRef.current.find((c) => !before.has(c.id));
+        if (added) {
+          const p: Partial<EditClip> = {};
+          if (num("start") != null) p.start = num("start");
+          if (num("duration") != null) p.duration = num("duration");
+          const sh = { ...added.shape!, ...(num("w") != null ? { w: num("w")! } : {}), ...(num("h") != null ? { h: num("h")! } : {}), ...(num("y") != null ? {} : {}) };
+          if (num("y") != null) p.y = num("y");
+          p.shape = sh;
+          update(added.id, p);
+        }
+        return added ? `added ${kind} shape ${added.id}` : "added shape";
+      }
       case "replace_clip": {
         const c = clipOf(); if (!c) return "error: clip not found";
         const asset = agentFindAsset(args);
@@ -2887,6 +2908,16 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 </button>
               ))}
             </div>
+            <div className="text-fg-muted text-[11px] font-medium pt-2">Shapes & plates</div>
+            <div className="grid grid-cols-3 gap-2">
+              {([["Plate", "rect", "rgba(0,0,0,0.72)"], ["Bar", "rect", "#FFD60A"], ["Ellipse", "ellipse", "rgba(0,0,0,0.72)"]] as const).map(([name, kind, color]) => (
+                <button key={name} onClick={() => addShape(kind, color)} title={`Add ${name.toLowerCase()} behind your content`}
+                  className="rounded-md border border-border hover:border-brand bg-black aspect-video flex items-center justify-center overflow-hidden">
+                  <span style={{ display: "block", width: "62%", height: "42%", background: color, borderRadius: kind === "ellipse" ? "50%" : 5 }} />
+                </button>
+              ))}
+            </div>
+            <div className="text-[10px] text-fg-subtle px-1">Shapes sit on their layer like any clip — put a text layer above a plate for a caption background. Colour, corners, size and opacity are in <b>Properties</b>.</div>
             <div className="text-[10px] text-fg-subtle px-1">Plain text — no animation by default. Select it, then add an entrance animation and styling in <b>Captions → Caption style</b> or tweak it in Properties.</div>
           </div>
         )}
@@ -3258,6 +3289,23 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                       // Only load a clip's video near its playback window, so the
                       // whole timeline's videos don't buffer/decode all at once.
                       const near = active || (c.start - t > 0 && c.start - t < 1.5) || (t >= c.start + c.duration && t - (c.start + c.duration) < 0.4);
+                      if (c.kind === "shape" && c.shape) {
+                        const W = previewSize.w, H = previewSize.h;
+                        const ks = kfState(c, t - c.start);
+                        const sw = W * c.shape.w * ks.scale, sh = H * c.shape.h * ks.scale;
+                        return (
+                          <div key={c.id} className="absolute" onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}
+                            style={{ left: (W - sw) / 2 + (ks.x + v.offX) * W, top: (H - sh) / 2 + (ks.y + v.offY) * H, width: sw, height: sh, opacity: v.opacity * (c.shape.opacity ?? 1), transform: ks.rot ? `rotate(${ks.rot}deg)` : undefined, transformOrigin: "center", pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}>
+                            <div className="w-full h-full" style={{ background: c.shape.color, borderRadius: c.shape.kind === "ellipse" ? "50%" : Math.min(c.shape.radius, sw / 2, sh / 2) }} />
+                            {selected === c.id && active && (
+                              <>
+                                <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} />
+                                <div onPointerDown={(e) => onVpDown(e, c, "rotate")} title="Drag to rotate (Shift = 15 deg steps)" className="absolute left-1/2 -translate-x-1/2 -top-6 w-4 h-4 rounded-full bg-bg-card border-2 border-brand cursor-grab active:cursor-grabbing shadow" style={{ touchAction: "none" }}><div className="absolute left-1/2 top-full -translate-x-1/2 w-px h-2.5 bg-brand/70" /></div>
+                              </>)}
+                            {isSel && active && selected !== c.id && <div className="absolute inset-0 ring-2 ring-brand pointer-events-none" />}
+                          </div>
+                        );
+                      }
                       return (
                         <div key={c.id} className={boxStyle ? "absolute" : "absolute inset-0"}
                           style={{ ...(boxStyle ?? styleFromVisual(c, v)), mixBlendMode: (c.blend || undefined) as React.CSSProperties["mixBlendMode"], pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}
@@ -3348,10 +3396,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           <button onClick={() => removeMany(selectedIds)} disabled={!selectedIds.length} title="Delete selected" className="hover:text-red-400 disabled:opacity-30"><Trash2 size={13} /></button>
           <span className="tabular-nums">{fmt(playhead)} / {fmt(totalDur)}</span>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={() => setPxPerSec((z) => Math.max(2, Math.round(z * 0.8)))} className="hover:text-fg" title="Zoom out (Cmd/Ctrl+wheel)"><ZoomOut size={13} /></button>
-            <button onClick={() => setPxPerSec((z) => Math.min(400, Math.round(z * 1.25)))} className="hover:text-fg" title="Zoom in (Cmd/Ctrl+wheel)"><ZoomIn size={13} /></button>
-            <input type="range" min={28} max={96} step={2} value={laneH} onChange={(e) => setLaneH(Number(e.target.value))} title="Track height (Alt+wheel)" className="w-14" />
-            <button onClick={() => { const w = (typeof window !== "undefined" ? window.innerWidth : 1200) - leftW - rightW - 200; setPxPerSec(Math.min(400, Math.max(2, Math.floor(w / Math.max(1, totalDur))))); }} title="Fit timeline to window" className="px-1.5 py-0.5 rounded border border-border text-fg-muted hover:text-fg text-[10px]">Fit</button>
+            <ZoomOut size={13} className="text-fg-subtle shrink-0" />
+            <input type="range" min={2} max={400} step={1} value={pxPerSec} onChange={(e) => setPxPerSec(Number(e.target.value))} title="Timeline zoom (Cmd/Ctrl+wheel)" className="w-24 accent-brand" />
+            <ZoomIn size={13} className="text-fg-subtle shrink-0" />
+            <span className="w-px h-4 bg-border mx-0.5 shrink-0" aria-hidden />
+            <span className="text-fg-subtle text-[10px] shrink-0" title="Track height">rows</span>
+            <input type="range" min={28} max={96} step={2} value={laneH} onChange={(e) => setLaneH(Number(e.target.value))} title="Track height (Alt+wheel)" className="w-16 accent-brand" />
+            <button onClick={() => { const w = (typeof window !== "undefined" ? window.innerWidth : 1200) - leftW - rightW - 200; setPxPerSec(Math.min(400, Math.max(2, Math.floor(w / Math.max(1, totalDur))))); }} title="Fit timeline to window" className="px-1.5 py-0.5 rounded border border-border text-fg-muted hover:text-fg text-[10px] shrink-0">Fit</button>
           </div>
           {status && <span className="text-fg-subtle truncate max-w-[35%]">· {status}</span>}
         </div>
@@ -3379,7 +3430,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             <span className="ml-2 text-fg-subtle truncate hidden sm:inline">editing v{activeVer + 1} {"\u2014"} every change stays in this version</span>
           </div>
         )}
-        <div ref={timelineWheelRef} className={`shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none ${cutMode ? "cursor-crosshair" : ""}`} style={{ height: timelineH }}
+        <div ref={timelineWheelRef} className={`tl-scroll shrink-0 border-t border-border overflow-auto bg-bg-card/30 select-none ${cutMode ? "cursor-crosshair" : ""}`} style={{ height: timelineH }}
           onPointerDown={onMarqueeDown} onPointerMove={onClipPointerMove} onPointerUp={onClipPointerUp} onPointerLeave={onClipPointerUp}>
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
@@ -3468,6 +3519,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           : c.kind === "adjust" ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
                           : c.kind === "text" ? "border-amber-500/50 bg-amber-500/15 text-amber-200"
                           : c.kind === "audio" ? "border-emerald-500/50 bg-emerald-600/20 text-emerald-200"
+                          : c.kind === "shape" ? "border-pink-500/50 bg-pink-500/15 text-pink-200"
                           : c.kind === "image" ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
                           : "border-sky-500/50 bg-sky-500/15 text-sky-200"}`}>
                         {c.kind === "video" && c.url && (() => {
@@ -3477,6 +3529,25 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                             ? <span className="absolute inset-0 pointer-events-none opacity-80" style={{ backgroundImage: `url(${fs})`, backgroundSize: "auto 100%", backgroundRepeat: "repeat-x" }} />
                             : <span className="h-full w-8 shrink-0 overflow-hidden border-r border-black/40 bg-black"><video src={c.url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" /></span>;
                         })()}
+                        {c.kind === "video" && c.url && !c.muted && (() => {
+                          // slim audio waveform along the bottom of the video clip
+                          const all = wavePeaksCache.get(c.url);
+                          if (all === undefined) { requestWave(c.url); return null; }
+                          if (!all || !all.length) return null;
+                          const sd = c.srcDur && c.srcDur > 0 ? c.srcDur : (c.inset || 0) + c.duration;
+                          const i0 = Math.max(0, Math.floor(((c.inset || 0) / sd) * all.length));
+                          const i1 = Math.min(all.length, Math.max(i0 + 2, Math.ceil((((c.inset || 0) + c.duration) / sd) * all.length)));
+                          const peaks = all.slice(i0, i1);
+                          const w = Math.max(24, c.duration * pxPerSec), wh = Math.min(18, Math.max(10, (laneH - 12) * 0.32));
+                          const pts = peaks.map((v, i) => `${(i / Math.max(1, peaks.length - 1)) * w},${wh - v * (wh - 1)}`).join(" ");
+                          const pts2 = peaks.map((v, i) => `${(i / Math.max(1, peaks.length - 1)) * w},${wh}`).reverse().join(" ");
+                          return <svg className="absolute left-0 bottom-0 pointer-events-none" width={w} height={wh} preserveAspectRatio="none"><polygon points={`${pts} ${pts2}`} fill="rgba(0,0,0,0.5)" /><polyline points={pts} fill="none" stroke="rgba(125,211,252,0.9)" strokeWidth="1" /></svg>;
+                        })()}
+                        {c.kind === "shape" && c.shape && (
+                          <span className="absolute inset-0 pointer-events-none flex items-center px-1" style={{ opacity: 0.5 }}>
+                            <span className="w-full" style={{ height: "60%", background: c.shape.color, borderRadius: c.shape.kind === "ellipse" ? 999 : 4 }} />
+                          </span>
+                        )}
                         {c.kind === "image" && c.url && (
                           <span className="h-full w-8 shrink-0 overflow-hidden border-r border-black/40 bg-black">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -3576,6 +3647,37 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               <Section id="basic" title="Basic" open={openSec.basic} onToggle={toggleSec}>
                 <input value={sel.label} onChange={(e) => update(sel.id, { label: e.target.value })} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand" placeholder="Name" />
                 {sel.kind === "text" && (<textarea value={sel.text ?? ""} onChange={(e) => update(sel.id, { text: e.target.value })} rows={2} className="w-full bg-bg-card border border-border rounded px-2 py-1 text-fg outline-none focus:border-brand resize-y" placeholder="Text" />)}
+                {sel.kind === "shape" && sel.shape && (
+                  <div className="mt-2 space-y-2">
+                    <div className="grid grid-cols-2 gap-1">
+                      {(["rect", "ellipse"] as const).map((k) => (
+                        <button key={k} onClick={() => update(sel.id, { shape: { ...sel.shape!, kind: k } })} className={`py-1 rounded border text-[11px] ${sel.shape!.kind === k ? "border-brand text-brand bg-brand/10" : "border-border text-fg-muted hover:text-fg"}`}>{k === "rect" ? "Rectangle" : "Ellipse"}</button>
+                      ))}
+                    </div>
+                    <label className="flex items-center justify-between gap-2">Color
+                      <input type="color" value={/^#/.test(sel.shape.color) ? sel.shape.color : "#000000"} onChange={(e) => update(sel.id, { shape: { ...sel.shape!, color: e.target.value } })} className="w-8 h-6 rounded bg-transparent border border-border" />
+                    </label>
+                    <div className="grid grid-cols-2 gap-1">
+                      {([["rgba(0,0,0,0.72)", "Black 72%"], ["rgba(255,255,255,0.9)", "White"], ["#FFD60A", "Yellow"], ["#0A84FF", "Blue"]] as const).map(([col, lbl]) => (
+                        <button key={lbl} onClick={() => update(sel.id, { shape: { ...sel.shape!, color: col } })} className="py-1 rounded border border-border text-fg-muted hover:text-fg text-[10px] inline-flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm border border-border" style={{ background: col }} /> {lbl}</button>
+                      ))}
+                    </div>
+                    {sel.shape.kind === "rect" && (
+                      <label className="block">Corner radius: {sel.shape.radius}px
+                        <input type="range" min={0} max={80} step={1} value={sel.shape.radius} onChange={(e) => update(sel.id, { shape: { ...sel.shape!, radius: Number(e.target.value) } })} className="w-full accent-brand" />
+                      </label>
+                    )}
+                    <label className="block">Width: {Math.round(sel.shape.w * 100)}%
+                      <input type="range" min={5} max={100} step={1} value={Math.round(sel.shape.w * 100)} onChange={(e) => update(sel.id, { shape: { ...sel.shape!, w: Number(e.target.value) / 100 } })} className="w-full accent-brand" />
+                    </label>
+                    <label className="block">Height: {Math.round(sel.shape.h * 100)}%
+                      <input type="range" min={3} max={100} step={1} value={Math.round(sel.shape.h * 100)} onChange={(e) => update(sel.id, { shape: { ...sel.shape!, h: Number(e.target.value) / 100 } })} className="w-full accent-brand" />
+                    </label>
+                    <label className="block">Opacity: {Math.round((sel.shape.opacity ?? 1) * 100)}%
+                      <input type="range" min={5} max={100} step={1} value={Math.round((sel.shape.opacity ?? 1) * 100)} onChange={(e) => update(sel.id, { shape: { ...sel.shape!, opacity: Number(e.target.value) / 100 } })} className="w-full accent-brand" />
+                    </label>
+                  </div>
+                )}
                 {sel.kind === "text" && (
                   <div className="space-y-1">
                     <div className="text-fg-muted">Alignment</div>
@@ -3851,7 +3953,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
               {LLM_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label.replace(" (text only)", "")}</option>)}
             </select>
             <div className="flex items-center gap-0.5">
-              {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-subtle text-[10px]">clr</button>}
+              {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="h-7 px-2 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-subtle text-[11px]">Clear</button>}
               <button onClick={() => setAgentMin(true)} title="Minimize" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-subtle"><Minus size={14} /></button>
               <button onClick={() => setAgentOpen(false)} title="Close" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-subtle"><X size={14} /></button>
             </div>
@@ -3881,14 +3983,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             <div ref={agentEndRef} />
           </div>
           <div className="px-3 pb-3 pt-2 border-t border-border shrink-0">
-            <div className="flex items-end gap-2 rounded-2xl bg-bg-subtle border border-border focus-within:border-brand/60 pl-3.5 pr-1.5 py-1.5">
-              <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={1} placeholder={"Message the agent\u2026"}
-                onInput={(e) => { const t = e.currentTarget; t.style.height = "0px"; t.style.height = `${Math.min(120, t.scrollHeight)}px`; }}
+            <div className="flex items-center gap-2 rounded-[20px] bg-bg-subtle border border-border transition-colors [&:focus-within]:border-brand/60 pl-4 pr-1.5 py-1.5">
+              <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={1} placeholder="Message the agent"
+                onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(120, t.scrollHeight)}px`; }}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if (v && !agentBusy) { setAgentInput(""); e.currentTarget.style.height = "auto"; void runAgent(v); } } }}
-                className="flex-1 resize-none bg-transparent text-fg outline-none py-1 leading-relaxed max-h-[120px]" />
+                className="flex-1 resize-none bg-transparent text-fg outline-none border-0 focus:ring-0 leading-[1.4] py-[5px] max-h-[120px] placeholder:text-fg-subtle" />
               <button disabled={agentBusy || !agentInput.trim()} aria-label="Send" title="Send (Enter)"
                 onClick={() => { const v = agentInput.trim(); if (v) { setAgentInput(""); void runAgent(v); } }}
-                className="w-8 h-8 shrink-0 grid place-items-center rounded-full bg-brand text-black disabled:opacity-35 transition-opacity">
+                className="w-8 h-8 shrink-0 self-end grid place-items-center rounded-full bg-brand text-black disabled:opacity-35 transition-opacity">
                 <ArrowUp size={16} strokeWidth={2.5} />
               </button>
             </div>

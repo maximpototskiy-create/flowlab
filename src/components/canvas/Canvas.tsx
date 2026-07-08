@@ -2619,7 +2619,7 @@ export default function Canvas({
               {LLM_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label.replace(" (text only)", "")}</option>)}
             </select>
             <div className="flex items-center gap-0.5">
-              {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg text-[10px]">clr</button>}
+              {agentMsgs.length > 0 && <button onClick={() => setAgentMsgs([])} title="Clear the conversation" className="h-7 px-2 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-hover text-[11px]">Clear</button>}
               <button onClick={() => setAgentMin(true)} title="Minimize" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-hover"><Minus size={14} /></button>
               <button onClick={() => setAgentOpen(false)} title="Close" className="w-7 h-7 grid place-items-center rounded-md text-fg-subtle hover:text-fg hover:bg-bg-hover"><XIcon size={14} /></button>
             </div>
@@ -2648,15 +2648,15 @@ export default function Canvas({
             {agentBusy && <div className="flex items-center gap-2 text-fg-subtle"><span className="w-3 h-3 rounded-full border border-border border-t-brand animate-spin" /> working{"\u2026"}</div>}
             <div ref={agentEndRef} />
           </div>
-          <div className="px-3 pb-3 pt-2 border-t border-border shrink-0">
-            <div className="flex items-end gap-2 rounded-2xl bg-bg border border-border focus-within:border-brand/60 pl-3.5 pr-1.5 py-1.5">
-              <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={1} placeholder={"Message the agent\u2026"}
-                onInput={(e) => { const t = e.currentTarget; t.style.height = "0px"; t.style.height = `${Math.min(120, t.scrollHeight)}px`; }}
+          <div className="px-3 pb-3 pt-2 shrink-0">
+            <div className="flex items-center gap-2 rounded-[20px] bg-bg border border-border transition-colors [&:focus-within]:border-brand/60 pl-4 pr-1.5 py-1.5">
+              <textarea value={agentInput} onChange={(e) => setAgentInput(e.target.value)} rows={1} placeholder="Message the agent"
+                onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(120, t.scrollHeight)}px`; }}
                 onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = agentInput.trim(); if (v && !agentBusy) { setAgentInput(""); e.currentTarget.style.height = "auto"; void runCanvasAgent(v); } } }}
-                className="flex-1 resize-none bg-transparent text-fg outline-none py-1 leading-relaxed max-h-[120px]" />
+                className="flex-1 resize-none bg-transparent text-fg outline-none border-0 focus:ring-0 leading-[1.4] py-[5px] max-h-[120px] placeholder:text-fg-subtle" />
               <button disabled={agentBusy || !agentInput.trim()} aria-label="Send" title="Send (Enter)"
                 onClick={() => { const v = agentInput.trim(); if (v) { setAgentInput(""); void runCanvasAgent(v); } }}
-                className="w-8 h-8 shrink-0 grid place-items-center rounded-full bg-brand text-white disabled:opacity-35 transition-opacity">
+                className="w-8 h-8 shrink-0 self-end grid place-items-center rounded-full bg-brand text-white disabled:opacity-35 transition-opacity">
                 <ArrowUp size={16} strokeWidth={2.5} />
               </button>
             </div>

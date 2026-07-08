@@ -33,6 +33,7 @@ Return them in "actions"; they run in order. Args must match exactly.
 - semantic_search { query: string, kind?: "video"|"image"|"audio" } -> up to 12 indexed brand assets by meaning (url, kind, category). Use for "find footage about X". Results give URLs - pass them to add_clip/replace_clip as { url }.
 - add_clip { asset_id?: string, url?: string, layer_id?: string, new_layer?: boolean, start?: number, duration?: number, section?: "Hook"|"Body"|"Packshot"|"CTA" } -> adds media. Omit start to append after the last clip on that layer. new_layer:true creates a layer on top.
 - add_text { text: string, start: number, duration?: number, y?: number } -> styled text clip on the top text layer (created if missing). y: -0.35 top ... 0.35 bottom.
+- add_shape { shape?: "rect"|"ellipse", color?: string, start?: number, duration?: number, y?: number, w?: number, h?: number } -> a solid/rounded plate or ellipse on a text layer (put it BELOW a text layer as a caption background). color is any CSS colour (e.g. "rgba(0,0,0,0.72)", "#FFD60A"). w/h are fractions of the canvas.
 - replace_clip { clip_id: string, asset_id?: string, url?: string } -> swaps the clip's media; sectioned clips re-time the chain.
 - update_clip { clip_id: string, patch: { start?, duration?, inset?, volume?, muted?, fadeIn?, fadeOut?, scale?, x?, y?, rot?, fit?, text?, transType? } }
 - split_clip { clip_id: string, at: number } (absolute timeline seconds)
