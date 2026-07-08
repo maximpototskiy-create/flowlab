@@ -53,6 +53,32 @@ export function getActiveInputs(
   });
 }
 
+/** Active OUTPUT ports for a node instance. Same activeWhen rule as inputs,
+ *  plus a special case for the Split/Generate Parts node: only expose as many
+ *  partN outputs as the node will actually produce, so the card shows the
+ *  real fan-out instead of a fixed 6 empty ports. */
+export function getActiveOutputs(
+  def: NodeTypeDef | undefined,
+  config: Record<string, unknown> | undefined,
+): Port[] {
+  if (!def) return [];
+  const base = def.outputs.filter((p) => {
+    if (!p.activeWhen) return true;
+    const v = config?.[p.activeWhen.field];
+    if (v === undefined || v === null) return true;
+    return p.activeWhen.values.includes(String(v));
+  });
+  if (def === NODE_TYPES.textSplit || base.every((p) => /^part\d+$/.test(p.name))) {
+    // count-driven visible ports (generate/auto modes); mechanical modes can
+    // yield a variable number, so keep at least `count`, capped at 6.
+    const mode = String(config?.mode ?? "auto");
+    let n = 6;
+    if (mode === "generate" || mode === "auto") n = Math.max(2, Math.min(6, Number(config?.count ?? (mode === "generate" ? 5 : 3))));
+    return base.slice(0, n);
+  }
+  return base;
+}
+
 export type NodeCategory = "text" | "image" | "video" | "audio" | "structural" | "integration" | "tools";
 
 export const CATEGORY_LABELS: Record<NodeCategory, string> = {

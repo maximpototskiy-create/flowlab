@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
-import { NODE_TYPES, PORT_COLORS, getActiveInputs, type Graph, type GraphNode } from "@/lib/canvas/types";
+import { NODE_TYPES, PORT_COLORS, getActiveInputs, getActiveOutputs, type Graph, type GraphNode } from "@/lib/canvas/types";
 import { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING, PORT_CHIP, PORT_OUTSET } from "./CanvasNode";
 
 type EdgePos = { x1: number; y1: number; x2: number; y2: number; color: string; id: string };
@@ -33,7 +33,7 @@ function fallbackPortY(node: GraphNode, portName: string, side: "in" | "out"): n
   // Using def.inputs here made the formula disagree with the measured DOM
   // position, so dragging a node (which switches edges to this formula)
   // made connectors jump downward. Mirror CanvasNode exactly.
-  const list = side === "in" ? getActiveInputs(def, node.config) : def.outputs;
+  const list = side === "in" ? getActiveInputs(def, node.config) : getActiveOutputs(def, node.config);
   const idx = list.findIndex((p) => p.name === portName);
   return PORT_BASE_Y + (idx < 0 ? 0 : idx) * NODE_PORT_SPACING;
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti, LLM_MODELS,
+  NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti, LLM_MODELS, getActiveOutputs,
   type Graph, type GraphNode, type PortKind, type Group, EMPTY_GRAPH,
 } from "@/lib/canvas/types";
 import { getVideoModel, defaultModelForMode, clampDuration, type VideoMode } from "@/lib/canvas/videoModels";
@@ -811,6 +811,21 @@ export default function Canvas({
         return next;
       }),
     }));
+    // Split/Generate Parts: when the mode or count changes, some partN outputs
+    // may disappear — drop any edges leaving a now-hidden output port so we
+    // don't keep invisible, dead connections.
+    if (key === "mode" || key === "count") {
+      setGraph((g) => {
+        const n = g.nodes.find((x) => x.id === nodeId);
+        if (!n) return g;
+        const def = NODE_TYPES[n.type];
+        const isPartNode = def === NODE_TYPES.textSplit || def?.outputs.every((p) => /^part\d+$/.test(p.name));
+        if (!isPartNode) return g;
+        const active = new Set(getActiveOutputs(def, n.config).map((p) => p.name));
+        const keep = g.edges.filter((e) => !(e.from.nodeId === nodeId && !active.has(e.from.port)));
+        return keep.length === g.edges.length ? g : { ...g, edges: keep };
+      });
+    }
   }, []);
 
   const updateNodeRuntime = useCallback((nodeId: string, patch: Partial<GraphNode>) => {

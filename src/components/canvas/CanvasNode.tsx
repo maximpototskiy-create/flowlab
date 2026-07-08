@@ -6,7 +6,7 @@ import { WheelScroll } from "./WheelScroll";
 import VideoGenControls from "./VideoGenControls";
 import Lightbox from "./Lightbox";
 import TrackEditor, { type TrackKey } from "./TrackEditor";
-import { NODE_TYPES, getActiveInputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
+import { NODE_TYPES, getActiveInputs, getActiveOutputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
 import UploadZone from "./UploadZone";
 import BrandAssetsPicker from "./BrandAssetsPicker";
@@ -39,7 +39,7 @@ export function portYOffset(node: GraphNode, portId: string, side: "in" | "out")
   // exactly what the user sees on the node. If we used `def.inputs` here
   // (which contains inactive/legacy ports too), edges to the visible
   // ports would land in the wrong vertical slots.
-  const list = side === "in" ? getActiveInputs(def, node.config) : def.outputs;
+  const list = side === "in" ? getActiveInputs(def, node.config) : getActiveOutputs(def, node.config);
   const idx = list.findIndex((p) => p.name === portId);
   if (idx < 0) return NODE_HEADER_HEIGHT;
   return NODE_HEADER_HEIGHT + 14 + idx * NODE_PORT_SPACING;
@@ -174,7 +174,7 @@ function CanvasNodeImpl({
   // Guarantee the node body is at least tall enough to contain every port row
   // (ports are absolutely positioned), so input/output icons never spill below
   // the card on nodes with many ports but little body content.
-  const portRows = def ? Math.max(getActiveInputs(def, node.config).length, def.outputs.length) : 0;
+  const portRows = def ? Math.max(getActiveInputs(def, node.config).length, getActiveOutputs(def, node.config).length) : 0;
 
   return (
     <div
@@ -340,7 +340,7 @@ function CanvasNodeImpl({
           onUp={(e) => onInputPortUp(p.name, e)}
         />
       ))}
-      {def.outputs.map((p, i) => (
+      {getActiveOutputs(def, node.config).map((p, i) => (
         <Port
           key={`out-${p.name}`}
           side="out"
@@ -692,7 +692,21 @@ function CanvasNodeImpl({
             Build structure with AI Agent
           </button>
         )}
-        {((node.outputs && Object.keys(node.outputs).length > 0) ||
+        {node.type === "textSplit" && node.outputs && Object.keys(node.outputs).length > 0 && (
+          <div className="mt-1.5 space-y-1">
+            {getActiveOutputs(def, node.config).map((p, i) => {
+              const val = node.outputs?.[p.name];
+              return (
+                <div key={p.name} className="flex items-start gap-1.5 text-[10px] leading-snug">
+                  <span className="shrink-0 mt-[1px] px-1 rounded bg-bg-hover text-fg-subtle tabular-nums">{i + 1}</span>
+                  <span className={`flex-1 line-clamp-2 ${val ? "text-fg-muted" : "text-fg-subtle italic"}`}>{val ? String(val) : "empty"}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {node.type !== "textSplit" &&
+          ((node.outputs && Object.keys(node.outputs).length > 0) ||
           (node.results && node.results.length > 0)) &&
           !def.custom?.startsWith("upload-") && (
           <OutputPreview
