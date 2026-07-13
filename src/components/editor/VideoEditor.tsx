@@ -180,9 +180,10 @@ const EMOJI_DICT: [RegExp, string][] = [
 function emojiFor(text: string): string | null { for (const [re, e] of EMOJI_DICT) if (re.test(text)) return e; return null; }
 
 // ---- timeline thumbnails: video filmstrips + audio waveforms (cached per URL) ----
-const filmstripCache = new Map<string, string | null>();
+type Filmstrip = { data: string; fw: number; fh: number; frames: number; dur: number };
+const filmstripCache = new Map<string, Filmstrip | null>();
 const filmstripPending = new Set<string>();
-async function makeFilmstrip(url: string): Promise<string | null> {
+async function makeFilmstrip(url: string): Promise<Filmstrip | null> {
   if (filmstripCache.has(url)) return filmstripCache.get(url) ?? null;
   if (filmstripPending.has(url)) return null;
   filmstripPending.add(url);
@@ -190,17 +191,20 @@ async function makeFilmstrip(url: string): Promise<string | null> {
     const v = document.createElement("video");
     v.crossOrigin = "anonymous"; v.muted = true; v.preload = "auto"; v.src = url;
     await new Promise<void>((res, rej) => { v.onloadedmetadata = () => res(); v.onerror = () => rej(new Error("load")); });
-    const frames = 6, fh = 48, fw = Math.max(24, Math.round(fh * (v.videoWidth / Math.max(1, v.videoHeight))));
+    const dur = v.duration || 1;
+    // More frames for longer sources so timeline tiles map to real moments.
+    const frames = Math.max(6, Math.min(16, Math.ceil(dur / 2)));
+    const fh = 48, fw = Math.max(24, Math.round(fh * (v.videoWidth / Math.max(1, v.videoHeight))));
     const cv = document.createElement("canvas"); cv.width = fw * frames; cv.height = fh;
     const ctx = cv.getContext("2d"); if (!ctx) throw new Error("ctx");
     for (let i = 0; i < frames; i++) {
-      const t = (v.duration || 1) * ((i + 0.5) / frames);
-      await new Promise<void>((res) => { const on = () => { v.removeEventListener("seeked", on); res(); }; v.addEventListener("seeked", on); try { v.currentTime = Math.min(t, Math.max(0, (v.duration || 1) - 0.05)); } catch { res(); } });
+      const t = dur * ((i + 0.5) / frames);
+      await new Promise<void>((res) => { const on = () => { v.removeEventListener("seeked", on); res(); }; v.addEventListener("seeked", on); try { v.currentTime = Math.min(t, Math.max(0, dur - 0.05)); } catch { res(); } });
       ctx.drawImage(v, i * fw, 0, fw, fh);
     }
-    const data = cv.toDataURL("image/jpeg", 0.6);
-    filmstripCache.set(url, data);
-    return data;
+    const strip: Filmstrip = { data: cv.toDataURL("image/jpeg", 0.6), fw, fh, frames, dur };
+    filmstripCache.set(url, strip);
+    return strip;
   } catch { filmstripCache.set(url, null); return null; }
   finally { filmstripPending.delete(url); }
 }
@@ -3699,9 +3703,25 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         {c.kind === "video" && c.url && (() => {
                           const fs = filmstripCache.get(c.url);
                           if (fs === undefined) requestFilmstrip(c.url);
-                          return fs
-                            ? <span className="absolute inset-0 pointer-events-none opacity-80" style={{ backgroundImage: `url(${fs})`, backgroundSize: "auto 100%", backgroundRepeat: "repeat-x" }} />
-                            : <span className="h-full w-8 shrink-0 overflow-hidden border-r border-black/40 bg-black"><video src={c.url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" /></span>;
+                          if (!fs) return <span className="h-full w-8 shrink-0 overflow-hidden border-r border-black/40 bg-black"><video src={c.url} muted playsInline preload="metadata" className="w-full h-full object-cover pointer-events-none" /></span>;
+                          // Time-mapped filmstrip: each tile shows the frame nearest
+                          // to its actual source moment (honours trim and zoom), so
+                          // scrubbing the clip edges visibly moves the pictures.
+                          const hh = laneH - 12;
+                          const scale = hh / fs.fh;
+                          const tileW = Math.max(16, fs.fw * scale);
+                          const w = Math.max(24, c.duration * pxPerSec);
+                          const n = Math.max(1, Math.ceil(w / tileW));
+                          const sd = fs.dur > 0 ? fs.dur : (c.srcDur && c.srcDur > 0 ? c.srcDur : (c.inset || 0) + c.duration);
+                          return (
+                            <span className="absolute inset-0 flex overflow-hidden pointer-events-none opacity-90" aria-hidden>
+                              {Array.from({ length: n }).map((_, i) => {
+                                const srcT = (c.inset || 0) + ((i + 0.5) / n) * c.duration;
+                                const j = Math.max(0, Math.min(fs.frames - 1, Math.round((srcT / Math.max(0.01, sd)) * fs.frames - 0.5)));
+                                return <span key={i} className="h-full shrink-0" style={{ width: w / n, backgroundImage: `url(${fs.data})`, backgroundSize: `${fs.fw * fs.frames * scale}px ${hh}px`, backgroundPosition: `-${j * fs.fw * scale}px 0` }} />;
+                              })}
+                            </span>
+                          );
                         })()}
                         {c.kind === "video" && c.url && !c.muted && (() => {
                           // slim audio waveform along the bottom of the video clip
@@ -3740,7 +3760,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           const w = Math.max(24, c.duration * pxPerSec), h = laneH - 12;
                           const pts = peaks.map((v, i) => `${(i / (peaks.length - 1)) * w},${h / 2 - v * (h / 2 - 2)}`).join(" ");
                           const pts2 = peaks.map((v, i) => `${(i / (peaks.length - 1)) * w},${h / 2 + v * (h / 2 - 2)}`).reverse().join(" ");
-                          return <svg className="absolute inset-0 pointer-events-none" width={w} height={h} preserveAspectRatio="none"><polygon points={`${pts} ${pts2}`} fill="rgba(110,231,183,0.45)" /></svg>;
+                          return <svg className="absolute inset-0 pointer-events-none" width={w} height={h} preserveAspectRatio="none"><polygon points={`${pts} ${pts2}`} fill="rgba(110,231,183,0.65)" /><polyline points={pts} fill="none" stroke="rgba(240,255,250,0.85)" strokeWidth="1" /><line x1="0" y1={h / 2} x2={w} y2={h / 2} stroke="rgba(110,231,183,0.5)" strokeWidth="1" /></svg>;
                         })()}
                         <span className={`ml-2.5 pl-1 pr-2 truncate leading-9 relative z-[1] ${c.kind === "video" ? "bg-black/40 rounded" : ""}`}>{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trimL")} className="absolute left-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-l z-[2]" />
