@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { NODE_TYPES, PORT_COLORS, getActiveInputs, getActiveOutputs, type Graph, type GraphNode } from "@/lib/canvas/types";
 import { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING, PORT_CHIP, PORT_OUTSET } from "./CanvasNode";
 
-type EdgePos = { x1: number; y1: number; x2: number; y2: number; color: string; id: string };
+type EdgePos = { x1: number; y1: number; x2: number; y2: number; color: string; id: string; fromId: string; toId: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fallback formula — used while DOM is still mounting, or for the node
@@ -52,6 +52,7 @@ export default function CanvasEdges({
   zoom,
   onHover,
   onDelete,
+  selectedIds,
 }: {
   graph: Graph;
   hoveredEdgeId: string | null;
@@ -66,6 +67,9 @@ export default function CanvasEdges({
   zoom?: number;
   onHover: (id: string | null) => void;
   onDelete: (id: string) => void;
+  /** Edges touching these nodes render highlighted — makes a selected node's
+   *  wiring readable in dense graphs. */
+  selectedIds?: Set<string>;
 }) {
   // Suppress unused-warnings (these props exist to trigger re-renders).
   void dragTick;
@@ -187,7 +191,7 @@ export default function CanvasEdges({
     const a = portCentre(src, e.from.port, "out");
     const b = portCentre(dst, e.to.port, "in");
 
-    positions.push({ id: e.id, x1: a.x, y1: a.y, x2: b.x, y2: b.y, color });
+    positions.push({ id: e.id, x1: a.x, y1: a.y, x2: b.x, y2: b.y, color, fromId: e.from.nodeId, toId: e.to.nodeId });
   }
 
   return (
@@ -212,6 +216,8 @@ export default function CanvasEdges({
         const dx = Math.max(40, Math.min(140, dist * 0.35));
         const d = `M ${p.x1} ${p.y1} C ${p.x1 + dx} ${p.y1}, ${p.x2 - dx} ${p.y2}, ${p.x2} ${p.y2}`;
         const isHovered = hoveredEdgeId === p.id;
+        const isLinked = !!selectedIds && selectedIds.size > 0 && (selectedIds.has(p.fromId) || selectedIds.has(p.toId));
+        const dim = !!selectedIds && selectedIds.size > 0 && !isLinked && !isHovered;
         const midX = (p.x1 + p.x2) / 2;
         const midY = (p.y1 + p.y2) / 2;
         return (
@@ -228,12 +234,15 @@ export default function CanvasEdges({
               onClick={() => onDelete(p.id)}
             />
             {/* Visible line */}
+            {isLinked && (
+              <path d={d} stroke={p.color} strokeWidth={5} fill="none" opacity={0.35} filter="url(#edge-glow)" />
+            )}
             <path
               d={d}
               stroke={p.color}
-              strokeWidth={isHovered ? 2.5 : 1.5}
+              strokeWidth={isHovered || isLinked ? 2.5 : 1.5}
               fill="none"
-              opacity={isHovered ? 1 : 0.85}
+              opacity={isHovered || isLinked ? 1 : dim ? 0.35 : 0.85}
             />
             {isHovered && (
               <foreignObject

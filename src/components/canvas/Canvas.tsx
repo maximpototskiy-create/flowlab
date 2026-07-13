@@ -1320,11 +1320,25 @@ export default function Canvas({
         try { const raw = localStorage.getItem("flowlab.clipboard.v1"); if (raw) payload = JSON.parse(raw); } catch { /* */ }
         if ((!payload || !payload.nodes?.length) && clipboard.current) payload = { nodes: [clipboard.current], edges: [] };
         if (!payload || !payload.nodes?.length) return;
-        const OFFSET = 40;
+        // Paste into VIEW: centre the pasted group at the current viewport
+        // centre, preserving relative layout. Pasting at source position+40
+        // dropped nodes off-screen whenever the user had panned away (the
+        // "pasted image appears outside the visible area" report).
+        const rect = canvasRef.current?.getBoundingClientRect();
+        const centre = rect
+          ? screenToCanvas(rect.left + rect.width / 2, rect.top + rect.height / 2)
+          : { x: 400, y: 300 };
+        const xs = payload.nodes.map((n) => n.position?.x ?? 0);
+        const ys = payload.nodes.map((n) => n.position?.y ?? 0);
+        const bboxCx = (Math.min(...xs) + Math.max(...xs)) / 2;
+        const bboxCy = (Math.min(...ys) + Math.max(...ys)) / 2;
         setGraph((g) => {
           const idMap = new Map<string, string>();
           const newNodes = payload!.nodes.map((src) => {
-            const nn = makeNode(src.type, { x: (src.position?.x ?? 0) + OFFSET, y: (src.position?.y ?? 0) + OFFSET });
+            const nn = makeNode(src.type, {
+              x: (src.position?.x ?? 0) - bboxCx + centre.x,
+              y: (src.position?.y ?? 0) - bboxCy + centre.y,
+            });
             nn.config = JSON.parse(JSON.stringify(src.config ?? {}));
             idMap.set(src.id, nn.id);
             return nn;
@@ -2390,6 +2404,7 @@ export default function Canvas({
 
             <CanvasEdges
               graph={graph}
+              selectedIds={selectedIds}
               hoveredEdgeId={hoveredEdge}
               draftEdge={edgeDraft ? { x1: edgeDraft.x1, y1: edgeDraft.y1, x2: edgeDraft.x2, y2: edgeDraft.y2, color: PORT_COLORS[edgeDraft.fromKind] } : null}
               liveDragNodeId={drag?.nodeId ?? null}
