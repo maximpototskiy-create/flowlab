@@ -1407,10 +1407,11 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     name: "HeyGen Avatar",
     category: "video",
     icon: "user-round",
-    description: "Talking-avatar video via HeyGen. Pick an avatar + voice from your account for full control, or leave both empty to use the prompt agent.",
+    description: "Talking-avatar video via HeyGen. Pick an avatar + voice from your account for full control, or leave both empty to use the prompt agent. Connect an audio track to drive the avatar with your own voiceover.",
     inputs: [
       { name: "prompt", type: "text", optional: true },
       { name: "image", type: "image", optional: true, label: "Avatar image" },
+      { name: "audio", type: "audio", optional: true, label: "Voiceover audio" },
     ],
     outputs: [{ name: "video", type: "video" }],
     defaults: { instructions: "", avatar_id: "", voice_id: "", avatar_style: "normal", dimension: "720x1280", bgEnabled: false, bgColor: "#00FF00", speed: 1, engine: "" },
@@ -1883,6 +1884,10 @@ export type GraphNode = {
   durationMs?: number;
   /** Multi-result: list of output URLs/values when num_results > 1 */
   results?: { value: string; mime?: string }[];
+  /** Staleness signature: hash of config+resolved inputs that produced `outputs`.
+   *  Set by the executor on persist; used to decide whether cached outputs can
+   *  be reused on subgraph runs or the node must re-execute. */
+  outputsSig?: string;
   /** Currently selected result index (for multi-result nodes) */
   selectedResult?: number;
 };

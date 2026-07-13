@@ -1537,7 +1537,8 @@ export async function runNode(
 
     case "heygenVideo": {
       const prompt = String(config.instructions || inputs.prompt || "").trim();
-      if (!prompt) throw new Error("Provide a prompt/script (input or instructions)");
+      const audioUrl = String(inputs.audio || "").trim(); // custom voiceover track
+      if (!prompt && !audioUrl) throw new Error("Provide a prompt/script (input or instructions) or connect a voiceover audio");
       const avatarId = String(config.avatar_id || "").trim();
       const voiceId = String(config.voice_id || "").trim();
       const avatarImage = String(inputs.image || "").trim(); // custom avatar from a connected picture
@@ -1552,17 +1553,22 @@ export async function runNode(
         // real aspect_ratio (16:9 / 9:16) + resolution + background, and does
         // NOT create a permanent photo avatar (no slot limit).
         // so it never hits the plan's photo-avatar slot limit.
-        if (!voiceId) throw new Error("Custom avatar needs a voice — pick one in the node");
+        // HeyGen requires voice_id (and script) on Avatar IV even when a custom
+        // audio track drives the speech, so a voice pick stays mandatory here.
+        if (!voiceId) throw new Error("Custom avatar needs a voice — pick one in the node (with connected audio it is only a required fallback)");
         try {
           const ww = w || 720, hh = h || 1280;
           // Endpoint supports only 16:9 / 9:16 (no 1:1) — square falls back to 16:9.
           const aspectRatio: "16:9" | "9:16" = ww < hh ? "9:16" : "16:9";
           const resolution: "720p" | "1080p" = Math.max(ww, hh) >= 1920 ? "1080p" : "720p";
           videoId = await createAvatarIVVideo({
-            imageUrl: avatarImage, script: prompt, voiceId,
+            imageUrl: avatarImage,
+            script: prompt || "Voiceover is provided as a custom audio track.",
+            voiceId,
+            audioUrl: audioUrl || undefined,
             aspectRatio, resolution,
             background: background || undefined,
-            speed: Number(config.speed) || 1,
+            speed: audioUrl ? 1 : Number(config.speed) || 1,
           });
           url = await pollVideoStatus(videoId);
         } catch (e) {
@@ -1575,20 +1581,23 @@ export async function runNode(
           }
           throw e;
         }
-      } else if (avatarId && voiceId) {
-        // Full mode: explicit library avatar + voice (v2). Script spoken verbatim.
+      } else if (avatarId && (voiceId || audioUrl)) {
+        // Full mode: explicit library avatar (v2). Voice is either a picked
+        // voice_id speaking the script verbatim, or a connected audio track.
         const eng = engine || "av3"; // default Avatar III for library avatars
         videoId = await createAvatarVideo({
           script: prompt, avatarId, voiceId,
+          audioUrl: audioUrl || undefined,
           avatarStyle: String(config.avatar_style || "normal"),
           width: w || 720, height: h || 1280, background, speed: Number(config.speed) || 1,
           useAvatarIV: eng === "av4",
         });
         url = await pollVideoStatus(videoId);
       } else if (avatarId || voiceId) {
-        throw new Error("Pick BOTH an avatar and a voice (or connect an avatar image, or clear everything for the prompt agent)");
+        throw new Error("Pick BOTH an avatar and a voice (or connect a voiceover audio, an avatar image, or clear everything for the prompt agent)");
       } else {
         // Prompt-agent mode: HeyGen decides avatar/voice from the prompt (v3).
+        if (audioUrl) throw new Error("Custom voiceover audio needs an avatar: pick a library avatar or connect an avatar image");
         videoId = await createVideoFromPrompt(prompt);
         url = await pollVideo(videoId);
       }

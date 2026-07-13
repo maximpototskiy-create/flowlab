@@ -471,12 +471,18 @@ function CanvasNodeImpl({
               const avSel = hg.avatars.find((a) => a.id === av) || null;
               const voSel = hg.voices.find((v) => v.id === vo) || null;
               const hasImageInput = edgesTo.some((e) => e.to.port === "image");
+              const hasAudioInput = edgesTo.some((e) => e.to.port === "audio");
               const avFiltered = hgAvQ ? hg.avatars.filter((a) => a.name.toLowerCase().includes(hgAvQ.toLowerCase())) : hg.avatars;
               const avList = avFiltered.slice(0, hgCap);
               const voList = (hgVoQ ? hg.voices.filter((v) => `${v.name} ${v.language ?? ""}`.toLowerCase().includes(hgVoQ.toLowerCase())) : hg.voices).slice(0, 200);
               const needVoice = (av || hasImageInput);
               return (
                 <>
+                  {hasAudioInput && (
+                    <div className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1.5 text-[10px] text-fg">
+                      <b>Custom voiceover connected</b> — the audio track drives the avatar&apos;s speech. {hasImageInput ? "A voice pick below is still required by HeyGen as a fallback." : "No voice pick needed; script is ignored for speech."}
+                    </div>
+                  )}
                   {hasImageInput && (
                     <div className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1.5 text-[10px] text-fg">
                       <b>Custom avatar (Avatar IV)</b> — the connected image speaks via HeyGen Avatar IV. Pick a voice below; aspect (9:16 / 16:9) follows the Dimension setting, and the Background colour is supported (e.g. green for chroma key). Runs on your HeyGen <b>credits</b> — no photo-avatar slot, no 3-avatar limit. Pick the picture model on the connected Image Generation node.

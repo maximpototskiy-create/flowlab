@@ -129,6 +129,7 @@ export async function listVoices(): Promise<HeyGenVoice[]> {
 export async function createAvatarVideo(opts: {
   script: string;
   voiceId: string;
+  audioUrl?: string;        // custom voiceover — used INSTEAD of text+voice_id when set
   avatarId?: string;        // library avatar
   talkingPhotoId?: string;  // custom avatar built from an uploaded image
   avatarStyle?: string;     // normal | circle | closeUp
@@ -141,11 +142,16 @@ export async function createAvatarVideo(opts: {
   const character = opts.talkingPhotoId
     ? { type: "talking_photo", talking_photo_id: opts.talkingPhotoId }
     : { type: "avatar", avatar_id: opts.avatarId, avatar_style: opts.avatarStyle || "normal" };
+  // Custom audio drives the avatar directly (documented voice type "audio" on
+  // /v2/video/generate). Exactly one of audio_url/audio_asset_id is allowed.
+  const voice = opts.audioUrl
+    ? { type: "audio", audio_url: opts.audioUrl }
+    : { type: "text", input_text: opts.script, voice_id: opts.voiceId, ...(opts.speed && opts.speed !== 1 ? { speed: opts.speed } : {}) };
   const body: Record<string, unknown> = {
     video_inputs: [
       {
         character,
-        voice: { type: "text", input_text: opts.script, voice_id: opts.voiceId, ...(opts.speed && opts.speed !== 1 ? { speed: opts.speed } : {}) },
+        voice,
         ...(opts.background ? { background: { type: "color", value: opts.background } } : {}),
       },
     ],
@@ -224,6 +230,7 @@ export async function createAvatarIVVideo(opts: {
   imageAssetId?: string;   // OR an uploaded asset id
   script: string;
   voiceId: string;
+  audioUrl?: string;       // custom voiceover — drives the lips; script/voice become fallback metadata
   aspectRatio?: "16:9" | "9:16"; // endpoint only supports these two (no 1:1)
   resolution?: "720p" | "1080p";
   background?: string;     // hex colour, e.g. "#00FF00" for chroma key
@@ -235,6 +242,7 @@ export async function createAvatarIVVideo(opts: {
     ...(opts.imageAssetId ? { image_asset_id: opts.imageAssetId } : {}),
     script: opts.script,
     voice_id: opts.voiceId,
+    ...(opts.audioUrl ? { audio_url: opts.audioUrl } : {}),
     title: opts.title || "FlowLab Avatar IV",
     aspect_ratio: opts.aspectRatio || "9:16",
     resolution: opts.resolution || "720p",
