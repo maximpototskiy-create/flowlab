@@ -474,6 +474,32 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     quickFields: ["mode", "count"],
   },
 
+  textFanout: {
+    name: "Prompt Fan-out",
+    category: "text",
+    icon: "scissors",
+    description: "One universal prompt applied to SEVERAL inputs: connect 2-6 text nodes, each gets its own processed output (part1..partN) to wire into separate generators.",
+    inputs: [{ name: "inputs", type: "text", multi: true, label: "Inputs" }],
+    outputs: [
+      { name: "part1", type: "text" },
+      { name: "part2", type: "text" },
+      { name: "part3", type: "text" },
+      { name: "part4", type: "text" },
+      { name: "part5", type: "text" },
+      { name: "part6", type: "text" },
+    ],
+    defaults: { count: 3, instructions: "Apply this instruction to the input below and return only the result.", model: "anthropic/claude-sonnet-4.6", temperature: 0.7 },
+    fields: [
+      { name: "count", label: "Outputs (= connected inputs, 2-6)", type: "number", min: 2, max: 6, step: 1, help: "Set this to the number of inputs you connected - it controls how many output ports are visible." },
+      { name: "instructions", label: "Universal prompt", type: "textarea", placeholder: "e.g. Write a 15-word video hook based on this insight:" },
+      { name: "model", label: "Model", type: "select", options: [{ value: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6" }, { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" }] },
+    ],
+    primaryField: "instructions",
+    primaryLabel: "Universal prompt",
+    examples: ["A hook per audience segment"],
+    quickFields: ["count", "model"],
+  },
+
   imageAdPrompt: llmNode({
     name: "Image Ad Prompt",
     icon: "megaphone",

@@ -1625,6 +1625,32 @@ export async function runNode(
       };
     }
 
+    case "textFanout": {
+      // One universal prompt x N connected inputs -> N separate outputs.
+      // Each input is processed independently, so part1..partN can feed
+      // separate generators downstream.
+      const list = (inputs.inputs as unknown[] | undefined ?? [])
+        .map((v) => String(v ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 6);
+      if (list.length === 0) throw new Error("Connect at least one text input");
+      const instr = String(config.instructions || "Apply this instruction to the input below and return only the result.");
+      const model = String(config.model || "anthropic/claude-sonnet-4.6");
+      const temperature = Number(config.temperature ?? 0.7);
+      const sys = "You process ONE input according to the user's universal instruction. Return ONLY the processed result - no preamble, no commentary, no fences.";
+      const results: string[] = [];
+      for (const item of list) {
+        const out = await llmCall(`${instr}
+
+Input:
+${item}`, model, temperature, [], sys);
+        results.push(out.trim());
+      }
+      const outputs: Record<string, unknown> = {};
+      results.forEach((r, i) => { outputs[`part${i + 1}`] = r; });
+      return { outputs, costUsd: 0, durationMs: Date.now() - t0 };
+    }
+
     case "videoFrame": {
       // Grab one frame from the connected video as an image. Default = LAST
       // frame, so image-to-video generators can continue a long video from
