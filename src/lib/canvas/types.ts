@@ -522,7 +522,9 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     defaults: {
       instructions: "",
       model: "google/gemini-3.1-flash-image",
-      aspect: "1:1",
+      // Vertical by default - the team ships 9:16 creatives far more often
+      // than squares, and everyone kept switching it manually.
+      aspect: "9:16",
       num_results: 1,
       quality: "medium",
       // Brand kit auto-inject is ON by default. Users can flip it OFF in

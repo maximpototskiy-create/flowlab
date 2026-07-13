@@ -143,6 +143,22 @@ export default function Canvas({
     }
     return sum;
   }, [graph.nodes]);
+  // Estimated per-run cost of just the SELECTED nodes - the whole-board sum
+  // is useless on big boards ("cost tracking is inconvenient" feedback).
+  const selectionEstimateUsd = useMemo(() => {
+    if (selectedIds.size === 0) return 0;
+    let sum = 0;
+    for (const n of graph.nodes) {
+      if (!selectedIds.has(n.id)) continue;
+      const cfg = (n.config ?? {}) as Record<string, unknown>;
+      const model = String(cfg.model ?? "");
+      if (!model) continue;
+      const duration = Number(cfg.duration) || undefined;
+      const numImages = Number(cfg.numResults ?? cfg.numImages ?? cfg.num_images) || undefined;
+      sum += estimateCost(model, { duration, numImages, resolution: String(cfg.resolution ?? "") });
+    }
+    return sum;
+  }, [graph.nodes, selectedIds]);
   const selected = selectedIds.size === 1 ? [...selectedIds][0] : null;
   // Ref mirror so group ops can read the current selection without nesting
   // setGraph inside a setSelectedIds updater (that double-fires in strict
@@ -691,6 +707,34 @@ export default function Canvas({
           return p ? { ...n, position: p } : n;
         }),
       };
+    });
+  }, []);
+
+  // Align a group's members in a single ROW (same Y, ordered by X) or a
+  // single COLUMN (same X, ordered by Y). Complements auto-organize, which
+  // does layered graph layout ("group aligns only vertically" feedback).
+  const alignGroup = useCallback((groupId: string, dir: "row" | "column") => {
+    const heights = measureNodeHeights();
+    const GAP = 48;
+    setGraph((g) => {
+      const gr = (g.groups ?? []).find((x) => x.id === groupId);
+      if (!gr) return g;
+      const ids = new Set(gr.nodeIds);
+      const members = g.nodes.filter((n) => ids.has(n.id));
+      if (members.length < 2) return g;
+      const originX = Math.min(...members.map((n) => n.position.x));
+      const originY = Math.min(...members.map((n) => n.position.y));
+      const pos = new Map<string, { x: number; y: number }>();
+      if (dir === "row") {
+        const sorted = [...members].sort((a, b) => a.position.x - b.position.x);
+        let x = originX;
+        for (const n of sorted) { pos.set(n.id, { x, y: originY }); x += NODE_WIDTH + GAP; }
+      } else {
+        const sorted = [...members].sort((a, b) => a.position.y - b.position.y);
+        let y = originY;
+        for (const n of sorted) { pos.set(n.id, { x: originX, y }); y += (heights.get(n.id) ?? 240) + GAP; }
+      }
+      return { ...g, nodes: g.nodes.map((n) => (pos.has(n.id) ? { ...n, position: pos.get(n.id)! } : n)) };
     });
   }, []);
 
@@ -2761,7 +2805,7 @@ export default function Canvas({
             />
           )}
 
-          <RunsPanel runs={runs} projectSpentUsd={projectSpentUsd} workflowEstimateUsd={workflowEstimateUsd} />
+          <RunsPanel runs={runs} projectSpentUsd={projectSpentUsd} workflowEstimateUsd={workflowEstimateUsd} selectionEstimateUsd={selectionEstimateUsd} selectionCount={selectedIds.size} />
         </div>
       </div>
 
@@ -2851,6 +2895,8 @@ export default function Canvas({
               },
             },
             { label: "Organize nodes", icon: <Network size={13} />, onClick: () => organizeGroup(groupId) },
+            { label: "Align as row", icon: <Network size={13} />, onClick: () => alignGroup(groupId, "row") },
+            { label: "Align as column", icon: <Network size={13} />, onClick: () => alignGroup(groupId, "column") },
             { label: "Duplicate group", icon: <Copy size={13} />, onClick: () => duplicateGroup(groupId) },
             { label: "Select nodes", icon: <GroupIcon size={13} />, onClick: () => selectGroup(groupId) },
             { label: "Ungroup", icon: <Ungroup size={13} />, onClick: () => ungroupGroup(groupId), separator: true },

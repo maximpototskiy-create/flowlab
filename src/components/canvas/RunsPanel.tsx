@@ -25,11 +25,15 @@ export default function RunsPanel({
   onClick,
   projectSpentUsd = 0,
   workflowEstimateUsd = 0,
+  selectionEstimateUsd = 0,
+  selectionCount = 0,
 }: {
   runs: RunSummary[];
   onClick?: (runId: string) => void;
   projectSpentUsd?: number;
   workflowEstimateUsd?: number;
+  selectionEstimateUsd?: number;
+  selectionCount?: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -120,6 +124,12 @@ export default function RunsPanel({
         <div className="px-3.5 py-2 border-b border-border flex items-center justify-between text-[10px]">
           <span className="text-fg-subtle">This workflow (est. / run)</span>
           <span className="text-brand tabular-nums">~{fmtUsd(workflowEstimateUsd)}</span>
+        </div>
+      )}
+      {selectionCount > 0 && selectionEstimateUsd > 0 && (
+        <div className="px-3.5 py-2 border-b border-border flex items-center justify-between text-[10px]">
+          <span className="text-fg-subtle">Selected {selectionCount} node{selectionCount === 1 ? "" : "s"} (est.)</span>
+          <span className="text-amber-400 tabular-nums">~{fmtUsd(selectionEstimateUsd)}</span>
         </div>
       )}
 
