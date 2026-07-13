@@ -19,10 +19,13 @@ export default function AssetDrawer({
   onClose,
   onPick,
   brandId,
+  projectId,
 }: {
   onClose: () => void;
   onPick: (asset: AssetItem) => void;
   brandId?: string | null;
+  /** Current workflow's project — its assets are sorted first in Generated. */
+  projectId?: string | null;
 }) {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [previewingUrl, setPreviewingUrl] = useState<string | null>(null);
@@ -197,6 +200,8 @@ export default function AssetDrawer({
         // Only TRUE generations here — exclude uploads / UI-added / brand-kit.
         p.set("source", "generated");
         if (brandSel) p.set("brand", brandSel);
+        // Current project's generations first (no filtering — just on top).
+        if (projectId) p.set("projectFirst", projectId);
       }
       const endpoint = isFal ? "/api/fal-assets" : "/api/assets";
       const res = await fetch(`${endpoint}?${p.toString()}`);
@@ -210,7 +215,7 @@ export default function AssetDrawer({
     } finally {
       if (append) setLoadingMore(false); else setLoading(false);
     }
-  }, [debouncedQ, source, isFal, libCategory, similar, brandId, activeTag, activeChar]);
+  }, [debouncedQ, source, isFal, libCategory, similar, brandId, projectId, activeTag, activeChar]);
 
   // Initial load + reload on filter change (resets to first page).
   useEffect(() => {

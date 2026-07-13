@@ -21,6 +21,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       kind: get("kind"),
       source: get("source"),
       q: get("q")?.trim(),
+      projectFirst: get("projectFirst"),
       limit,
     });
     return NextResponse.json(data);

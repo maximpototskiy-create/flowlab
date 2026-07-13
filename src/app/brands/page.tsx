@@ -10,7 +10,7 @@ export default async function BrandsPage() {
 
   const brands = await prisma.brand.findMany({
     where: { archivedAt: null },
-    orderBy: { updatedAt: "desc" },
+    orderBy: { name: "asc" },
     include: { _count: { select: { projects: true } } },
   });
 

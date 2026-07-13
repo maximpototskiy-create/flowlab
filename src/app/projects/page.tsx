@@ -5,12 +5,18 @@ import { prisma } from "@/lib/prisma";
 import TopNav from "@/components/TopNav";
 import ProjectCard, { type ProjectCardData } from "@/components/ProjectCard";
 
-export default async function ProjectsPage() {
+export default async function ProjectsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ mine?: string }>;
+}) {
   const user = await requireUser();
+  const sp = (await searchParams) ?? {};
+  const mineOnly = sp.mine === "1";
 
   const [projects, brandsCount] = await Promise.all([
     prisma.project.findMany({
-      where: { archivedAt: null },
+      where: { archivedAt: null, ...(mineOnly ? { createdBy: user.id } : {}) },
       orderBy: { updatedAt: "desc" },
       include: {
         _count: { select: { workflows: true } },
@@ -36,9 +42,20 @@ export default async function ProjectsPage() {
             <h1 className="font-display text-5xl leading-tight">Projects</h1>
             <p className="text-fg-muted text-sm mt-2">
               {projects.length === 0
-                ? "No projects yet."
-                : `${projects.length} project${projects.length === 1 ? "" : "s"} across all brands.`}
+                ? mineOnly ? "No projects created by you yet." : "No projects yet."
+                : `${projects.length} project${projects.length === 1 ? "" : "s"} ${mineOnly ? "created by you" : "across all brands"}.`}
             </p>
+            {/* Creator filter: all projects vs only mine */}
+            <div className="flex gap-1.5 mt-4">
+              <Link href="/projects"
+                className={`font-mono text-[10px] tracking-[0.15em] uppercase px-3 py-1.5 rounded-sm border transition ${!mineOnly ? "border-brand text-brand bg-brand/10" : "border-border-strong text-fg-muted hover:text-fg"}`}>
+                All
+              </Link>
+              <Link href="/projects?mine=1"
+                className={`font-mono text-[10px] tracking-[0.15em] uppercase px-3 py-1.5 rounded-sm border transition ${mineOnly ? "border-brand text-brand bg-brand/10" : "border-border-strong text-fg-muted hover:text-fg"}`}>
+                My projects
+              </Link>
+            </div>
           </div>
           <Link
             href="/brands"

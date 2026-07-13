@@ -29,6 +29,9 @@ export type AssetFilters = {
   sort?: string;
   q?: string;
   limit?: number;
+  /** Stable-sort assets of THIS project id to the top (no filtering) —
+   *  the canvas drawer shows the current project's generations first. */
+  projectFirst?: string;
 };
 
 // Re-derive the real kind from the URL — the stored `kind` column is
@@ -103,6 +106,8 @@ export async function queryAssets(f: AssetFilters): Promise<{
     seenUrls.add(a.cdnUrl);
     deduped.push({
       id: a.id,
+      // internal, stripped below the sort: used only for projectFirst
+      ...( { _pid: a.project?.id ?? null } as Record<string, unknown> ),
       cdnUrl: a.cdnUrl,
       kind: kindFromUrl(a.cdnUrl, a.kind),
       mimeType: a.mimeType ?? null,
@@ -153,7 +158,15 @@ export async function queryAssets(f: AssetFilters): Promise<{
     }
   }
 
-  const combined = f.source === "brand_kit" ? brandKit : [...filteredByKind, ...brandKit];
+  let combined = f.source === "brand_kit" ? brandKit : [...filteredByKind, ...brandKit];
+  if (f.projectFirst) {
+    // Stable partition: current project's assets first, everything else after,
+    // each group keeping its createdAt order.
+    const mine: AssetItem[] = [], rest: AssetItem[] = [];
+    for (const a of combined) ((a as unknown as { _pid?: string | null })._pid === f.projectFirst ? mine : rest).push(a);
+    combined = [...mine, ...rest];
+  }
+  for (const a of combined) delete (a as unknown as { _pid?: string | null })._pid;
   return {
     assets: combined.slice(0, limit),
     projects: (projects as { id: string; name: string }[]).map((p) => ({ value: p.id, label: p.name })),

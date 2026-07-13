@@ -36,7 +36,7 @@ export default function CreateProjectButton({
         className={
           variant === "primary"
             ? "bg-brand text-black font-mono text-xs tracking-[0.15em] uppercase py-3 px-5 rounded-sm hover:bg-emerald-400 transition"
-            : "font-mono text-[11px] tracking-[0.15em] uppercase text-fg-muted hover:text-fg border border-border-strong hover:border-border-strong px-4 py-2 rounded-sm transition"
+            : "font-mono text-[11px] tracking-[0.15em] uppercase text-brand border border-brand/60 hover:border-brand hover:bg-brand/10 px-4 py-2 rounded-sm transition"
         }
       >
         + New project
