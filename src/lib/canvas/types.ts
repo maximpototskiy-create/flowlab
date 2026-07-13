@@ -1352,13 +1352,13 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     name: "Motion Transfer",
     category: "video",
     icon: "move-3d",
-    description: "Apply motion from a reference video to a still image (Kling Motion Control).",
+    description: "Apply motion from a reference video to a still image via Kling Motion Control: the image supplies identity, the reference video supplies choreography.",
     inputs: [
       { name: "image", type: "image", label: "Target subject" },
       { name: "video", type: "video", label: "Reference motion" },
     ],
     outputs: [{ name: "video", type: "video" }],
-    defaults: { model: "fal-ai/kling-video/v3/pro/image-to-video", prompt: "" },
+    defaults: { model: "fal-ai/kling-video/v3/pro/motion-control", prompt: "", character_orientation: "video" },
     fields: [
       {
         name: "model",
@@ -1366,14 +1366,25 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         type: "select",
         icon: "settings",
         options: [
-          { value: "fal-ai/kling-video/v3/pro/image-to-video", label: "Kling 3.0 Master ⭐" },
-          { value: "fal-ai/kling-video/v2.1/master/image-to-video", label: "Kling 2.6 Master" },
-          { value: "fal-ai/runway-gen4/image-to-video", label: "Runway Gen 4" },
+          { value: "fal-ai/kling-video/v3/pro/motion-control", label: "Kling 3.0 Motion Control Pro \u2b50" },
+          { value: "fal-ai/kling-video/v3/standard/motion-control", label: "Kling 3.0 Motion Control Standard" },
+          { value: "fal-ai/kling-video/v2.6/pro/motion-control", label: "Kling 2.6 Motion Control Pro" },
+          { value: "fal-ai/kling-video/v2.6/standard/motion-control", label: "Kling 2.6 Motion Control Standard" },
         ],
+      },
+      {
+        name: "character_orientation",
+        label: "Orientation",
+        type: "select",
+        options: [
+          { value: "video", label: "Follow video (complex motion, up to 30s)" },
+          { value: "image", label: "Follow image (camera moves, up to 10s)" },
+        ],
+        help: "Whose orientation the output character follows: the reference video (best for dance/complex motion) or the target image (best for camera movement).",
       },
       { name: "prompt", label: "Extra prompt (optional)", type: "text" },
     ],
-    quickFields: ["model"],
+    quickFields: ["model", "character_orientation"],
   },
 
   screenReplace: {

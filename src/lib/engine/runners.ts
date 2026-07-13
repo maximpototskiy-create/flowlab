@@ -1644,11 +1644,25 @@ export async function runNode(
     }
 
     case "motionTransfer": {
-      // Approximation: use an image-to-video model with the image input; we ignore the reference video for now.
+      // REAL motion transfer (patch 336): Kling Motion Control on fal takes
+      // BOTH the identity image and the choreography video. The old code ran
+      // a plain image-to-video and ignored the reference video entirely -
+      // which is why results looked nothing like the reference.
       const image = inputs.image as string;
+      const refVideo = inputs.video as string;
       if (!image) throw new Error("Connect a target image");
-      const model = String(config.model ?? "fal-ai/runway-gen3/turbo/image-to-video");
-      const r = await falRun(model, { image_url: image, prompt: "transfer motion from reference" });
+      if (!refVideo) throw new Error("Connect a reference motion video");
+      let model = String(config.model ?? "fal-ai/kling-video/v3/pro/motion-control");
+      // Heal configs saved before the fix (plain i2v endpoints).
+      if (!model.includes("motion-control")) model = "fal-ai/kling-video/v3/pro/motion-control";
+      const orientation = String(config.character_orientation ?? "video");
+      const extra = String(config.prompt ?? "").trim();
+      const r = await falRun(model, {
+        image_url: image,
+        video_url: refVideo,
+        character_orientation: orientation === "image" ? "image" : "video",
+        ...(extra ? { prompt: extra } : {}),
+      });
       const url = (r.video as { url: string } | undefined)?.url;
       if (!url) throw new Error("No video returned");
       const persisted = await persistAsset(url, ctx, "motion");
