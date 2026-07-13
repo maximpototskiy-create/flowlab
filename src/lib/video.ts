@@ -1571,6 +1571,37 @@ export async function buildGreenScreenMask(
 
 // Transcode any video buffer to browser-friendly MP4 (H.264/AAC). Used for
 // .mov (QuickTime) which Chrome/Firefox won't play in <video>.
+// Extract a single frame as JPEG. `at` semantics:
+//   "last"  - the final frame (seek from EOF, robust for any duration);
+//   "first" - frame at t=0;
+//   number  - seconds from the start (clamped by ffmpeg to the last frame).
+export async function extractFrame(input: Buffer, at: "first" | "last" | number = "last"): Promise<Buffer> {
+  const dir = os.tmpdir();
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const inPath = path.join(dir, `${id}_in`);
+  const outPath = path.join(dir, `${id}_frame.jpg`);
+  await writeFile(inPath, input);
+  try {
+    if (at === "last") {
+      try {
+        // -sseof seeks from the end; -update 1 keeps overwriting so the file
+        // ends up holding the very last decodable frame.
+        await runFfmpeg(["-y", "-sseof", "-0.3", "-i", inPath, "-update", "1", "-q:v", "2", outPath]);
+      } catch {
+        // some containers reject -sseof; decode-all fallback
+        await runFfmpeg(["-y", "-i", inPath, "-update", "1", "-q:v", "2", outPath]);
+      }
+    } else {
+      const t = at === "first" ? 0 : Math.max(0, at);
+      await runFfmpeg(["-y", "-ss", String(t), "-i", inPath, "-frames:v", "1", "-q:v", "2", outPath]);
+    }
+    return await readFile(outPath);
+  } finally {
+    await unlink(inPath).catch(() => {});
+    await unlink(outPath).catch(() => {});
+  }
+}
+
 export async function convertToMp4(input: Buffer): Promise<Buffer> {
   const dir = os.tmpdir();
   const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;

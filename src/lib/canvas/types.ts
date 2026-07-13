@@ -1458,6 +1458,29 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     custom: "upload-video",
   },
 
+  videoFrame: {
+    name: "Extract Frame",
+    category: "video",
+    icon: "film",
+    description: "Grab a single frame from a video as an image. Default: the LAST frame - feed it into an image-to-video generator to continue a long video seamlessly.",
+    inputs: [{ name: "video", type: "video" }],
+    outputs: [{ name: "image", type: "image" }],
+    defaults: { moment: "last", time: 0 },
+    fields: [
+      {
+        name: "moment",
+        label: "Frame",
+        type: "select",
+        options: [
+          { value: "last", label: "Last frame" },
+          { value: "first", label: "First frame" },
+          { value: "time", label: "At time (s)" },
+        ],
+      },
+      { name: "time", label: "Time (s)", type: "number", min: 0, step: 0.1, help: "Seconds from the start. Used only when Frame = At time." },
+    ],
+  },
+
   // ═════════════════════════════════════════════ AUDIO
   voiceover: {
     name: "Voiceover",

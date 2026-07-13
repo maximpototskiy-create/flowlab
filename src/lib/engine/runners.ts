@@ -6,7 +6,7 @@ import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
 import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, createAvatarIVVideo } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
-import { compositeGreenScreen } from "@/lib/video";
+import { compositeGreenScreen, extractFrame } from "@/lib/video";
 import { directLLM } from "@/lib/agent/router";
 import { generateOpenAIImage, editOpenAIImage } from "@/lib/openai/images";
 import { generateGeminiImage, generateImagen } from "@/lib/google/images";
@@ -1610,6 +1610,24 @@ export async function runNode(
         durationMs: Date.now() - t0,
         metadata: { provider: "heygen", videoId },
       };
+    }
+
+    case "videoFrame": {
+      // Grab one frame from the connected video as an image. Default = LAST
+      // frame, so image-to-video generators can continue a long video from
+      // exactly where the previous clip ended.
+      const video = String(inputs.video || "").trim();
+      if (!video) throw new Error("Connect a video");
+      const res = await fetch(video);
+      if (!res.ok) throw new Error(`Could not fetch the video (${res.status})`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      const moment = String(config.moment || "last");
+      const at = moment === "first" ? ("first" as const) : moment === "time" ? Number(config.time) || 0 : ("last" as const);
+      const frame = await extractFrame(buf, at);
+      const path = buildStoragePath({ brandId: ctx.brandId, projectId: ctx.projectId, workflowId: ctx.workflowId, runStepId: ctx.runStepId, ext: "jpg", prefix: "frame" });
+      const { cdnUrl } = await uploadBytes(frame, path, "image/jpeg");
+      if (!cdnUrl) throw new Error("Could not store the extracted frame");
+      return { outputs: { image: cdnUrl }, costUsd: 0, durationMs: Date.now() - t0 };
     }
 
     case "talkingHead":
