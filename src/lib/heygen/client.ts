@@ -240,9 +240,10 @@ export async function createAvatarIVVideo(opts: {
   const body: Record<string, unknown> = {
     ...(opts.imageUrl ? { image_url: opts.imageUrl } : {}),
     ...(opts.imageAssetId ? { image_asset_id: opts.imageAssetId } : {}),
-    script: opts.script,
+    // HeyGen 400s with "script and audio_url are mutually exclusive" when
+    // both are present - a custom audio track REPLACES the script entirely.
+    ...(opts.audioUrl ? { audio_url: opts.audioUrl } : { script: opts.script }),
     voice_id: opts.voiceId,
-    ...(opts.audioUrl ? { audio_url: opts.audioUrl } : {}),
     title: opts.title || "FlowLab Avatar IV",
     aspect_ratio: opts.aspectRatio || "9:16",
     resolution: opts.resolution || "720p",
