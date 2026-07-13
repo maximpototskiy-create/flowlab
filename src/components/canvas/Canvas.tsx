@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti, LLM_MODELS, getActiveOutputs, isTextEntryTarget,
-  type Graph, type GraphNode, type PortKind, type Group, EMPTY_GRAPH,
+  type Graph, type GraphNode, type GraphEdge, type PortKind, type Group, EMPTY_GRAPH,
 } from "@/lib/canvas/types";
 import { getVideoModel, defaultModelForMode, clampDuration, type VideoMode } from "@/lib/canvas/videoModels";
 import CanvasNode, { NODE_WIDTH, NODE_HEADER_HEIGHT, NODE_PORT_SPACING, PORT_CHIP, PORT_OUTSET } from "./CanvasNode";
@@ -425,8 +425,53 @@ export default function Canvas({
   );
 
   // ── AI Workflow Builder ──
+  // ─── Node trash (patch 332) ───────────────────────────────────────────────
+  // Every deleted node lands here WITH its config/results and internal edges,
+  // capped at 20 and persisted per workflow in localStorage. Undo restores
+  // whole-graph snapshots; the trash covers the "I deleted that node an hour
+  // ago and its prompt was better" case.
+  const TRASH_KEY = `flowlab.trash.v1:${workflowId}`;
+  const [trash, setTrash] = useState<{ node: GraphNode; edges: GraphEdge[]; at: number }[]>([]);
+  const [trashOpen, setTrashOpen] = useState(false);
+  useEffect(() => {
+    try { const raw = localStorage.getItem(TRASH_KEY); if (raw) setTrash(JSON.parse(raw)); } catch { /* */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [TRASH_KEY]);
+  const pushTrash = useCallback((entries: { node: GraphNode; edges: GraphEdge[] }[]) => {
+    if (!entries.length) return;
+    setTrash((prev) => {
+      const next = [...entries.map((e) => ({ ...e, at: Date.now() })), ...prev].slice(0, 20);
+      try { localStorage.setItem(TRASH_KEY, JSON.stringify(next)); } catch { /* quota */ }
+      return next;
+    });
+  }, [TRASH_KEY]);
+  const restoreFromTrash = useCallback((at: number) => {
+    setTrash((prev) => {
+      const entry = prev.find((t) => t.at === at);
+      if (!entry) return prev;
+      setGraph((g) => {
+        // Re-use the original id when free so old edges can reconnect; a
+        // colliding id (e.g. restored twice) gets a fresh node id.
+        const idTaken = g.nodes.some((n) => n.id === entry.node.id);
+        const node: GraphNode = idTaken
+          ? { ...entry.node, id: makeNode(entry.node.type, entry.node.position).id }
+          : entry.node;
+        const nodeIds = new Set([...g.nodes.map((n) => n.id), node.id]);
+        const edges = idTaken ? [] : entry.edges.filter((e) =>
+          nodeIds.has(e.from.nodeId) && nodeIds.has(e.to.nodeId) &&
+          !g.edges.some((x) => x.id === e.id));
+        return { ...g, nodes: [...g.nodes, { ...node, status: "idle" }], edges: [...g.edges, ...edges] };
+      });
+      const next = prev.filter((t) => t.at !== at);
+      try { localStorage.setItem(TRASH_KEY, JSON.stringify(next)); } catch { /* */ }
+      return next;
+    });
+  }, [TRASH_KEY]);
+
   const deleteNode = useCallback((nodeId: string) => {
     setGraph((g) => {
+      const victim = g.nodes.find((n) => n.id === nodeId);
+      if (victim) pushTrash([{ node: victim, edges: g.edges.filter((e) => e.from.nodeId === nodeId || e.to.nodeId === nodeId) }]);
       const nodes = g.nodes.filter((n) => n.id !== nodeId);
       return {
         nodes,
@@ -441,13 +486,17 @@ export default function Canvas({
       return next;
     });
     if (expandedNodeId === nodeId) setExpandedNodeId(null);
-  }, [expandedNodeId]);
+  }, [expandedNodeId, pushTrash]);
 
   // Delete every selected node (and their edges) in one shot.
   const deleteSelected = useCallback(() => {
     const sel = selectedIdsRef.current;
     if (sel.size === 0) return;
     setGraph((g) => {
+      pushTrash(g.nodes.filter((n) => sel.has(n.id)).map((n) => ({
+        node: n,
+        edges: g.edges.filter((e) => e.from.nodeId === n.id || e.to.nodeId === n.id),
+      })));
       const nodes = g.nodes.filter((n) => !sel.has(n.id));
       return {
         nodes,
@@ -456,7 +505,7 @@ export default function Canvas({
       };
     });
     setSelectedIds(new Set());
-  }, []);
+  }, [pushTrash]);
 
   const deleteEdge = useCallback((edgeId: string) => {
     setGraph((g) => ({ ...g, edges: g.edges.filter((e) => e.id !== edgeId) }));
@@ -2607,6 +2656,15 @@ export default function Canvas({
               <Redo2 size={12} />
               <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Redo</span>
             </button>
+            <button
+              onClick={() => setTrashOpen((v) => !v)}
+              className={`w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover group relative ${trash.length ? "text-fg-muted hover:text-fg" : "text-fg-subtle/50"}`}
+              title="Deleted nodes (restore with their settings)"
+            >
+              <Trash2 size={12} />
+              {trash.length > 0 && <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 px-0.5 rounded-full bg-brand text-black text-[8px] leading-[14px] text-center tabular-nums">{trash.length}</span>}
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Deleted nodes</span>
+            </button>
             <div className="w-px h-4 bg-border mx-1" />
             <button
               onClick={() => { setZoom(1); setPan({ x: 200, y: 100 }); }}
@@ -2645,6 +2703,36 @@ export default function Canvas({
           </div>
 
           {showHelp && <HelpHints onClose={() => setShowHelp(false)} />}
+
+          {trashOpen && (
+            <div data-overlay className="absolute bottom-14 left-1/2 -translate-x-1/2 z-40 w-80 max-h-72 overflow-y-auto rounded-lg border border-border bg-bg-card shadow-node p-2"
+              onPointerDown={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-1 pb-1.5">
+                <span className="text-[10px] uppercase tracking-wider text-fg-subtle">Deleted nodes</span>
+                <button onClick={() => setTrashOpen(false)} className="text-fg-subtle hover:text-fg"><XIcon size={12} /></button>
+              </div>
+              {trash.length === 0 ? (
+                <div className="text-fg-subtle text-[11px] px-1 py-3 text-center">Empty - deleted nodes appear here with their settings.</div>
+              ) : (
+                <div className="space-y-1">
+                  {trash.map((t) => {
+                    const def = NODE_TYPES[t.node.type];
+                    const snippet = String(t.node.config?.[def?.primaryField ?? "instructions"] ?? "").slice(0, 60);
+                    return (
+                      <div key={t.at} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-bg-hover">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[11px] text-fg truncate">{def?.name ?? t.node.type}</div>
+                          <div className="text-[9px] text-fg-subtle truncate">{snippet || new Date(t.at).toLocaleTimeString()}</div>
+                        </div>
+                        <button onClick={() => restoreFromTrash(t.at)}
+                          className="shrink-0 text-[10px] text-brand hover:underline underline-offset-2">Restore</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {showAssets && (
             <AssetDrawer
