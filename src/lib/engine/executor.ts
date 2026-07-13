@@ -409,8 +409,38 @@ async function executeOne(
             );
             if (idx < 0) return;
             const nodesArr = [...(g.nodes as Array<Record<string, unknown>>)];
+            // GENERATION HISTORY: before overwriting, push the node's previous
+            // media results onto its history (newest first, deduped, capped) -
+            // a re-run must never silently destroy the last result.
+            const prevNode = nodesArr[idx] as {
+              outputs?: Record<string, unknown>;
+              results?: { value: string; mime?: string }[];
+              history?: { value: string; mime?: string }[];
+            };
+            const HISTORY_CAP = 24;
+            const prevUrls: { value: string; mime?: string }[] = [];
+            if (prevNode.results?.length) {
+              for (const r of prevNode.results) if (typeof r?.value === "string" && r.value.startsWith("http")) prevUrls.push({ value: r.value, mime: r.mime });
+            } else if (prevNode.outputs) {
+              for (const [k, v] of Object.entries(prevNode.outputs)) {
+                if (k === "track_url" || k.startsWith("_")) continue;
+                if (typeof v === "string" && v.startsWith("http")) prevUrls.push({ value: v });
+              }
+            }
+            const newUrls = new Set<string>();
+            if (result.results) for (const r of result.results) if (typeof r?.value === "string") newUrls.add(r.value);
+            for (const v of Object.values(result.outputs)) if (typeof v === "string") newUrls.add(v);
+            const seenHist = new Set<string>(newUrls);
+            const history: { value: string; mime?: string }[] = [];
+            for (const h of [...prevUrls, ...(prevNode.history ?? [])]) {
+              if (!h || typeof h.value !== "string" || seenHist.has(h.value)) continue;
+              seenHist.add(h.value);
+              history.push(h);
+              if (history.length >= HISTORY_CAP) break;
+            }
             nodesArr[idx] = {
               ...nodesArr[idx],
+              ...(history.length > 0 ? { history } : {}),
               outputs: result.outputs,
               // Staleness signature of the config+inputs that produced these
               // outputs — checked before reusing them on later subgraph runs.

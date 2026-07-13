@@ -59,6 +59,8 @@ function CanvasNodeImpl({
   onSelect,
   onDelete,
   onConfigChange,
+  onRemoveResult,
+  onRestoreHistory,
   onRun,
   onAskAgent,
   onStop,
@@ -87,6 +89,10 @@ function CanvasNodeImpl({
   onSelect: (additive?: boolean) => void;
   onDelete: () => void;
   onConfigChange: (key: string, value: unknown) => void;
+  /** Delete one variation from a multi-result node. */
+  onRemoveResult?: (idx: number) => void;
+  /** Bring a previous generation back as the current result. */
+  onRestoreHistory?: (url: string) => void;
   onRun: () => void;
   onAskAgent?: () => void;
   onStop?: () => void;
@@ -718,6 +724,9 @@ function CanvasNodeImpl({
           <OutputPreview
             outputs={node.outputs ?? {}}
             results={node.results}
+            history={node.history}
+            onRemoveResult={onRemoveResult}
+            onRestoreHistory={onRestoreHistory}
             selectedIdx={selectedResultIdx}
             expanded={inlineExpanded}
             onSelectIdx={(i) => {
@@ -1499,20 +1508,27 @@ function QuickField({
 function OutputPreview({
   outputs,
   results,
+  history,
   selectedIdx,
   onSelectIdx,
   onExpand,
+  onRemoveResult,
+  onRestoreHistory,
   expanded,
 }: {
   outputs: Record<string, unknown>;
   results?: { value: string; mime?: string }[];
+  history?: { value: string; mime?: string }[];
   selectedIdx: number;
   onSelectIdx: (i: number) => void;
   /** Open the URL in a fullscreen lightbox. */
   onExpand?: (url: string) => void;
+  onRemoveResult?: (idx: number) => void;
+  onRestoreHistory?: (url: string) => void;
   /** Inline-expanded node — render a taller preview. */
   expanded?: boolean;
 }) {
+  const [showHistory, setShowHistory] = useState(false);
   const hiddenUrl = typeof outputs.track_url === "string" ? outputs.track_url : null;
   const cleanResults = results ? results.filter((r) => typeof r.value === "string" && r.value !== hiddenUrl && !r.value.includes("screen-track")) : [];
   const list = cleanResults.length > 0 ? cleanResults : Object.entries(outputs).filter(([k, v]) => typeof v === "string" && k !== "track_url" && !k.startsWith("_")).map(([, v]) => ({ value: v as string }));
@@ -1563,25 +1579,62 @@ function OutputPreview({
       {list.length > 1 && (
         <div className="mt-1 flex gap-1 overflow-x-auto">
           {list.map((r, i) => (
-            <button
-              key={i}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelectIdx(i);
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-              className={`shrink-0 w-10 h-10 rounded overflow-hidden border-2 ${
-                i === selectedIdx ? "border-brand" : "border-transparent hover:border-border-strong"
-              }`}
-            >
-              <PreviewThumb url={r.value} />
-            </button>
+            <span key={i} className="relative shrink-0 group/varthumb">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectIdx(i);
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                className={`block w-10 h-10 rounded overflow-hidden border-2 ${
+                  i === selectedIdx ? "border-brand" : "border-transparent hover:border-border-strong"
+                }`}
+              >
+                <PreviewThumb url={r.value} />
+              </button>
+              {onRemoveResult && cleanResults.length > 1 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRemoveResult(i); }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  title="Delete this variation"
+                  className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black/70 text-white text-[9px] leading-none items-center justify-center hidden group-hover/varthumb:flex hover:bg-red-500"
+                >
+                  <X size={9} />
+                </button>
+              )}
+            </span>
           ))}
         </div>
       )}
       {list.length > 1 && (
         <div className="text-[9px] text-fg-subtle text-center mt-0.5">
           {selectedIdx + 1} of {list.length}
+        </div>
+      )}
+      {history && history.length > 0 && (
+        <div className="mt-1">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowHistory((v) => !v); }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="text-[9px] text-fg-subtle hover:text-fg underline decoration-dotted"
+          >
+            {showHistory ? "Hide history" : `History (${history.length})`}
+          </button>
+          {showHistory && (
+            <div className="mt-1 flex gap-1 overflow-x-auto">
+              {history.map((h, i) => (
+                <button
+                  key={i}
+                  onClick={(e) => { e.stopPropagation(); onRestoreHistory?.(h.value); }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  title="Bring this previous generation back as the current result"
+                  className="shrink-0 w-10 h-10 rounded overflow-hidden border border-border opacity-70 hover:opacity-100 hover:border-brand"
+                >
+                  <PreviewThumb url={h.value} />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

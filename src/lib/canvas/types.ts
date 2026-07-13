@@ -1908,6 +1908,10 @@ export type GraphNode = {
    *  Set by the executor on persist; used to decide whether cached outputs can
    *  be reused on subgraph runs or the node must re-execute. */
   outputsSig?: string;
+  /** Previous generations of this node (newest first, capped). Filled by the
+   *  executor on each persist so a re-run never silently destroys the last
+   *  result - the user can bring any of these back from the History strip. */
+  history?: { value: string; mime?: string }[];
   /** Currently selected result index (for multi-result nodes) */
   selectedResult?: number;
 };

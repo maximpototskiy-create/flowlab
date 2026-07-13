@@ -25,7 +25,7 @@ import ActiveRunsBar from "./ActiveRunsBar";
 import { pokeActiveRuns } from "../ActiveRunsIndicator";
 import { saveWorkflowGraph } from "@/lib/actions";
 import { autoLayout } from "@/lib/canvas/autoLayout";
-import { Minus, Plus, Maximize, Sparkles, ArrowUp, Paperclip, X as XIcon, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2, Images } from "lucide-react";
+import { Minus, Plus, Maximize, Sparkles, ArrowUp, Paperclip, X as XIcon, Grid3X3, Network, Play, Copy, Trash2, Group as GroupIcon, Ungroup, Pencil, HelpCircle, Undo2, Redo2, Images, RefreshCw } from "lucide-react";
 
 type Drag = {
   nodeId: string;
@@ -934,6 +934,8 @@ export default function Canvas({
   // lambda lands on the freshest closures.
   const nodeHandlersRef = useRef<{
     startNodeDrag: (nodeId: string, e: React.PointerEvent) => void;
+    removeResult: (nodeId: string, idx: number) => void;
+    restoreHistory: (nodeId: string, url: string) => void;
     startEdge: (nodeId: string, portName: string, e: React.PointerEvent) => void;
     endEdgeOnInput: (nodeId: string, portName: string, e: React.PointerEvent) => void;
     toggleSelect: (nodeId: string, additive?: boolean) => void;
@@ -2263,6 +2265,36 @@ export default function Canvas({
       if (targetRun) void stopRun(targetRun.id);
     },
     expandNode: (nodeId: string) => setExpandedNodeId(nodeId),
+    removeResult: (nodeId: string, idx: number) => {
+      setGraph((g) => ({
+        ...g,
+        nodes: g.nodes.map((n) => {
+          if (n.id !== nodeId || !n.results || n.results.length <= 1) return n;
+          const results = n.results.filter((_, i) => i !== idx);
+          const selRaw = typeof n.config?._selectedResultIdx === "number" ? (n.config._selectedResultIdx as number) : 0;
+          const sel = Math.max(0, Math.min(results.length - 1, selRaw > idx ? selRaw - 1 : selRaw));
+          return { ...n, results: results.length > 1 ? results : results, config: { ...n.config, _selectedResultIdx: sel } };
+        }),
+      }));
+    },
+    restoreHistory: (nodeId: string, url: string) => {
+      // Bring a previous generation back as the CURRENT result: prepend it to
+      // results (deduped) and select it, so downstream nodes pick it up.
+      setGraph((g) => ({
+        ...g,
+        nodes: g.nodes.map((n) => {
+          if (n.id !== nodeId) return n;
+          const cur = n.results && n.results.length > 0
+            ? n.results
+            : Object.entries(n.outputs ?? {})
+                .filter(([k, v]) => typeof v === "string" && (v as string).startsWith("http") && k !== "track_url" && !k.startsWith("_"))
+                .map(([, v]) => ({ value: v as string }));
+          const results = [{ value: url }, ...cur.filter((r) => r.value !== url)];
+          const history = (n.history ?? []).filter((h) => h.value !== url);
+          return { ...n, results, history: history.length ? history : undefined, config: { ...n.config, _selectedResultIdx: 0 } };
+        }),
+      }));
+    },
     stashTracks: (nodeId: string) => {
       try { localStorage.setItem(`flowlab.editor.import.v1:${workflowId}`, JSON.stringify({ tracks: buildComposerTracks(nodeId) ?? [] })); } catch { /* */ }
     },
@@ -2514,6 +2546,8 @@ export default function Canvas({
                 onSelect={(additive) => nodeHandlersRef.current.toggleSelect(node.id, additive)}
                 onDelete={() => nodeHandlersRef.current.deleteNode(node.id)}
                 onConfigChange={(k, v) => nodeHandlersRef.current.updateNodeConfig(node.id, k, v)}
+                onRemoveResult={(i) => nodeHandlersRef.current.removeResult(node.id, i)}
+                onRestoreHistory={(url) => nodeHandlersRef.current.restoreHistory(node.id, url)}
                 onRun={() => nodeHandlersRef.current.startRun(node.id)}
                 onAskAgent={() => nodeHandlersRef.current.askAgent(node.id)}
                 onStop={() => nodeHandlersRef.current.stopForNode(node.id)}
@@ -2693,11 +2727,28 @@ export default function Canvas({
             });
           }
           items.push({
+            label: "Reset node",
+            icon: <RefreshCw size={13} />,
+            onClick: () => {
+              // Back to a factory-fresh node: default config, no outputs /
+              // results / history / status. Position and wiring stay.
+              const src = graph.nodes.find((x) => x.id === nodeId);
+              const def = src ? NODE_TYPES[src.type] : undefined;
+              if (!src || !def) return;
+              setGraph((g) => ({
+                ...g,
+                nodes: g.nodes.map((n) => (n.id === nodeId
+                  ? { ...n, config: JSON.parse(JSON.stringify(def.defaults ?? {})), outputs: undefined, results: undefined, outputsSig: undefined, history: undefined, status: "idle", error: undefined }
+                  : n)),
+              }));
+            },
+            separator: true,
+          });
+          items.push({
             label: multi ? "Delete selected" : "Delete",
             icon: <Trash2 size={13} />,
             onClick: () => (multi ? deleteSelected() : deleteNode(nodeId)),
             danger: true,
-            separator: true,
           });
         } else {
           const groupId = actionMenu.id;
