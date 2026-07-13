@@ -1706,6 +1706,19 @@ export async function runNode(
       return { outputs: { audio: persisted }, costUsd: estimateCost(model), durationMs: Date.now() - t0 };
     }
 
+    case "voiceChange": {
+      // ElevenLabs Voice Changer via fal: keeps words/timing, swaps the
+      // speaker to the picked library voice. $0.30/min.
+      const audio = String(inputs.audio || "").trim();
+      if (!audio) throw new Error("Connect an audio track");
+      const voice = String(config.voice ?? "Rachel");
+      const r = await falRun("fal-ai/elevenlabs/voice-changer", { audio_url: audio, voice });
+      const url = ((r.audio as { url: string } | undefined)?.url) ?? (r.audio_url as string | undefined);
+      if (!url) throw new Error("No audio returned");
+      const persisted = await persistAsset(url, ctx, "revoice");
+      return { outputs: { audio: persisted }, costUsd: estimateCost("fal-ai/elevenlabs/voice-changer"), durationMs: Date.now() - t0 };
+    }
+
     case "musicGen":
     case "sfxGen": {
       const prompt = String(config.instructions || inputs.description || "").trim();

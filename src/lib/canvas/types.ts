@@ -324,6 +324,45 @@ function llmNode(opts: {
   };
 }
 
+// ElevenLabs premade library voices - fal accepts the voice by name.
+// Shared by the Voiceover (TTS) and Voice Change nodes.
+const ELEVEN_VOICES: { value: string; label: string }[] = [
+          { value: "Aria", label: "Aria - expressive (F)" },
+          { value: "Rachel", label: "Rachel - calm narration (F)" },
+          { value: "Sarah", label: "Sarah - soft news (F)" },
+          { value: "Laura", label: "Laura - upbeat (F)" },
+          { value: "Charlotte", label: "Charlotte - sultry (F)" },
+          { value: "Alice", label: "Alice - confident British (F)" },
+          { value: "Matilda", label: "Matilda - warm (F)" },
+          { value: "Jessica", label: "Jessica - youthful (F)" },
+          { value: "Lily", label: "Lily - warm British (F)" },
+          { value: "Bella", label: "Bella - soft (F)" },
+          { value: "Domi", label: "Domi - strong (F)" },
+          { value: "Elli", label: "Elli - emotional (F)" },
+          { value: "Freya", label: "Freya - expressive (F)" },
+          { value: "Grace", label: "Grace - gentle Southern (F)" },
+          { value: "Nicole", label: "Nicole - whisper (F)" },
+          { value: "River", label: "River - calm neutral (N)" },
+          { value: "Adam", label: "Adam - deep (M)" },
+          { value: "Antoni", label: "Antoni - well-rounded (M)" },
+          { value: "Arnold", label: "Arnold - crisp (M)" },
+          { value: "Josh", label: "Josh - deep (M)" },
+          { value: "Sam", label: "Sam - raspy (M)" },
+          { value: "Charlie", label: "Charlie - casual Australian (M)" },
+          { value: "George", label: "George - warm British (M)" },
+          { value: "Callum", label: "Callum - intense (M)" },
+          { value: "Liam", label: "Liam - articulate (M)" },
+          { value: "Will", label: "Will - friendly (M)" },
+          { value: "Eric", label: "Eric - smooth (M)" },
+          { value: "Chris", label: "Chris - natural (M)" },
+          { value: "Brian", label: "Brian - deep narration (M)" },
+          { value: "Daniel", label: "Daniel - authoritative British (M)" },
+          { value: "Bill", label: "Bill - trustworthy (M)" },
+          { value: "Drew", label: "Drew - well-rounded (M)" },
+          { value: "Clyde", label: "Clyde - war veteran (M)" },
+          { value: "Thomas", label: "Thomas - calm meditation (M)" },
+];
+
 export const NODE_TYPES: Record<string, NodeTypeDef> = {
   // ═════════════════════════════════════════════ TEXT
   yourText: {
@@ -1470,6 +1509,20 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     custom: "upload-video",
   },
 
+  voiceChange: {
+    name: "Voice Change",
+    category: "audio",
+    icon: "audio-lines",
+    description: "Re-voice an audio track with a different ElevenLabs voice - keeps the words, timing and intonation, swaps the speaker.",
+    inputs: [{ name: "audio", type: "audio" }],
+    outputs: [{ name: "audio", type: "audio" }],
+    defaults: { voice: "Rachel" },
+    fields: [
+      { name: "voice", label: "Voice", type: "select", options: ELEVEN_VOICES },
+    ],
+    quickFields: ["voice"],
+  },
+
   videoFrame: {
     name: "Extract Frame",
     category: "video",
@@ -1518,44 +1571,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         name: "voice",
         label: "Voice",
         type: "select",
-        // ElevenLabs premade library voices — fal's TTS accepts the voice by
-        // name. Labels carry a short style + gender/accent hint.
-        options: [
-          { value: "Aria", label: "Aria - expressive (F)" },
-          { value: "Rachel", label: "Rachel - calm narration (F)" },
-          { value: "Sarah", label: "Sarah - soft news (F)" },
-          { value: "Laura", label: "Laura - upbeat (F)" },
-          { value: "Charlotte", label: "Charlotte - sultry (F)" },
-          { value: "Alice", label: "Alice - confident British (F)" },
-          { value: "Matilda", label: "Matilda - warm (F)" },
-          { value: "Jessica", label: "Jessica - youthful (F)" },
-          { value: "Lily", label: "Lily - warm British (F)" },
-          { value: "Bella", label: "Bella - soft (F)" },
-          { value: "Domi", label: "Domi - strong (F)" },
-          { value: "Elli", label: "Elli - emotional (F)" },
-          { value: "Freya", label: "Freya - expressive (F)" },
-          { value: "Grace", label: "Grace - gentle Southern (F)" },
-          { value: "Nicole", label: "Nicole - whisper (F)" },
-          { value: "River", label: "River - calm neutral (N)" },
-          { value: "Adam", label: "Adam - deep (M)" },
-          { value: "Antoni", label: "Antoni - well-rounded (M)" },
-          { value: "Arnold", label: "Arnold - crisp (M)" },
-          { value: "Josh", label: "Josh - deep (M)" },
-          { value: "Sam", label: "Sam - raspy (M)" },
-          { value: "Charlie", label: "Charlie - casual Australian (M)" },
-          { value: "George", label: "George - warm British (M)" },
-          { value: "Callum", label: "Callum - intense (M)" },
-          { value: "Liam", label: "Liam - articulate (M)" },
-          { value: "Will", label: "Will - friendly (M)" },
-          { value: "Eric", label: "Eric - smooth (M)" },
-          { value: "Chris", label: "Chris - natural (M)" },
-          { value: "Brian", label: "Brian - deep narration (M)" },
-          { value: "Daniel", label: "Daniel - authoritative British (M)" },
-          { value: "Bill", label: "Bill - trustworthy (M)" },
-          { value: "Drew", label: "Drew - well-rounded (M)" },
-          { value: "Clyde", label: "Clyde - war veteran (M)" },
-          { value: "Thomas", label: "Thomas - calm meditation (M)" },
-        ],
+        options: ELEVEN_VOICES,
       },
       { name: "stability", label: "Stability (0-1)", type: "number", min: 0, max: 1, step: 0.05 },
     ],

@@ -1002,7 +1002,7 @@ function CanvasNodeImpl({
                 fname === "aspect" && isKlingV3I2V
                   ? "Kling V3 inherits aspect from the start image — this field is ignored."
                   : undefined;
-              if (node.type === "voiceover" && fname === "voice") {
+              if ((node.type === "voiceover" || node.type === "voiceChange") && fname === "voice") {
                 return (
                   <VoicePreviewField
                     key={fname}
