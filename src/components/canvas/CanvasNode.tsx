@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useEffect, useRef, memo } from "react";
-import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand, Move, Image as ImageIcon, Film, Music, Type, Circle } from "lucide-react";
+import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, AlertCircle, Expand, Move, Image as ImageIcon, Film, Music, Type, Circle, Download as DownloadIcon } from "lucide-react";
 import { WheelScroll } from "./WheelScroll";
 import VideoGenControls from "./VideoGenControls";
-import Lightbox from "./Lightbox";
+import Lightbox, { downloadAsset } from "./Lightbox";
 import TrackEditor, { type TrackKey } from "./TrackEditor";
 import { NODE_TYPES, getActiveInputs, getActiveOutputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
@@ -1521,9 +1521,16 @@ function OutputPreview({
   const url = current.value;
   const canExpand = url && (isImage(url) || isVideo(url));
 
+  const clickableImage = Boolean(canExpand && onExpand && isImage(url));
   return (
     <div className="mb-2">
-      <div className="relative group/preview">
+      <div
+        className="relative group/preview"
+        style={clickableImage ? { cursor: "zoom-in" } : undefined}
+        onClick={clickableImage ? (e) => { e.stopPropagation(); onExpand!(url); } : undefined}
+        onMouseDown={clickableImage ? (e) => e.stopPropagation() : undefined}
+        title={clickableImage ? "Click to view fullscreen" : undefined}
+      >
         <PreviewMedia url={url} expanded={expanded} />
         {/* Overlay expand button — appears on hover, opens fullscreen view */}
         {canExpand && onExpand && (
@@ -1538,6 +1545,18 @@ function OutputPreview({
             title="View fullscreen"
           >
             <Expand size={13} />
+          </button>
+        )}
+        {/* One-click download straight from the node — no fullscreen detour */}
+        {canExpand && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void downloadAsset(url); }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="absolute top-1.5 right-10 w-7 h-7 rounded-md bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover/preview:opacity-100 transition-opacity backdrop-blur-sm"
+            title="Download to disk"
+          >
+            <DownloadIcon size={13} />
           </button>
         )}
       </div>
@@ -1575,7 +1594,7 @@ function PreviewMedia({ url, expanded }: { url: string; expanded?: boolean }) {
   // compact default (max-h-40 = 160px).
   const mediaMax = expanded ? "max-h-80" : "max-h-40";
   if (isVideo(url)) {
-    return <video src={url} controls muted className={`w-full ${mediaMax} rounded-md bg-black`} />;
+    return <video src={url} controls muted data-native-menu className={`w-full ${mediaMax} rounded-md bg-black`} />;
   }
   if (isAudio(url)) {
     return <audio src={url} controls className="w-full" />;
@@ -1583,7 +1602,7 @@ function PreviewMedia({ url, expanded }: { url: string; expanded?: boolean }) {
   if (isImage(url) || url.startsWith("data:image")) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={url} alt="" loading="lazy" decoding="async" className={`w-full ${mediaMax} rounded-md object-cover bg-bg-subtle`} />
+      <img src={url} alt="" loading="lazy" decoding="async" data-native-menu className={`w-full ${mediaMax} rounded-md object-cover bg-bg-subtle`} />
     );
   }
   // text — compact view with scroll. The full text is always available via

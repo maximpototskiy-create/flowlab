@@ -1414,6 +1414,11 @@ export default function Canvas({
     if (t.closest("input, textarea, select, [contenteditable]")) {
       return;
     }
+    // Generated previews → native menu gives "Save image/video as..." — the
+    // requested right-click download path.
+    if (t.closest("[data-native-menu]")) {
+      return;
+    }
     e.preventDefault();
     // Right-click on a node → node action menu.
     const nodeEl = t.closest("[data-node-id]") as HTMLElement | null;

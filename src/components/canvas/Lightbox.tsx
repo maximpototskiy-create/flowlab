@@ -16,6 +16,26 @@ import { X, Download, ChevronLeft, ChevronRight, Maximize2 } from "lucide-react"
 //   • ←/→ keys + on-screen chevrons navigate when onPrev/onNext provided.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Save a remote asset with a real download (Save-As dialog if the browser is
+// set to ask). A plain <a download> is ignored for cross-origin URLs - the
+// browser just opened the image in a new tab (the "long download path"
+// complaint). Falls back to opening the URL if CORS blocks the fetch.
+export async function downloadAsset(src: string, filename?: string) {
+  try {
+    const r = await fetch(src, { mode: "cors" });
+    if (!r.ok) throw new Error(String(r.status));
+    const b = await r.blob();
+    const u = URL.createObjectURL(b);
+    const a = document.createElement("a");
+    a.href = u;
+    a.download = filename || (src.split("/").pop() ?? "asset").split("?")[0] || "asset";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 5000);
+  } catch {
+    window.open(src, "_blank", "noopener,noreferrer");
+  }
+}
+
 export default function Lightbox({
   src,
   kind,
@@ -50,14 +70,17 @@ export default function Lightbox({
     };
   }, [onClose, onPrev, onNext]);
 
-  // Ref to the media element so the "true fullscreen" button can request the
-  // browser Fullscreen API on it. Works for BOTH <img> and <video> — gives the
-  // image the same edge-to-edge fullscreen a video gets from its native control.
-  const mediaRef = useRef<HTMLElement | null>(null);
+  // Fullscreen is requested on the STABLE ROOT overlay, not the media element:
+  // prev/next remounts the <img>/<video> (and swaps tags between kinds), and
+  // fullscreening a node that then leaves the DOM makes the browser exit
+  // fullscreen - the "arrows kick me out of fullscreen" bug. The root never
+  // remounts, so navigation keeps fullscreen; arrows/toolbar stay usable too.
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const goFullscreen = () => {
-    const el = mediaRef.current as (HTMLElement & { webkitRequestFullscreen?: () => void }) | null;
+    const el = rootRef.current as (HTMLDivElement & { webkitRequestFullscreen?: () => void }) | null;
     if (!el) return;
     try {
+      if (document.fullscreenElement) { void document.exitFullscreen?.(); return; }
       if (el.requestFullscreen) void el.requestFullscreen();
       else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
     } catch { /* ignore */ }
@@ -77,6 +100,7 @@ export default function Lightbox({
 
   return (
     <div
+      ref={rootRef}
       className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center p-2"
       onClick={onClose}
     >
@@ -96,17 +120,15 @@ export default function Lightbox({
           <Maximize2 size={14} />
           <span className="hidden sm:inline">Fullscreen</span>
         </button>
-        <a
-          href={src}
-          download={filename}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          type="button"
+          onClick={() => void downloadAsset(src, filename)}
           className="flex items-center gap-1.5 pl-3 pr-3.5 py-1.5 rounded-full hover:bg-white/15 text-white text-[12px]"
-          title="Download"
+          title="Download to disk"
         >
           <Download size={14} />
           <span className="hidden sm:inline">Download</span>
-        </a>
+        </button>
         <button
           type="button"
           onClick={onClose}
@@ -125,14 +147,12 @@ export default function Lightbox({
         {kind === "image" ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            ref={(el) => { mediaRef.current = el; }}
             src={src}
             alt=""
             className="max-w-full max-h-[97vh] object-contain rounded"
           />
         ) : (
           <video
-            ref={(el) => { mediaRef.current = el; }}
             src={src}
             controls
             autoPlay
