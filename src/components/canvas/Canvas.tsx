@@ -1969,7 +1969,7 @@ export default function Canvas({
 
     try {
       const cleaned: Graph = {
-        nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, config: n.config, outputs: n.outputs, results: n.results })),
+        nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, config: n.config, outputs: n.outputs, results: n.results, outputsSig: n.outputsSig })),
         edges: graph.edges,
       };
       console.log("[FlowLab] sending POST /api/runs/start", { workflowId, scope: scopeNodeId });

@@ -25,7 +25,16 @@ export const runWorkflowFn = inngest.createFunction(
     // warns and clamps it. Free plan = 5. Set INNGEST_CONCURRENCY in env to
     // raise it after upgrading the plan (and pair with a bigger DB pool). A
     // 6th simultaneous run doesn't fail — it queues until a slot frees up.
-    concurrency: { limit: Number(process.env.INNGEST_CONCURRENCY) || 5 },
+    concurrency: [
+      { limit: Number(process.env.INNGEST_CONCURRENCY) || 5 },
+      // Serialise runs WITHIN one workflow: mass ▶ clicks on several nodes
+      // become an ordered queue instead of parallel runs that re-execute the
+      // same shared ancestors. Later runs then reuse the outputs the earlier
+      // runs persisted (see mergePersistedOutputs) — no duplicate generations,
+      // no racing graph persists. Different workflows still run in parallel
+      // under the global cap above.
+      { key: "event.data.workflowId", limit: 1 },
+    ],
     // One automatic retry on unexpected failure. Node-level results are already
     // persisted by the executor, so a retry resumes cleanly enough for now.
     retries: 1,

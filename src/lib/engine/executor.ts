@@ -4,6 +4,7 @@
 // - Sequential when dependencies require it
 // - Updates DB run/run_steps as it goes
 
+import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { runNode, type RunnerContext, type RunnerResult } from "./runners";
 import { falRealCost } from "@/lib/fal/client";
@@ -29,6 +30,31 @@ function withGraphLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 type NodeStatus = "pending" | "running" | "done" | "error" | "skipped";
+
+// ─── Staleness signature (patch 319) ────────────────────────────────────────
+// Hash of everything that determines a node's output: its type, its config
+// (minus volatile "_"-prefixed UI keys) and the RESOLVED INPUT VALUES it
+// consumed. Persisted next to outputs; on a subgraph run cached outputs are
+// reused ONLY when the signature still matches — so editing a prompt,
+// reconnecting an input or an upstream producing a new value all invalidate
+// the cache instead of silently serving stale content.
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+  if (Array.isArray(v)) return "[" + v.map(stableStringify).join(",") + "]";
+  const o = v as Record<string, unknown>;
+  return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + stableStringify(o[k])).join(",") + "}";
+}
+
+export function computeExecSig(node: GraphNode, inputs: Record<string, unknown>): string {
+  const cfg: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node.config ?? {})) {
+    if (k.startsWith("_")) continue; // UI-only keys (e.g. _selectedResultIdx affects DOWNSTREAM inputs, not this node)
+    cfg[k] = v;
+  }
+  return createHash("sha1")
+    .update(node.type + "|" + stableStringify(cfg) + "|" + stableStringify(inputs))
+    .digest("hex");
+}
 
 type ExecState = {
   graph: Graph;
@@ -386,6 +412,9 @@ async function executeOne(
             nodesArr[idx] = {
               ...nodesArr[idx],
               outputs: result.outputs,
+              // Staleness signature of the config+inputs that produced these
+              // outputs — checked before reusing them on later subgraph runs.
+              outputsSig: computeExecSig(node, inputs),
               // Persist `result.results` directly when the runner provides it
               // (multi-result nodes — imageGen with num_results>1, batched
               // video, etc). When there are 0/1 results, leave undefined so
@@ -495,29 +524,62 @@ export async function executeGraph(
   const isSubgraphRun = Boolean(opts.scopeNodeId);
   if (isSubgraphRun) {
     let cachedCount = 0;
-    for (const node of graph.nodes) {
+    // Walk the scope in topological order so each cache decision can see
+    // whether the node's upstreams were themselves kept-cached. A node's
+    // cached outputs are reused ONLY when:
+    //   1. it is not the requested scope node (that one always re-runs);
+    //   2. every in-scope upstream was kept-cached (a dirty ancestor means
+    //      this node's inputs are about to change — must re-run);
+    //   3. the persisted staleness signature matches the signature of the
+    //      node's CURRENT config + the inputs it would receive right now.
+    //      Legacy graphs without a stored sig are grandfathered as clean.
+    // This kills the "stale prompt" class of bugs: edited prompts, rewired
+    // inputs and changed upstream selections all invalidate the cache.
+    const scopeIds = opts.scope ?? new Set(graph.nodes.map((n) => n.id));
+    const scopedOrder = topoSort(graph, opts.scope ?? undefined);
+    for (const nodeId of scopedOrder) {
       // The scope node itself is always re-executed.
-      if (node.id === opts.scopeNodeId) continue;
-      const cached = (node as GraphNode & { outputs?: Record<string, unknown> }).outputs;
-      if (cached && Object.keys(cached).length > 0) {
-        state.outputs.set(node.id, cached);
-        state.status.set(node.id, "done");
-        // ALSO restore the multi-result array if present. Without this,
-        // brandAssets (and other multi-result nodes) only pass their first
-        // URL downstream on a subgraph run — even though all the URLs
-        // were stored on the graph. Symptom: selected 4 screenshots in
-        // Brand Assets, ran ImageGen alone, only 1 reference reached
-        // Nano Banana.
-        const cachedResults = (node as GraphNode & {
-          results?: { value: string; mime?: string }[];
-        }).results;
-        if (cachedResults && cachedResults.length > 0) {
-          state.results.set(node.id, cachedResults);
-        }
-        cachedCount++;
+      if (nodeId === opts.scopeNodeId) continue;
+      const node = graph.nodes.find((n) => n.id === nodeId);
+      if (!node) continue;
+      const snap = node as GraphNode & {
+        outputs?: Record<string, unknown>;
+        results?: { value: string; mime?: string }[];
+        outputsSig?: string;
+      };
+      const cached = snap.outputs;
+      if (!cached || Object.keys(cached).length === 0) continue;
+      const upstreamClean = graph.edges.every(
+        (e) =>
+          e.to.nodeId !== nodeId ||
+          !scopeIds.has(e.from.nodeId) ||
+          state.status.get(e.from.nodeId) === "done",
+      );
+      if (!upstreamClean) {
+        console.log(`[executor] cache invalidated for ${nodeId} (dirty upstream)`);
+        continue;
       }
+      if (snap.outputsSig !== undefined) {
+        const wouldReceive = resolveInputs(graph, node, state.outputs, state.results);
+        if (snap.outputsSig !== computeExecSig(node, wouldReceive)) {
+          console.log(`[executor] cache invalidated for ${nodeId} (config/inputs changed)`);
+          continue;
+        }
+      }
+      state.outputs.set(node.id, cached);
+      state.status.set(node.id, "done");
+      // ALSO restore the multi-result array if present. Without this,
+      // brandAssets (and other multi-result nodes) only pass their first
+      // URL downstream on a subgraph run — even though all the URLs
+      // were stored on the graph. Symptom: selected 4 screenshots in
+      // Brand Assets, ran ImageGen alone, only 1 reference reached
+      // Nano Banana.
+      if (snap.results && snap.results.length > 0) {
+        state.results.set(node.id, snap.results);
+      }
+      cachedCount++;
     }
-    console.log(`[executor] subgraph run scope=${opts.scopeNodeId}, ${cachedCount} nodes have cached outputs`);
+    console.log(`[executor] subgraph run scope=${opts.scopeNodeId}, ${cachedCount} nodes reused from cache`);
   }
 
   const order = topoSort(graph, opts.scope ?? undefined);
