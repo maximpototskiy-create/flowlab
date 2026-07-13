@@ -61,7 +61,7 @@ export type ExportClip = {
   keyTol?: number;   // 0..1 tolerance (default 0.3)
   tstyle?: TextStyle;
   words?: CapWord[];
-  shape?: { kind: "rect" | "ellipse"; color: string; radius: number; w: number; h: number; opacity: number };
+  shape?: { kind: "rect" | "ellipse" | "triangle" | "arrow"; color: string; radius: number; w: number; h: number; opacity: number };
 };
 
 type Params = {
@@ -539,6 +539,14 @@ export async function exportTimeline(p: Params): Promise<{ blob: Blob; ext: stri
         ctx.fillStyle = sh.color;
         if (kf.rot ?? c.rot) { ctx.save(); ctx.translate(cx + cw / 2, cy + ch / 2); ctx.rotate(((kf.rot ?? c.rot ?? 0) * Math.PI) / 180); ctx.translate(-(cx + cw / 2), -(cy + ch / 2)); }
         if (sh.kind === "ellipse") { ctx.beginPath(); ctx.ellipse(cx + cw / 2, cy + ch / 2, cw / 2, ch / 2, 0, 0, Math.PI * 2); ctx.fill(); }
+        else if (sh.kind === "triangle") { ctx.beginPath(); ctx.moveTo(cx + cw / 2, cy); ctx.lineTo(cx + cw, cy + ch); ctx.lineTo(cx, cy + ch); ctx.closePath(); ctx.fill(); }
+        else if (sh.kind === "arrow") {
+          // right-pointing arrow; rotate the clip for other directions
+          ctx.beginPath();
+          ctx.moveTo(cx, cy + ch * 0.35); ctx.lineTo(cx + cw * 0.6, cy + ch * 0.35); ctx.lineTo(cx + cw * 0.6, cy + ch * 0.15);
+          ctx.lineTo(cx + cw, cy + ch * 0.5); ctx.lineTo(cx + cw * 0.6, cy + ch * 0.85); ctx.lineTo(cx + cw * 0.6, cy + ch * 0.65);
+          ctx.lineTo(cx, cy + ch * 0.65); ctx.closePath(); ctx.fill();
+        }
         else { const r = Math.min(sh.radius, cw / 2, ch / 2); ctx.beginPath(); ctx.moveTo(cx + r, cy); ctx.arcTo(cx + cw, cy, cx + cw, cy + ch, r); ctx.arcTo(cx + cw, cy + ch, cx, cy + ch, r); ctx.arcTo(cx, cy + ch, cx, cy, r); ctx.arcTo(cx, cy, cx + cw, cy, r); ctx.closePath(); ctx.fill(); }
         if (kf.rot ?? c.rot) ctx.restore();
       }

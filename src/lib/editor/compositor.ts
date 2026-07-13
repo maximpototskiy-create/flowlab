@@ -15,7 +15,7 @@ export type CompClip = {
   id: string;
   layer: string;
   kind: "video" | "image" | "audio" | "text" | "fx" | "adjust" | "shape";
-  shape?: { kind: "rect" | "ellipse"; color: string; radius: number; w: number; h: number; opacity: number };
+  shape?: { kind: "rect" | "ellipse" | "triangle" | "arrow"; color: string; radius: number; w: number; h: number; opacity: number };
   start: number;
   duration: number;
   scale: number;

@@ -313,7 +313,7 @@ type EditClip = {
   tstyle?: TextStyle;
   words?: CapWord[];
   // Shape/plate clip: a solid or rounded rectangle behind other layers.
-  shape?: { kind: "rect" | "ellipse"; color: string; radius: number; w: number; h: number; opacity: number };
+  shape?: { kind: "rect" | "ellipse" | "triangle" | "arrow"; color: string; radius: number; w: number; h: number; opacity: number };
   // Server-rendered screen replace (node-quality): green source + content + track.
   sr?: {
     green: string; content?: string; contentVideo?: boolean;
@@ -1245,7 +1245,15 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const PLAIN_TEXT: TextStyle = { color: "#ffffff", shadow: true, plate: "none", enter: "", weight: 700 };
   // plain text layer by default — animations/styles are applied afterwards (Captions tab / Properties)
   const addText = (style?: TextStyle, label = "Text", text = "Your text") => addClipKind("text", { text, tstyle: { ...(style ?? PLAIN_TEXT) } }, DEFAULTS.text, label);
-  const addShape = (shape: "rect" | "ellipse", color: string) => addClipKind("shape", { shape: { kind: shape, color, radius: 18, w: 0.6, h: 0.18, opacity: 1 } }, DEFAULTS.shape, shape === "ellipse" ? "Ellipse" : "Plate");
+  const addShape = (shape: "rect" | "ellipse" | "triangle" | "arrow", color: string) =>
+    addClipKind("shape", { shape: { kind: shape, color, radius: 18, w: shape === "triangle" ? 0.3 : shape === "arrow" ? 0.35 : 0.6, h: shape === "triangle" ? 0.18 : shape === "arrow" ? 0.12 : 0.18, opacity: 1 } }, DEFAULTS.shape,
+      shape === "ellipse" ? "Ellipse" : shape === "triangle" ? "Triangle" : shape === "arrow" ? "Arrow" : "Plate");
+  // CSS clip-path for the DOM preview of non-rect shapes (canvas export draws
+  // the same geometry with paths - keep the two in sync).
+  const SHAPE_CLIP: Record<string, string | undefined> = {
+    triangle: "polygon(50% 0, 100% 100%, 0 100%)",
+    arrow: "polygon(0 35%, 60% 35%, 60% 15%, 100% 50%, 60% 85%, 60% 65%, 0 65%)",
+  };
   // live style: update the template AND apply to selected captions (or all if none selected)
   const applyStyle = (next: TextStyle) => {
     setCapStyle(next);
@@ -3054,10 +3062,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
             </div>
             <div className="text-fg-muted text-[11px] font-medium pt-2">Shapes & plates</div>
             <div className="grid grid-cols-3 gap-2">
-              {([["Plate", "rect", "rgba(0,0,0,0.72)"], ["Bar", "rect", "#FFD60A"], ["Ellipse", "ellipse", "rgba(0,0,0,0.72)"]] as const).map(([name, kind, color]) => (
-                <button key={name} onClick={() => addShape(kind, color)} title={`Add ${name.toLowerCase()} behind your content`}
+              {([["Plate", "rect", "rgba(0,0,0,0.72)"], ["Bar", "rect", "#FFD60A"], ["Ellipse", "ellipse", "rgba(0,0,0,0.72)"], ["Triangle", "triangle", "#0A84FF"], ["Arrow", "arrow", "#FFD60A"], ["Line", "rect", "rgba(255,255,255,0.9)"]] as const).map(([name, kind, color]) => (
+                <button key={name} onClick={() => { if (name === "Line") { addClipKind("shape", { shape: { kind: "rect", color, radius: 2, w: 0.6, h: 0.012, opacity: 1 } }, DEFAULTS.shape, "Line"); } else addShape(kind, color); }} title={`Add ${name.toLowerCase()}`}
                   className="rounded-md border border-border hover:border-brand bg-black aspect-video flex items-center justify-center overflow-hidden">
-                  <span style={{ display: "block", width: "62%", height: "42%", background: color, borderRadius: kind === "ellipse" ? "50%" : 5 }} />
+                  <span style={{ display: "block", width: name === "Triangle" || name === "Arrow" ? "42%" : "62%", height: name === "Line" ? "6%" : "42%", background: color, borderRadius: kind === "ellipse" ? "50%" : 4, clipPath: kind === "triangle" ? "polygon(50% 0, 100% 100%, 0 100%)" : kind === "arrow" ? "polygon(0 35%, 60% 35%, 60% 15%, 100% 50%, 60% 85%, 60% 65%, 0 65%)" : undefined }} />
                 </button>
               ))}
             </div>
@@ -3440,7 +3448,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         return (
                           <div key={c.id} className="absolute" onPointerDown={(e) => onVpDown(e, c, "move")} onContextMenu={(e) => onClipContext(e, c)}
                             style={{ left: (W - sw) / 2 + (ks.x + v.offX) * W, top: (H - sh) / 2 + (ks.y + v.offY) * H, width: sw, height: sh, opacity: v.opacity * (c.shape.opacity ?? 1), transform: ks.rot ? `rotate(${ks.rot}deg)` : undefined, transformOrigin: "center", pointerEvents: active ? "auto" : "none", cursor: "move", touchAction: "none" }}>
-                            <div className="w-full h-full" style={{ background: c.shape.color, borderRadius: c.shape.kind === "ellipse" ? "50%" : Math.min(c.shape.radius, sw / 2, sh / 2) }} />
+                            <div className="w-full h-full" style={{ background: c.shape.color, borderRadius: c.shape.kind === "ellipse" ? "50%" : SHAPE_CLIP[c.shape.kind] ? 0 : Math.min(c.shape.radius, sw / 2, sh / 2), clipPath: SHAPE_CLIP[c.shape.kind] }} />
                             {selected === c.id && active && (
                               <>
                                 <div onPointerDown={(e) => onVpDown(e, c, "scale")} className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-brand rounded-sm cursor-nwse-resize" style={{ touchAction: "none" }} />
@@ -3819,8 +3827,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 {sel.kind === "shape" && sel.shape && (
                   <div className="mt-2 space-y-2">
                     <div className="grid grid-cols-2 gap-1">
-                      {(["rect", "ellipse"] as const).map((k) => (
-                        <button key={k} onClick={() => update(sel.id, { shape: { ...sel.shape!, kind: k } })} className={`py-1 rounded border text-[11px] ${sel.shape!.kind === k ? "border-brand text-brand bg-brand/10" : "border-border text-fg-muted hover:text-fg"}`}>{k === "rect" ? "Rectangle" : "Ellipse"}</button>
+                      {(["rect", "ellipse", "triangle", "arrow"] as const).map((k) => (
+                        <button key={k} onClick={() => update(sel.id, { shape: { ...sel.shape!, kind: k } })} className={`py-1 rounded border text-[11px] ${sel.shape!.kind === k ? "border-brand text-brand bg-brand/10" : "border-border text-fg-muted hover:text-fg"}`}>{k === "rect" ? "Rectangle" : k === "ellipse" ? "Ellipse" : k === "triangle" ? "Triangle" : "Arrow"}</button>
                       ))}
                     </div>
                     <label className="flex items-center justify-between gap-2">Color
@@ -3849,6 +3857,35 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 )}
                 {sel.kind === "text" && (
                   <div className="space-y-1">
+                    {/* Font styling directly on the text clip (patch 324) — the
+                        Captions panel has the full set, but nobody found it
+                        there ("no font selection in the editor" reports). */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <label className="text-fg-muted col-span-2">Font
+                        <select value={sel.tstyle?.font || "sans-serif"}
+                          onChange={(e) => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); const v = e.target.value; setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), font: v } } : c))); }}
+                          className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                          {CAP_FONTS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-fg-muted">Color
+                        <input type="color" value={sel.tstyle?.color || "#ffffff"}
+                          onChange={(e) => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); const v = e.target.value; setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), color: v } } : c))); }}
+                          className="mt-0.5 w-full h-7 bg-bg-card border border-border rounded cursor-pointer" />
+                      </label>
+                      <label className="text-fg-muted">Weight
+                        <select value={String(sel.tstyle?.weight ?? 800)}
+                          onChange={(e) => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); const v = Number(e.target.value); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), weight: v } } : c))); }}
+                          className="mt-0.5 w-full bg-bg-card border border-border rounded px-1.5 py-1 text-fg outline-none">
+                          {[400, 600, 700, 800, 900].map((w) => <option key={w} value={String(w)}>{w}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-fg-muted col-span-2">Size
+                        <input type="range" min={0.5} max={3} step={0.05} value={sel.tstyle?.size ?? 1}
+                          onChange={(e) => { const ids = selectedRef.current.length > 1 ? new Set(selectedRef.current) : new Set([sel.id]); const v = Number(e.target.value); setClips((p) => p.map((c) => (c.kind === "text" && ids.has(c.id) ? { ...c, tstyle: { ...(c.tstyle || {}), size: v } } : c))); }}
+                          className="mt-1 w-full" />
+                      </label>
+                    </div>
                     <div className="text-fg-muted">Alignment</div>
                     <div className="grid grid-cols-3 gap-1">
                       {([["left", "Left"], ["center", "Center"], ["right", "Right"]] as const).map(([v, l]) => (
