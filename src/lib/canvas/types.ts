@@ -559,7 +559,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
         ],
       },
       { name: "aspect", label: "Aspect ratio", type: "select", options: ASPECT_OPTS },
-      { name: "num_results", label: "Number of results in a run", type: "number", min: 1, max: 4, step: 1 },
+      { name: "num_results", label: "Results", type: "number", min: 1, max: 4, step: 1, help: "How many variations to generate per run (1-4)" },
       {
         name: "quality",
         label: "Quality (GPT Image 2)",
@@ -577,7 +577,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     primaryPlaceholder: "Your prompt here…",
     examples: ["Static ad — earbuds"],
     starters: ["Lifestyle scene showing…"],
-    quickFields: ["model", "aspect", "useBrandKit"],
+    quickFields: ["model", "aspect", "num_results", "useBrandKit"],
   },
 
   imageResize: {

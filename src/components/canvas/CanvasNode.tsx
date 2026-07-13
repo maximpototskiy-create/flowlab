@@ -1346,16 +1346,17 @@ function VoicePreviewField({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   useEffect(() => () => audioRef.current?.pause(), []);
 
-  const preview = async () => {
-    if (playing) { audioRef.current?.pause(); setPlaying(false); return; }
-    if (!voice) return;
-    const cacheKey = `flowlab.voicePreview.${voice}`;
+  const playVoice = async (v: string) => {
+    if (!v) return;
+    const cacheKey = `flowlab.voicePreview.${v}`;
     let url = "";
     try { url = localStorage.getItem(cacheKey) || ""; } catch { /* */ }
-    if (!url) {
+    for (let attempt = 0; !url && attempt < 2; attempt++) {
+      // The sample is TTS-generated server-side and occasionally times out -
+      // one silent retry fixes most of the "voice does not play" reports.
       setLoading(true);
       try {
-        const r = await fetch(`/api/voice-preview?voice=${encodeURIComponent(voice)}`);
+        const r = await fetch(`/api/voice-preview?voice=${encodeURIComponent(v)}`);
         const j = (await r.json()) as { url?: string };
         url = j.url || "";
         if (url) { try { localStorage.setItem(cacheKey, url); } catch { /* */ } }
@@ -1370,10 +1371,14 @@ function VoicePreviewField({
     setPlaying(true);
     a.play().catch(() => setPlaying(false));
   };
+  const preview = async () => {
+    if (playing) { audioRef.current?.pause(); setPlaying(false); return; }
+    await playVoice(voice);
+  };
 
   return (
     <div className="inline-flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
-      <QuickField field={field} value={voice} onChange={onChange} />
+      <QuickField field={field} value={voice} onChange={(v) => { onChange(v); void playVoice(String(v)); }} />
       <button
         type="button"
         disabled={!voice || loading}
