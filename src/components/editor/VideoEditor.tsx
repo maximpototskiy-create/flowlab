@@ -8,9 +8,27 @@ import { drawCaption, kfState, type ExportClip, type KfEase } from "@/lib/editor
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock, Folder, ArrowUp, Minus, Paperclip, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, ArrowUp, Minus, Paperclip, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers, Info,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
+
+// After Effects-style keyframe glyph. The shape encodes the easing of the
+// segment ARRIVING at this key (matching the applyEase semantics):
+//   linear = diamond, in = left side curved, out = right side curved,
+//   inOut = lens ("easy ease"), hold = square.
+function KeyGlyph({ ease, size = 10, className }: { ease?: KfEase | string; size?: number; className?: string }) {
+  const d =
+    ease === "inOut" ? "M0 5 Q3 0.5 5 0.5 Q7 0.5 10 5 Q7 9.5 5 9.5 Q3 9.5 0 5 Z"
+    : ease === "in" ? "M5 0 L10 5 L5 10 Q1.5 8.5 0 5 Q1.5 1.5 5 0 Z"
+    : ease === "out" ? "M5 0 Q8.5 1.5 10 5 Q8.5 8.5 5 10 L0 5 Z"
+    : ease === "hold" ? "M1 1 H9 V9 H1 Z"
+    : "M5 0 L10 5 L5 10 L0 5 Z"; // linear
+  return (
+    <svg width={size} height={size} viewBox="0 0 10 10" className={className} aria-hidden>
+      <path d={d} fill="currentColor" stroke="rgba(0,0,0,0.5)" strokeWidth="0.8" />
+    </svg>
+  );
+}
 
 export type EditorAsset = {
   id: string;
@@ -2218,7 +2236,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
-  const resetTransform = (id: string) => update(id, { x: 0, y: 0, scale: 1, rot: 0 });
+  // Reset must ALSO drop transform keyframes: when kf exist they drive the
+  // rendered pose, so resetting only the base x/y/scale/rot changed nothing
+  // visually ("reset works only from the viewport" report - viewport clips
+  // simply had no keys yet).
+  const resetTransform = (id: string) => update(id, { x: 0, y: 0, scale: 1, rot: 0, kf: undefined });
   // drag a caption box on the canvas overlay → move (x/y); corner handle → scale
   const onCapDown = (e: React.PointerEvent, c: EditClip) => {
     if (e.button !== 0) return;
@@ -3635,10 +3657,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         <span className={`ml-2.5 pl-1 pr-2 truncate leading-9 relative z-[1] ${c.kind === "video" ? "bg-black/40 rounded" : ""}`}>{c.kind === "fx" ? `FX: ${c.fx}` : c.kind === "adjust" ? `Adj: ${ADJUST.find((a) => a.v === c.fx)?.l ?? ""}` : c.kind === "text" ? (c.text || "Text") : c.label}</span>
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trimL")} className="absolute left-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-l z-[2]" />
                         {(c.kf?.length ?? 0) > 0 && c.kf!.map((k, ki) => (
-                          <span key={ki} title={`transform key @ ${k.t.toFixed(2)}s - click: jump, Alt+click: delete`}
-                            onPointerDown={(e) => { e.stopPropagation(); if (e.altKey) update(c.id, { kf: c.kf!.length > 1 ? c.kf!.filter((_, j) => j !== ki) : undefined }); else seek(c.start + k.t); }}
-                            className="absolute bottom-0.5 w-2 h-2 rotate-45 bg-amber-400 border border-black/50 cursor-pointer z-[3] hover:scale-125 transition-transform"
-                            style={{ left: Math.max(1, k.t * pxPerSec - 4) }} />
+                          <span key={ki} title={`${k.ease ?? "inOut"} key @ ${k.t.toFixed(2)}s - click: jump | Alt+click or right-click: delete | Shift+right-click: delete ALL keys`}
+                            onPointerDown={(e) => { e.stopPropagation(); if (e.button === 2) return; if (e.altKey) update(c.id, { kf: c.kf!.length > 1 ? c.kf!.filter((_, j) => j !== ki) : undefined }); else seek(c.start + k.t); }}
+                            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (e.shiftKey) update(c.id, { kf: undefined }); else update(c.id, { kf: c.kf!.length > 1 ? c.kf!.filter((_, j) => j !== ki) : undefined }); }}
+                            className="absolute bottom-0 text-amber-400 cursor-pointer z-[3] hover:scale-125 transition-transform"
+                            style={{ left: Math.max(1, k.t * pxPerSec - 5) }}>
+                            <KeyGlyph ease={k.ease ?? "inOut"} />
+                          </span>
                         ))}
                         <span onPointerDown={(e) => onClipPointerDown(e, c, "trim")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize bg-brand/40 rounded-r z-[2]" />
                       </div>
@@ -3807,7 +3832,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                             updateSel(sel.id, { kf: [...(sel.kf || []).filter((k) => Math.abs(k.t - local) >= 0.05), key].sort((a, b) => a.t - b.t) });
                           }}
                           className={`w-5 h-5 grid place-items-center rounded border ${near ? "border-brand text-brand bg-brand/15" : "border-border text-fg-subtle hover:text-brand hover:border-brand"}`}>
-                          <span className="block w-2 h-2 rotate-45 border border-current" style={{ background: near ? "currentColor" : "transparent" }} />
+                          {near ? <KeyGlyph ease={near.ease ?? "inOut"} /> : <span className="block w-2 h-2 rotate-45 border border-current" />}
                         </button>
                         {near ? (
                           <select value={near.ease ?? "inOut"} title="Easing curve for the motion arriving at this keyframe"
@@ -3820,7 +3845,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                             <option value="hold">Hold (step)</option>
                           </select>
                         ) : null}
-                        <span className="text-fg-subtle text-[10px] flex-1">{(sel.kf?.length ?? 0)} key{(sel.kf?.length ?? 0) === 1 ? "" : "s"} {"\u00b7"} click a diamond = jump, Alt+click = delete{near ? " \u00b7 curve applies to the segment INTO this key" : ""}</span>
+                        <span className="text-fg-subtle text-[10px] whitespace-nowrap">{(sel.kf?.length ?? 0)} key{(sel.kf?.length ?? 0) === 1 ? "" : "s"}</span>
+                        <span className="text-fg-subtle hover:text-fg cursor-help shrink-0" title={"Keys on the timeline: click = jump to key, Alt+click or right-click = delete key, Shift+right-click = delete all keys. The easing curve applies to the segment INTO the key. Key shapes match After Effects: diamond = linear, lens = ease in-out, half-round = ease in/out, square = hold."}><Info size={11} /></span>
+                        <span className="flex-1" />
                         {(sel.kf?.length ?? 0) > 0 && <button onClick={() => updateSel(sel.id, { kf: undefined })} className="text-fg-subtle hover:text-red-400 text-[10px] underline decoration-dotted">clear</button>}
                       </div>
                     );
