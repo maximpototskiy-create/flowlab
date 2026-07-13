@@ -142,6 +142,20 @@ export default function GroupBox({
                     {(group.color ?? "brand") === k && <Check size={9} className="text-white" />}
                   </button>
                 ))}
+                {/* Custom RGB: native color picker (with the eyedropper in
+                    Chromium). The hex is stored as the group color. */}
+                <label
+                  className="w-4 h-4 rounded-full border border-dashed border-white/40 cursor-pointer overflow-hidden relative"
+                  title="Custom color"
+                  onPointerDown={stop}
+                  style={{ background: "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }}
+                >
+                  <input
+                    type="color"
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                    onChange={(e) => { onColor(e.target.value); setShowColors(false); }}
+                  />
+                </label>
               </div>
             )}
           </div>

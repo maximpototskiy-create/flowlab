@@ -53,6 +53,7 @@ export default function CanvasEdges({
   onHover,
   onDelete,
   selectedIds,
+  edgeStyle,
 }: {
   graph: Graph;
   hoveredEdgeId: string | null;
@@ -70,6 +71,9 @@ export default function CanvasEdges({
   /** Edges touching these nodes render highlighted — makes a selected node's
    *  wiring readable in dense graphs. */
   selectedIds?: Set<string>;
+  /** "curve" (default) or "ortho" — right-angle wiring like electrical
+   *  diagrams. Persisted per user in localStorage. */
+  edgeStyle?: "curve" | "ortho";
 }) {
   // Suppress unused-warnings (these props exist to trigger re-renders).
   void dragTick;
@@ -214,7 +218,18 @@ export default function CanvasEdges({
         // at all zoom levels.
         const dist = Math.abs(p.x2 - p.x1);
         const dx = Math.max(40, Math.min(140, dist * 0.35));
-        const d = `M ${p.x1} ${p.y1} C ${p.x1 + dx} ${p.y1}, ${p.x2 - dx} ${p.y2}, ${p.x2} ${p.y2}`;
+        // Orthogonal option: right-angle route with a small radius at the two
+        // corners - reads like an electrical schematic on dense boards.
+        const d = edgeStyle === "ortho"
+          ? (() => {
+              const midX = (p.x1 + p.x2) / 2;
+              const r = Math.min(10, Math.abs(midX - p.x1), Math.abs(p.y2 - p.y1) / 2);
+              if (r < 1 || Math.abs(p.y2 - p.y1) < 2) return `M ${p.x1} ${p.y1} L ${p.x2} ${p.y2}`;
+              const sy = p.y2 > p.y1 ? 1 : -1;
+              const sx = p.x2 > p.x1 ? 1 : -1;
+              return `M ${p.x1} ${p.y1} L ${midX - sx * r} ${p.y1} Q ${midX} ${p.y1} ${midX} ${p.y1 + sy * r} L ${midX} ${p.y2 - sy * r} Q ${midX} ${p.y2} ${midX + sx * r} ${p.y2} L ${p.x2} ${p.y2}`;
+            })()
+          : `M ${p.x1} ${p.y1} C ${p.x1 + dx} ${p.y1}, ${p.x2 - dx} ${p.y2}, ${p.x2} ${p.y2}`;
         const isHovered = hoveredEdgeId === p.id;
         const isLinked = !!selectedIds && selectedIds.size > 0 && (selectedIds.has(p.fromId) || selectedIds.has(p.toId));
         const dim = !!selectedIds && selectedIds.size > 0 && !isLinked && !isHovered;

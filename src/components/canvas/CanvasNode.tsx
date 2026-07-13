@@ -133,7 +133,8 @@ function CanvasNodeImpl({
   if (!def) return null;
 
   const status = node.status ?? "idle";
-  const color = node.type ? CAT_COLORS[def.category] : "#71717a";
+  const customColor = typeof node.config?._color === "string" && /^#[0-9a-fA-F]{6}$/.test(String(node.config._color)) ? String(node.config._color) : null;
+  const color = customColor ?? (node.type ? CAT_COLORS[def.category] : "#71717a");
   const [selectedResultIdx, setSelectedResultIdx] = useState(0);
   // Inline-expand: a middle size between compact (default) and the full
   // modal. Toggled by the chevron in the header. Only grows the node's
@@ -197,6 +198,7 @@ function CanvasNodeImpl({
       style={{
         top: 0,
         left: 0,
+        ...(customColor && !isSelected && status !== "error" ? { borderColor: `${customColor}99` } : {}),
         width: NODE_TYPES[node.type]?.custom === "heygen" && inlineExpanded ? NODE_WIDTH * 2 : NODE_WIDTH,
         minHeight: NODE_HEADER_HEIGHT + 14 + portRows * NODE_PORT_SPACING + 10,
         transform: `translate(${node.position.x}px, ${node.position.y}px)`,

@@ -59,6 +59,11 @@ const GROUP_COLORS: Record<string, string> = {
 };
 const GROUP_COLOR_KEYS = Object.keys(GROUP_COLORS);
 function groupRGB(color?: string): string {
+  // Custom colors are stored as #rrggbb hex; presets by key.
+  if (color && color.startsWith("#") && /^#[0-9a-fA-F]{6}$/.test(color)) {
+    const r = parseInt(color.slice(1, 3), 16), g = parseInt(color.slice(3, 5), 16), b = parseInt(color.slice(5, 7), 16);
+    return `${r} ${g} ${b}`;
+  }
   return GROUP_COLORS[color ?? "brand"] ?? GROUP_COLORS.brand;
 }
 
@@ -449,6 +454,17 @@ export default function Canvas({
   const TRASH_KEY = `flowlab.trash.v1:${workflowId}`;
   const [trash, setTrash] = useState<{ node: GraphNode; edges: GraphEdge[]; at: number }[]>([]);
   const [trashOpen, setTrashOpen] = useState(false);
+  // Edge routing style: smooth curves (default) or right-angle "electrical"
+  // wiring. Per-user preference, persisted in localStorage.
+  const [edgeStyle, setEdgeStyle] = useState<"curve" | "ortho">("curve");
+  useEffect(() => {
+    try { if (localStorage.getItem("flowlab.edgeStyle.v1") === "ortho") setEdgeStyle("ortho"); } catch { /* */ }
+  }, []);
+  const toggleEdgeStyle = () => setEdgeStyle((s) => {
+    const next = s === "curve" ? "ortho" : "curve";
+    try { localStorage.setItem("flowlab.edgeStyle.v1", next); } catch { /* */ }
+    return next;
+  });
   useEffect(() => {
     try { const raw = localStorage.getItem(TRASH_KEY); if (raw) setTrash(JSON.parse(raw)); } catch { /* */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1602,7 +1618,7 @@ export default function Canvas({
         const mouseY = e.clientY - rect.top;
         const factor = Math.exp(-e.deltaY * 0.0015);
         setZoom((curZ) => {
-          const newZ = Math.max(0.3, Math.min(2.5, curZ * factor));
+          const newZ = Math.max(0.05, Math.min(2.5, curZ * factor));
           setPan((curP) => {
             const worldX = (mouseX - curP.x) / curZ;
             const worldY = (mouseY - curP.y) / curZ;
@@ -2530,6 +2546,7 @@ export default function Canvas({
             <CanvasEdges
               graph={graph}
               selectedIds={selectedIds}
+              edgeStyle={edgeStyle}
               hoveredEdgeId={hoveredEdge}
               draftEdge={edgeDraft ? { x1: edgeDraft.x1, y1: edgeDraft.y1, x2: edgeDraft.x2, y2: edgeDraft.y2, color: PORT_COLORS[edgeDraft.fromKind] } : null}
               liveDragNodeId={drag?.nodeId ?? null}
@@ -2667,7 +2684,7 @@ export default function Canvas({
           {/* Floating toolbar bottom-center: zoom + grid + fullscreen */}
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 bg-bg-card hairline rounded-full px-2 py-1 elev-2">
             <button
-              onClick={() => setZoom((z) => Math.max(0.4, z - 0.1))}
+              onClick={() => setZoom((z) => Math.max(0.05, +(z / 1.2).toFixed(3)))}
               className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Zoom out"
             >
@@ -2676,7 +2693,7 @@ export default function Canvas({
             </button>
             <span className="text-[10px] text-fg-muted px-1 tabular-nums">{Math.round(zoom * 100)}%</span>
             <button
-              onClick={() => setZoom((z) => Math.min(2, z + 0.1))}
+              onClick={() => setZoom((z) => Math.min(2.5, +(z * 1.2).toFixed(3)))}
               className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover text-fg-muted group relative hover:text-fg"
               title="Zoom in"
             >
@@ -2699,6 +2716,14 @@ export default function Canvas({
             >
               <Redo2 size={12} />
               <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">Redo</span>
+            </button>
+            <button
+              onClick={toggleEdgeStyle}
+              className={`w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-hover group relative ${edgeStyle === "ortho" ? "text-brand" : "text-fg-muted hover:text-fg"}`}
+              title="Toggle wire style: curves / right angles"
+            >
+              <Network size={12} />
+              <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-bg-card border border-border text-[9px] text-fg whitespace-nowrap opacity-0 group-hover:opacity-100 transition shadow-node">{edgeStyle === "ortho" ? "Wires: right angles" : "Wires: curves"}</span>
             </button>
             <button
               onClick={() => setTrashOpen((v) => !v)}
@@ -2856,6 +2881,31 @@ export default function Canvas({
               icon: <GroupIcon size={13} />,
               onClick: () => groupSelected(),
               separator: true,
+            });
+          }
+          items.push({
+            label: "Node color...",
+            icon: <Pencil size={13} />,
+            onClick: () => {
+              // Native color input (eyedropper included in Chromium). Stored
+              // as config._color - a UI-only key, so it never invalidates the
+              // node's result cache.
+              const cur = String(graph.nodes.find((x) => x.id === nodeId)?.config?._color ?? "#10b981");
+              const inp = document.createElement("input");
+              inp.type = "color";
+              inp.value = /^#[0-9a-fA-F]{6}$/.test(cur) ? cur : "#10b981";
+              inp.style.position = "fixed"; inp.style.opacity = "0"; inp.style.pointerEvents = "none";
+              inp.oninput = () => updateNodeConfig(nodeId, "_color", inp.value);
+              inp.onchange = () => inp.remove();
+              document.body.appendChild(inp);
+              inp.click();
+            },
+          });
+          if (graph.nodes.find((x) => x.id === nodeId)?.config?._color) {
+            items.push({
+              label: "Clear color",
+              icon: <XIcon size={13} />,
+              onClick: () => updateNodeConfig(nodeId, "_color", ""),
             });
           }
           items.push({
