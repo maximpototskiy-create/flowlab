@@ -8,7 +8,7 @@ import { drawCaption, kfState, type ExportClip, type KfEase } from "@/lib/editor
 import {
   Music, Type, Plus, Trash2, Play, Pause, SkipBack,
   Download, Clapperboard, ZoomIn, ZoomOut, Loader2, Sparkles, Copy, Wand2,
-  Scissors, Eye, EyeOff, Lock, Unlock, Folder, ArrowUp, Minus, Paperclip, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers, Info,
+  Scissors, Eye, EyeOff, Lock, Unlock, Folder, ArrowUp, Minus, Paperclip, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers, Info, Volume2, VolumeX,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
 
@@ -41,7 +41,7 @@ export type EditorAsset = {
 };
 
 type LayerType = "video" | "image" | "text" | "effect" | "audio";
-type Layer = { id: string; name?: string; type: LayerType; hidden?: boolean; locked?: boolean };
+type Layer = { id: string; name?: string; type: LayerType; hidden?: boolean; locked?: boolean; muted?: boolean };
 type Kind = "video" | "image" | "audio" | "text" | "fx" | "adjust" | "shape";
 const PRIO: Record<LayerType, number> = { effect: 0, text: 1, image: 2, video: 3, audio: 4 };
 const TYPE_PREFIX: Record<LayerType, string> = { video: "V", image: "IMG", text: "T", effect: "FX", audio: "A" };
@@ -1146,6 +1146,39 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const sel = clips.find((c) => c.id === selected) ?? null;
   const isActive = (c: EditClip, tt: number) => tt >= c.start && tt < c.start + c.duration;
   const endOf = (cl: EditClip[]) => Math.max(0.1, ...cl.map((c) => c.start + c.duration));
+  // ─── Work area (patch 323) ────────────────────────────────────────────────
+  // null = automatic: spans the full length of all layers and follows edits by
+  // itself. Dragging a handle on the ruler switches to a manual range; double
+  // click the bar returns to auto. Export renders ONLY the work area.
+  const [workArea, setWorkArea] = useState<{ start: number; end: number } | null>(null);
+  const workAreaRef = useRef(workArea); useEffect(() => { workAreaRef.current = workArea; }, [workArea]);
+  const effWorkArea = (cl: EditClip[]): { start: number; end: number } => {
+    const wa = workAreaRef.current;
+    const end = endOf(cl);
+    if (!wa) return { start: 0, end };
+    return { start: Math.max(0, Math.min(wa.start, end - 0.05)), end: Math.min(wa.end, end) };
+  };
+  // Trim a z-ordered clip list to the work area: drop clips fully outside,
+  // cut the ones straddling an edge (shifting inset and keyframe times so the
+  // visible motion stays identical), and rebase everything to t=0.
+  const applyWorkArea = (ordered: EditClip[]): EditClip[] => {
+    const { start: wS, end: wE } = effWorkArea(ordered);
+    if (wS <= 0.001 && wE >= endOf(ordered) - 0.001) return ordered;
+    const out: EditClip[] = [];
+    for (const c of ordered) {
+      const s = Math.max(c.start, wS), e = Math.min(c.start + c.duration, wE);
+      if (e - s <= 0.01) continue;
+      const cutL = Math.max(0, wS - c.start);
+      out.push({
+        ...c,
+        start: +(s - wS).toFixed(3),
+        duration: +(e - s).toFixed(3),
+        inset: (c.inset || 0) + cutL,
+        kf: c.kf?.map((k) => ({ ...k, t: +(k.t - cutL).toFixed(3) })),
+      });
+    }
+    return out;
+  };
 
   const base = (kind: Kind, layer: string, url: string | undefined, label: string, start: number, duration: number, extra: Partial<EditClip> = {}): EditClip =>
     ({ id: uid(), layer, kind, url, label, start, duration, scale: 1, x: 0, y: 0, fadeIn: 0, fadeOut: 0, ...extra });
@@ -1501,13 +1534,14 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   }, []);
   const syncMedia = useCallback((tt: number) => {
     const hidden = new Set(layersRef.current.filter((l) => l.hidden).map((l) => l.id));
+    const mutedL = new Set(layersRef.current.filter((l) => l.muted).map((l) => l.id));
     for (const c of viewClipsRef.current) {
       const el = mediaRefs.current.get(c.id); if (!el) continue;
       const active = tt >= c.start && tt < c.start + c.duration && !hidden.has(c.layer);
       if (active) {
         const local = tt - c.start + (c.inset || 0);
         if (!el.seeking && Math.abs(el.currentTime - local) > 0.5) { try { el.currentTime = local; } catch { /* */ } }
-        applyVolume(el, alphaAt(c, tt) * (c.muted ? 0 : (c.volume ?? 1)));
+        applyVolume(el, alphaAt(c, tt) * (c.muted || mutedL.has(c.layer) ? 0 : (c.volume ?? 1)));
         if (playingRef.current && el.paused) el.play().catch(() => {});
         if (!playingRef.current && !el.paused) el.pause();
       } else {
@@ -1923,7 +1957,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const hiddenIds = new Set(layers.filter((l) => l.hidden).map((l) => l.id));
       const z: EditClip[] = [];
       for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...src.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
-      const ordered = [...z, ...src.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
+      const orderedRaw = [...z, ...src.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
+      const mutedIds = new Set(layers.filter((l) => l.muted).map((l) => l.id));
+      const ordered = applyWorkArea(orderedRaw).map((c) => (mutedIds.has(c.layer) ? { ...c, muted: true } : c));
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext, mp4 } = await exportTimeline({
         clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, kf: c.kf, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
@@ -1949,7 +1985,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       const hiddenIds = new Set(layers.filter((l) => l.hidden).map((l) => l.id));
       const z: EditClip[] = [];
       for (let i = vis.length - 1; i >= 0; i--) { if (hiddenIds.has(vis[i].id)) continue; z.push(...clips.filter((c) => c.layer === vis[i].id).sort((a, b) => a.start - b.start)); }
-      const ordered = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
+      const orderedRaw = [...z, ...clips.filter((c) => !z.includes(c) && !hiddenIds.has(c.layer))];
+      const mutedIds = new Set(layers.filter((l) => l.muted).map((l) => l.id));
+      const ordered = applyWorkArea(orderedRaw).map((c) => (mutedIds.has(c.layer) ? { ...c, muted: true } : c));
       const { exportTimeline } = await import("@/lib/editor/exportVideo");
       const { blob, ext } = await exportTimeline({
         clips: ordered.map((c) => ({ id: c.id, layer: c.layer, kind: c.kind, url: c.url, text: c.text, start: c.start, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, rot: c.rot, kf: c.kf, fadeIn: c.fadeIn, fadeOut: c.fadeOut, anim: c.anim, fx: c.fx, transType: c.transType, inset: c.inset, volume: c.volume, muted: c.muted, blend: c.blend, keyColor: c.keyColor, keyTol: c.keyTol, tstyle: c.tstyle, words: c.words, sr: c.sr })),
@@ -2110,6 +2148,26 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const onRulerDown = (e: React.PointerEvent) => { scrubRef.current = true; (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId); if (playingRef.current) stop(); seekFromRuler(e.clientX, e.currentTarget as HTMLElement); };
   const onRulerMove = (e: React.PointerEvent) => { if (scrubRef.current) seekFromRuler(e.clientX, e.currentTarget as HTMLElement); };
   const onRulerUp = () => { scrubRef.current = false; };
+  // Drag a work-area handle on the ruler. Switches the work area from auto to
+  // a manual range; double-click on the bar resets to auto (full timeline).
+  const onWaHandleDown = (side: "start" | "end") => (e: React.PointerEvent) => {
+    e.stopPropagation(); e.preventDefault();
+    const cont = (e.currentTarget as HTMLElement).closest("[data-wa-container]") as HTMLElement | null;
+    if (!cont) return;
+    const rect = cont.getBoundingClientRect();
+    const pps = pxPerSec;
+    const move = (ev: PointerEvent) => {
+      const t = Math.max(0, +((ev.clientX - rect.left) / pps).toFixed(2));
+      setWorkArea((prev) => {
+        const cur = prev ?? { start: 0, end: endOf(clipsRef.current) };
+        return side === "start"
+          ? { start: Math.min(t, cur.end - 0.1), end: cur.end }
+          : { start: cur.start, end: Math.max(t, cur.start + 0.1) };
+      });
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
 
   const [viewZoom, setViewZoom] = useState(1);
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
@@ -3521,7 +3579,23 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           <div style={{ width: Math.max(800, totalDur * pxPerSec + 120) }}>
             <div data-ruler className="sticky top-0 z-30 flex bg-bg-card border-b border-border/60">
               <div className="w-28 shrink-0 border-r border-border/40 sticky left-0 z-20 bg-bg-card" />
-              <div className="relative flex-1 h-8 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
+              <div data-wa-container className="relative flex-1 h-8 cursor-ew-resize touch-none" onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp}>
+                {(() => {
+                  // Work area bar: auto (follows all layers) or a manual range.
+                  const waAuto = !workArea;
+                  const wa = workArea ?? { start: 0, end: totalDur };
+                  const l = wa.start * pxPerSec, w = Math.max(2, (wa.end - wa.start) * pxPerSec);
+                  return (
+                    <div className="absolute top-0 h-2.5 z-10" style={{ left: l, width: w }}
+                      title={waAuto ? "Work area (auto: full timeline). Drag an end to export a custom range." : "Work area - export renders only this range. Double-click to reset to auto."}
+                      onDoubleClick={(e) => { e.stopPropagation(); setWorkArea(null); }}
+                      onPointerDown={(e) => e.stopPropagation()}>
+                      <div className={`absolute inset-x-0 top-0.5 h-1.5 rounded-sm ${waAuto ? "bg-fg-subtle/25" : "bg-brand/50"}`} />
+                      <span onPointerDown={onWaHandleDown("start")} className="absolute left-0 top-0 h-2.5 w-2 -ml-1 cursor-ew-resize rounded-sm bg-brand" />
+                      <span onPointerDown={onWaHandleDown("end")} className="absolute right-0 top-0 h-2.5 w-2 -mr-1 cursor-ew-resize rounded-sm bg-brand" />
+                    </div>
+                  );
+                })()}
                 {(() => {
                   const steps = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
                   const step = steps.find((st) => st * pxPerSec >= 56) ?? 600;
@@ -3579,6 +3653,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                         className="w-full bg-bg border border-brand rounded px-1 py-0.5 text-fg outline-none normal-case" />
                     ) : (<>
                       <span className="truncate flex-1" title="Click to select · double-click to rename">{labelFor(layer)}</span>
+                      {(layer.type === "video" || layer.type === "audio") && (
+                        <button onClick={(e) => { e.stopPropagation(); setLayers((p) => p.map((l) => (l.id === layer.id ? { ...l, muted: !l.muted } : l))); }}
+                          title={layer.muted ? "Unmute layer audio" : "Mute layer audio (preview and export)"} className={layer.muted ? "text-red-400" : "hover:text-fg"}>
+                          {layer.muted ? <VolumeX size={11} /> : <Volume2 size={11} />}
+                        </button>
+                      )}
                       <button onClick={(e) => { e.stopPropagation(); setLayers((p) => p.map((l) => (l.id === layer.id ? { ...l, hidden: !l.hidden } : l))); }}
                         title={layer.hidden ? "Show layer" : "Hide layer"} className={layer.hidden ? "text-fg-subtle/50" : "hover:text-fg"}>
                         {layer.hidden ? <EyeOff size={11} /> : <Eye size={11} />}
