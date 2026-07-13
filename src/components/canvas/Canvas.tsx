@@ -922,6 +922,30 @@ export default function Canvas({
   const rafPending = useRef(false);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const dragRef = useRef<Drag | null>(null);
+  // ─── Fresh-handler trampoline (patch 321) ────────────────────────────────
+  // CanvasNode is memoised with a comparator that IGNORES callback props (a
+  // deliberate drag-perf tradeoff). That means a node keeps whatever inline
+  // lambdas it captured on ITS last re-render — and those close over stale
+  // graph / pan / zoom / selection. Symptoms in the wild: connecting from an
+  // unselected node did nothing until you clicked it first ("double click
+  // attaches"), draft wires started away from the port after panning, and
+  // Run could send an outdated graph snapshot. Every node callback now goes
+  // through this ref, which is re-pointed on each render — even a stale
+  // lambda lands on the freshest closures.
+  const nodeHandlersRef = useRef<{
+    startNodeDrag: (nodeId: string, e: React.PointerEvent) => void;
+    startEdge: (nodeId: string, portName: string, e: React.PointerEvent) => void;
+    endEdgeOnInput: (nodeId: string, portName: string, e: React.PointerEvent) => void;
+    toggleSelect: (nodeId: string, additive?: boolean) => void;
+    deleteNode: (nodeId: string) => void;
+    updateNodeConfig: (nodeId: string, key: string, value: unknown) => void;
+    startRun: (nodeId?: string) => void;
+    askAgent: (nodeId: string) => void;
+    stopForNode: (nodeId: string) => void;
+    expandNode: (nodeId: string) => void;
+    stashTracks: (nodeId: string) => void;
+  }>(null as never);
+
   const edgeDraftRef = useRef<EdgeDraft | null>(null);
   const isPanningRef = useRef(false);
   const zoomRef = useRef(zoom);
@@ -1134,6 +1158,40 @@ export default function Canvas({
           }));
           setEdgeDraft(null);
           return;
+        }
+
+        // 2b. MAGNETIC CONNECT: released anywhere ON a node's card → attach to
+        // that node's nearest COMPATIBLE input port. Aiming at the 22px chip
+        // was the number-one connection complaint ("grab any node, pull,
+        // release — it should just snap"). The whole card is the target now.
+        {
+          const under = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+          const nodeEl = under?.closest<HTMLElement>("[data-node-id]") ?? null;
+          const overNodeId = nodeEl?.getAttribute("data-node-id");
+          if (nodeEl && overNodeId && overNodeId !== edgeDraft.fromNode) {
+            let cardBest: { portId: string; dist: number } | null = null;
+            nodeEl.querySelectorAll<HTMLElement>('[data-port-side="in"]').forEach((pe) => {
+              const pid = pe.getAttribute("data-port-id");
+              const kind = pe.getAttribute("data-port-kind");
+              if (!pid || !kind || !portsCompatible(edgeDraft.fromKind, kind as never)) return;
+              const r = pe.getBoundingClientRect();
+              const dist = Math.hypot(r.left + r.width / 2 - e.clientX, r.top + r.height / 2 - e.clientY);
+              if (!cardBest || dist < cardBest.dist) cardBest = { portId: pid, dist };
+            });
+            if (cardBest) {
+              const snappedPortId = (cardBest as { portId: string }).portId;
+              setGraph((g) => ({
+                ...g,
+                edges: addEdgeRespectingMulti(
+                  g.edges,
+                  makeEdge(edgeDraft.fromNode, edgeDraft.fromPort, overNodeId, snappedPortId),
+                  g,
+                ),
+              }));
+              setEdgeDraft(null);
+              return;
+            }
+          }
         }
 
         // 3. No port nearby — fall back to ConnectionPicker (pick a new node from menu).
@@ -2163,6 +2221,34 @@ export default function Canvas({
   // ─────────────────────────────── Render
   const expandedNode = expandedNodeId ? graph.nodes.find((n) => n.id === expandedNodeId) : null;
 
+  // Re-point the handler trampoline at this render's fresh closures (see the
+  // declaration above for why). Assigned during render on purpose: pointer/
+  // keyboard events always happen after the render that scheduled them.
+  nodeHandlersRef.current = {
+    startNodeDrag,
+    startEdge,
+    endEdgeOnInput,
+    toggleSelect,
+    deleteNode,
+    updateNodeConfig,
+    startRun,
+    askAgent: (nodeId: string) => {
+      setAgentOpen(true); setAgentMin(false);
+      void runCanvasAgent(`Read the analysis output of node ${nodeId} with read_node, then propose (in my language) a concrete FlowLab structure to reproduce it: which nodes, what prompts/config, how sections wire into the Editor. Present the plan and ask before building.`);
+    },
+    stopForNode: (nodeId: string) => {
+      // Find any active run that touches this node and cancel it
+      const targetRun = runs.find(
+        (r) => r.status === "running" && (r.scopeNodeId === nodeId || !r.scopeNodeId),
+      );
+      if (targetRun) void stopRun(targetRun.id);
+    },
+    expandNode: (nodeId: string) => setExpandedNodeId(nodeId),
+    stashTracks: (nodeId: string) => {
+      try { localStorage.setItem(`flowlab.editor.import.v1:${workflowId}`, JSON.stringify({ tracks: buildComposerTracks(nodeId) ?? [] })); } catch { /* */ }
+    },
+  };
+
   return (
     <div className="flex flex-col h-full bg-bg">
       <CanvasToolbar
@@ -2402,33 +2488,22 @@ export default function Canvas({
                 cachedTrackUrl={(node.outputs?.track_url as string) || undefined}
                 isSelected={selectedIds.has(node.id)}
                 isRunning={isRunning}
-                onPointerDown={(e) => startNodeDrag(node.id, e)}
-                onOutputPortDown={(portId, e) => startEdge(node.id, portId, e)}
-                onInputPortUp={(portId, e) => endEdgeOnInput(node.id, portId, e)}
-                onSelect={(additive) => toggleSelect(node.id, additive)}
-                onDelete={() => deleteNode(node.id)}
-                onConfigChange={(k, v) => updateNodeConfig(node.id, k, v)}
-                onRun={() => startRun(node.id)}
-                onAskAgent={() => {
-                  setAgentOpen(true); setAgentMin(false);
-                  void runCanvasAgent(`Read the analysis output of node ${node.id} with read_node, then propose (in my language) a concrete FlowLab structure to reproduce it: which nodes, what prompts/config, how sections wire into the Editor. Present the plan and ask before building.`);
-                }}
-                onStop={() => {
-                  // Find any active run that touches this node and cancel it
-                  const targetRun = runs.find(
-                    (r) => r.status === "running" && (r.scopeNodeId === node.id || !r.scopeNodeId),
-                  );
-                  if (targetRun) stopRun(targetRun.id);
-                }}
-                onExpand={() => setExpandedNodeId(node.id)}
+                onPointerDown={(e) => nodeHandlersRef.current.startNodeDrag(node.id, e)}
+                onOutputPortDown={(portId, e) => nodeHandlersRef.current.startEdge(node.id, portId, e)}
+                onInputPortUp={(portId, e) => nodeHandlersRef.current.endEdgeOnInput(node.id, portId, e)}
+                onSelect={(additive) => nodeHandlersRef.current.toggleSelect(node.id, additive)}
+                onDelete={() => nodeHandlersRef.current.deleteNode(node.id)}
+                onConfigChange={(k, v) => nodeHandlersRef.current.updateNodeConfig(node.id, k, v)}
+                onRun={() => nodeHandlersRef.current.startRun(node.id)}
+                onAskAgent={() => nodeHandlersRef.current.askAgent(node.id)}
+                onStop={() => nodeHandlersRef.current.stopForNode(node.id)}
+                onExpand={() => nodeHandlersRef.current.expandNode(node.id)}
                 onUploadFile={uploadFile}
                 workflowMeta={{ ...workflowMeta, workflowId }}
                 composerTracks={composerTracks}
                 videoRefs={videoRefs}
                 editorHref={node.type === "composer" ? `/editor?wf=${workflowId}&proj=${workflowMeta.projectId}` : undefined}
-                onStashTracks={node.type === "composer" ? () => {
-                  try { localStorage.setItem(`flowlab.editor.import.v1:${workflowId}`, JSON.stringify({ tracks: composerTracks ?? [] })); } catch { /* */ }
-                } : undefined}
+                onStashTracks={node.type === "composer" ? () => nodeHandlersRef.current.stashTracks(node.id) : undefined}
               />
               );
             })}
