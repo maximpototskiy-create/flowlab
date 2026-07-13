@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { alphaAt, clipVisual, TRANSITIONS, type CompClip } from "@/lib/editor/compositor";
-import { LLM_MODELS } from "@/lib/canvas/types";
+import { LLM_MODELS, isTextEntryTarget } from "@/lib/canvas/types";
 import type { TextStyle, CapWord } from "@/lib/editor/exportVideo";
 import { drawCaption, kfState, type ExportClip, type KfEase } from "@/lib/editor/exportVideo";
 import {
@@ -1569,8 +1569,11 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tg = e.target as HTMLElement | null;
-      if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT" || tg.isContentEditable)) return;
+      // Text-entry elements keep native behavior; sliders/checkboxes/buttons
+      // do NOT block editor hotkeys (space/arrows/Ctrl+Z died after touching
+      // any inspector slider because a focused <input type=range> matched the
+      // old blanket INPUT check).
+      if (isTextEntryTarget(e.target)) return;
       if (e.code === "Space") { e.preventDefault(); play(); }
       else if (!e.metaKey && !e.ctrlKey && (e.code === "ArrowLeft" || e.code === "ArrowRight")) {
         // frame-by-frame stepping for precise trims: 1 frame (1/30s), Shift = 10 frames

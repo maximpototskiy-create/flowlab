@@ -40,6 +40,26 @@ export type Port = {
  *
  *  This is the SINGLE entry point Canvas / Edges / executor / runners use
  *  to know which ports exist for a given node instance. */
+/** True when the event target is a TEXT-ENTRY element (typing context) —
+ *  the only case where global hotkeys must stay hands-off so native editing
+ *  (including the browser's own text undo) keeps working. Range sliders,
+ *  checkboxes, radios and buttons hold focus after a click but are NOT typing
+ *  contexts; treating every <input> as one silently killed all canvas/editor
+ *  hotkeys after touching any slider — the "hotkeys don't work, Chrome
+ *  bookmarks the page" class of reports. */
+export function isTextEntryTarget(el: EventTarget | null): boolean {
+  const t = el as HTMLElement | null;
+  if (!t || !t.tagName) return false;
+  if (t.isContentEditable) return true;
+  const tag = t.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") {
+    const type = (t as HTMLInputElement).type;
+    return !(type === "range" || type === "checkbox" || type === "radio" || type === "button" || type === "color" || type === "file" || type === "submit");
+  }
+  return false;
+}
+
 export function getActiveInputs(
   def: NodeTypeDef | undefined,
   config: Record<string, unknown> | undefined,

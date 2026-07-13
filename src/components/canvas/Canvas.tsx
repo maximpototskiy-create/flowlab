@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti, LLM_MODELS, getActiveOutputs,
+  NODE_TYPES, PORT_COLORS, makeNode, makeEdge, portsCompatible, addEdgeRespectingMulti, LLM_MODELS, getActiveOutputs, isTextEntryTarget,
   type Graph, type GraphNode, type PortKind, type Group, EMPTY_GRAPH,
 } from "@/lib/canvas/types";
 import { getVideoModel, defaultModelForMode, clampDuration, type VideoMode } from "@/lib/canvas/videoModels";
@@ -173,8 +173,8 @@ export default function Canvas({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       // Ignore when typing in inputs/textareas — Space there inserts a space.
-      const t = e.target as HTMLElement;
-      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
+      // Sliders/checkboxes/buttons are NOT typing contexts (see isTextEntryTarget).
+      if (isTextEntryTarget(e.target)) return;
       if (e.code === "Space" && !spaceHeld) {
         e.preventDefault();
         setSpaceHeld(true);
@@ -1199,9 +1199,11 @@ export default function Canvas({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      // Ignore when typing in input/textarea
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Ignore when typing in a text-entry element (input/textarea/
+      // contentEditable). A focused slider/checkbox/button does NOT block
+      // hotkeys anymore — that made "Ctrl+D bookmarks the page, Ctrl+Z does
+      // nothing" after touching any node slider.
+      if (isTextEntryTarget(e.target)) return;
 
       const meta = e.metaKey || e.ctrlKey;
 
@@ -1281,8 +1283,11 @@ export default function Canvas({
       // Cmd/Ctrl+D → duplicate. Group (if the selection exactly matches a
       // group) → duplicate the whole group; multi-selection → duplicate all;
       // single node → duplicate it.
-      if (meta && e.key.toLowerCase() === "d" && selectedIds.size > 0) {
+      if (meta && e.key.toLowerCase() === "d") {
+        // Always eat Ctrl/Cmd+D on the board — even with nothing selected the
+        // browser bookmark dialog is never what the user wants here.
         e.preventDefault();
+        if (selectedIds.size === 0) return;
         const grp = (graph.groups ?? []).find(
           (gr) => gr.nodeIds.length === selectedIds.size && gr.nodeIds.every((id) => selectedIds.has(id)),
         );
