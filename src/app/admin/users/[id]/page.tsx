@@ -44,9 +44,12 @@ type RunLite = {
   status: string;
   startedAt: Date;
   totalCostUsd: number;
-  workflow: { name: string; project: { name: string; brand: { slug: string } | null } | null } | null;
+  workflow: { id: string; projectId: string; name: string; project: { name: string; brand: { slug: string } | null } | null } | null;
   steps: StepLite[];
 };
+type ProjectLite = { id: string; name: string; updatedAt: Date; brand: { name: string; slug: string } | null; _count: { workflows: number } };
+type WorkflowLite = { id: string; projectId: string; name: string; updatedAt: Date; project: { name: string } | null };
+type GenLite = { id: string; cdnUrl: string; kind: string; model: string | null; createdAt: Date };
 
 export default async function AdminUserPage({ params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
@@ -79,7 +82,7 @@ export default async function AdminUserPage({ params }: { params: Promise<{ id: 
         startedAt: true,
         totalCostUsd: true,
         workflow: {
-          select: { name: true, project: { select: { name: true, brand: { select: { slug: true } } } } },
+          select: { id: true, projectId: true, name: true, project: { select: { name: true, brand: { select: { slug: true } } } } },
         },
         steps: {
           select: {
@@ -93,6 +96,28 @@ export default async function AdminUserPage({ params }: { params: Promise<{ id: 
       },
     }),
   ])) as unknown as [AggRow, StatusAggRow[], RunLite[]];
+
+  // The user's own projects/workflows (for jumping straight into their work)
+  // and a flat gallery of EVERYTHING they generated, newest first.
+  const [projects, workflows, generations] = (await Promise.all([
+    prisma.project.findMany({
+      where: { createdBy: id, archivedAt: null },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true, name: true, updatedAt: true, brand: { select: { name: true, slug: true } }, _count: { select: { workflows: true } } },
+    }),
+    prisma.workflow.findMany({
+      where: { createdBy: id },
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+      select: { id: true, projectId: true, name: true, updatedAt: true, project: { select: { name: true } } },
+    }),
+    prisma.asset.findMany({
+      where: { source: "generated", runStep: { run: { triggeredBy: id } } },
+      orderBy: { createdAt: "desc" },
+      take: 96,
+      select: { id: true, cdnUrl: true, kind: true, model: true, createdAt: true },
+    }),
+  ])) as unknown as [ProjectLite[], WorkflowLite[], GenLite[]];
 
   const totalRuns = agg._count._all;
   const totalCost = agg._sum.totalCostUsd ?? 0;
@@ -149,6 +174,62 @@ export default async function AdminUserPage({ params }: { params: Promise<{ id: 
           <Card label="Errors" value={String(errors)} accent={errors > 0} />
         </div>
 
+        {/* Their projects and workflows — jump straight into their work */}
+        {(projects.length > 0 || workflows.length > 0) && (
+          <div className="grid md:grid-cols-2 gap-4 mb-8">
+            <div className="surface p-4">
+              <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-3">Projects created ({projects.length})</h2>
+              {projects.length === 0 ? <div className="text-fg-subtle text-sm">None.</div> : (
+                <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+                  {projects.map((p) => (
+                    <Link key={p.id} href={`/projects/${p.id}`} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-bg-card text-[12px] group">
+                      <span className="truncate text-fg group-hover:text-brand">{p.name}</span>
+                      <span className="text-fg-subtle text-[10px] shrink-0">{p.brand?.name ? `${p.brand.name} · ` : ""}{p._count.workflows} wf</span>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="surface p-4">
+              <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-3">Workflows created ({workflows.length})</h2>
+              {workflows.length === 0 ? <div className="text-fg-subtle text-sm">None.</div> : (
+                <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+                  {workflows.map((w) => (
+                    <Link key={w.id} href={`/projects/${w.projectId}/workflows/${w.id}`} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-bg-card text-[12px] group">
+                      <span className="truncate text-fg group-hover:text-brand">{w.name}</span>
+                      <span className="text-fg-subtle text-[10px] shrink-0">{w.project?.name ?? ""}</span>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Everything they generated — flat gallery, newest first. Click opens
+            the asset full size in a new tab. */}
+        <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-3">Generations ({generations.length}{generations.length === 96 ? "+" : ""})</h2>
+        {generations.length === 0 ? (
+          <div className="border border-dashed border-border-strong rounded-lg py-8 text-center text-fg-subtle text-sm mb-8">No generations yet.</div>
+        ) : (
+          <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-12 gap-2 mb-8">
+            {generations.map((g) => (
+              <a key={g.id} href={g.cdnUrl} target="_blank" rel="noopener noreferrer"
+                title={`${g.kind}${g.model ? ` · ${g.model}` : ""} · ${new Date(g.createdAt).toLocaleString()}`}
+                className="block aspect-square rounded-md overflow-hidden hairline bg-bg-card hover:ring-2 hover:ring-brand transition">
+                {g.kind === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={g.cdnUrl} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                ) : g.kind === "video" ? (
+                  <video src={g.cdnUrl} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="w-full h-full flex items-center justify-center text-fg-subtle text-[9px] uppercase">{g.kind}</span>
+                )}
+              </a>
+            ))}
+          </div>
+        )}
+
         {/* Recent runs */}
         <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-3">
           Recent runs {totalRuns > RUN_LIMIT && <span className="text-fg-subtle">(latest {RUN_LIMIT})</span>}
@@ -167,7 +248,11 @@ export default async function AdminUserPage({ params }: { params: Promise<{ id: 
                   <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
                     <div className="min-w-0">
                       <div className="text-fg text-[13px] truncate">
-                        {run.workflow?.name ?? "(workflow deleted)"}
+                        {run.workflow ? (
+                          <Link href={`/projects/${run.workflow.projectId}/workflows/${run.workflow.id}`} className="hover:text-brand hover:underline underline-offset-2">
+                            {run.workflow.name}
+                          </Link>
+                        ) : "(workflow deleted)"}
                       </div>
                       <div className="text-fg-subtle text-[10px] truncate">
                         {[run.workflow?.project?.brand?.slug, run.workflow?.project?.name]
