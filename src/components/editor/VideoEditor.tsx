@@ -1129,20 +1129,49 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       setLibrary(items);
     } catch { setLibrary([]); } finally { setBinLoading(false); }
   };
+  // Direct-to-Supabase upload (signed URL), mirroring the canvas UploadZone
+  // flow. The old /api/upload serverless route caps request bodies at ~4.5MB,
+  // which is why images uploaded fine but VIDEO files silently failed here.
+  const directUpload = async (file: File): Promise<{ id: string; cdnUrl: string; kind: string }> => {
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "bin";
+    const signedRes = await fetch("/api/upload/signed-url", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ext, brandId: brandId ?? null, projectId: projectId ?? null, workflowId: workflowId ?? null }),
+    });
+    if (!signedRes.ok) throw new Error(`Could not start upload (${signedRes.status})`);
+    const { path, signedUrl } = (await signedRes.json()) as { path: string; signedUrl: string };
+    const put = await fetch(signedUrl, {
+      method: "PUT",
+      headers: { "Content-Type": file.type || "application/octet-stream", "x-upsert": "true" },
+      body: file,
+    });
+    if (!put.ok) {
+      const txt = await put.text().catch(() => "");
+      const tooLarge = put.status === 413 || txt.toLowerCase().includes("payload too large") || txt.includes('"statusCode":"413"');
+      throw new Error(tooLarge ? "File exceeds the Supabase upload size limit - compress the video or raise the limit in Supabase settings." : `Upload failed (${put.status})`);
+    }
+    const fin = await fetch("/api/upload/finalize", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storagePath: path, mime: file.type || "application/octet-stream", sizeBytes: file.size, brandId: brandId ?? null, projectId: projectId ?? null }),
+    });
+    if (!fin.ok) throw new Error(`Could not finalize upload (${fin.status})`);
+    return (await fin.json()) as { id: string; cdnUrl: string; kind: string };
+  };
   const onUpload = async (files: FileList | null) => {
     if (!files?.length) return;
     setBinLoading(true);
     try {
       for (const file of Array.from(files)) {
-        const fd = new FormData(); fd.append("file", file);
-        const r = await fetch("/api/upload", { method: "POST", body: fd });
-        const j = (await r.json()) as { id?: string; cdnUrl?: string; kind?: string };
-        if (r.ok && j.cdnUrl && j.id) {
+        try {
+          const j = await directUpload(file);
           const kind: EditorAsset["kind"] = j.kind === "video" || j.kind === "audio" ? j.kind : "image";
-          setLibrary((p) => [{ id: j.id!, url: j.cdnUrl!, kind, label: file.name, duration: null }, ...p]);
+          setLibrary((p) => [{ id: j.id, url: j.cdnUrl, kind, label: file.name, duration: null }, ...p]);
+        } catch (err) {
+          console.error("[editor upload]", file.name, err);
+          setSubStatus(`Upload failed: ${file.name} - ${err instanceof Error ? err.message : "unknown error"}`);
         }
       }
-    } catch { /* ignore */ } finally { setBinLoading(false); }
+    } finally { setBinLoading(false); }
   };
   const visualLayers = layers.filter((l) => l.type !== "audio");
   const onLayer = (id: string) => clips.filter((c) => c.layer === id).sort((a, b) => a.start - b.start);

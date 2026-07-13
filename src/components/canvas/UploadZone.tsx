@@ -119,11 +119,16 @@ export default function UploadZone({
         }}
         onDragOver={(e) => {
           e.preventDefault();
+          e.stopPropagation();
           setDragOver(true);
         }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
           e.preventDefault();
+          // CRITICAL: without stopPropagation the drop bubbles to the canvas
+          // drop handler, which imports the same file AGAIN as a new upload
+          // node - the "node duplicates together with the image" bug.
+          e.stopPropagation();
           setDragOver(false);
           const f = e.dataTransfer.files?.[0];
           if (f) handleFile(f);

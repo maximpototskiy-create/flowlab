@@ -19,6 +19,8 @@ export default function Modal({
   children: React.ReactNode;
   size?: "sm" | "md" | "lg";
 }) {
+  // True when the last pointerdown landed on the backdrop (outside the dialog).
+  const downOutsideRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(false);
 
@@ -62,11 +64,20 @@ export default function Modal({
     <div
       className="fixed inset-0 z-[1000] flex items-center justify-center p-4 animate-fade-in"
       onClick={(e) => {
-        // Click on backdrop closes; click on dialog does not
+        // Close ONLY when the interaction both started AND ended on the
+        // backdrop. A text-selection drag that starts inside the dialog and
+        // releases outside dispatches a click on this container - that must
+        // NOT close the dialog (the "rename popup closes while selecting the
+        // name" bug).
         e.stopPropagation();
-        onClose();
+        const upOutside = !(e.target as HTMLElement).closest('[role="dialog"]');
+        if (downOutsideRef.current && upOutside) onClose();
+        downOutsideRef.current = false;
       }}
-      onPointerDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        downOutsideRef.current = !(e.target as HTMLElement).closest('[role="dialog"]');
+      }}
     >
       <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
       <div
