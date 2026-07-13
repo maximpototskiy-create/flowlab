@@ -544,6 +544,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
           { value: "google/gemini-3.1-flash-image", label: "Nano Banana 2 ⭐ (Gemini 3.1 Flash Image)" },
           { value: "google/gemini-3-pro-image-preview", label: "Nano Banana Pro (Gemini 3 Pro Image)" },
           { value: "openai/gpt-image-2", label: "GPT Image 2 ⭐ (OpenAI)" },
+          { value: "xai/grok-imagine-image", label: "Grok Imagine (xAI)" },
           { value: "fal-ai/flux-2-flex", label: "FLUX 2 Flex" },
           { value: "fal-ai/flux-pro/v1.1-ultra", label: "FLUX 1.1 Pro Ultra" },
           { value: "fal-ai/flux-pro/v1.1", label: "FLUX Pro 1.1" },

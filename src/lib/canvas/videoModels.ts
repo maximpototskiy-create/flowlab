@@ -30,6 +30,10 @@ const VEO_DUR: VideoDuration = { kind: "enum", values: [4, 6, 8], default: 8 };
 const DUR_5_10: VideoDuration = { kind: "enum", values: [5, 10], default: 5 };
 
 export const VIDEO_MODELS: VideoModelDef[] = [
+  // ─── Grok Imagine (xAI) — 1-15s, native audio (dialogue/sfx), 480p/720p ───
+  { id: "xai/grok-imagine-video/image-to-video", label: "Grok Imagine", family: "Grok (xAI)", modes: ["image"], duration: { kind: "range", min: 1, max: 15, step: 1, default: 6 }, resolutions: ["480p", "720p"] },
+  { id: "xai/grok-imagine-video/text-to-video", label: "Grok Imagine", family: "Grok (xAI)", modes: ["text"], duration: { kind: "range", min: 1, max: 15, step: 1, default: 6 }, resolutions: ["480p", "720p"] },
+
   // ─── Kling 3.0 (V3) — newest flagship, 3–15s, native audio, multi_prompt ───
   { id: "fal-ai/kling-video/v3/pro/image-to-video", label: "Kling 3.0 Pro", family: "Kling 3.0", modes: ["image", "keyframes", "multi-shot"], duration: RANGE_3_15, audio: true, recommended: true },
   { id: "fal-ai/kling-video/v3/standard/image-to-video", label: "Kling 3.0 Standard", family: "Kling 3.0", modes: ["image", "keyframes", "multi-shot"], duration: RANGE_3_15, audio: true },

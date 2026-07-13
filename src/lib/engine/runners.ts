@@ -617,6 +617,11 @@ export async function runNode(
         // These use aspect_ratio
         input.aspect_ratio = aspect;
         input.num_images = numResults;
+      } else if (model.includes("grok-imagine")) {
+        // xAI Grok Imagine (Aurora): aspect_ratio enum + num_images 1-4,
+        // resolution 1k/2k (leave default 1k).
+        input.aspect_ratio = aspect;
+        input.num_images = numResults;
       } else if (model.includes("gpt-image")) {
         // OpenAI GPT Image (1/2) via fal: fal's standard named image_size +
         // quality tiers (low|medium|high). No aspect_ratio / safety_checker
@@ -1437,6 +1442,14 @@ export async function runNode(
           costUsd: estimateCost(actualModel, { duration: pickedDur, resolution }),
           durationMs: Date.now() - t0,
         };
+      } else if (model.includes("grok-imagine")) {
+        // xAI Grok Imagine on fal: 1-15s (integer), 480p/720p, native audio
+        // (dialogue/sfx baked in - no audio flag), documented aspect enum.
+        if (startFrame) payload.image_url = startFrame;
+        payload.duration = Math.max(1, Math.min(15, parseInt(String(duration), 10) || 6));
+        const grokAspects = ["16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16"];
+        if (grokAspects.includes(aspect)) payload.aspect_ratio = aspect;
+        payload.resolution = resolution === "480p" ? "480p" : "720p";
       } else {
         // Default: try common field names
         if (startFrame) payload.image_url = startFrame;
