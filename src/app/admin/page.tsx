@@ -7,6 +7,7 @@ import TopNav from "@/components/TopNav";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { setUserRole } from "./actions";
+import { directUnitEst } from "@/lib/adminPricing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ type UserRow = { id: string; email: string; name: string | null; role: string; l
 type RunAggRow = { triggeredBy: string; _count: { _all: number }; _sum: { totalCostUsd: number | null } };
 type StatusAggRow = { triggeredBy: string; status: string; _count: { _all: number } };
 type ModelAggRow = { model: string | null; _count: { _all: number }; _sum: { costUsd: number | null } };
+type DirectAggRow = { model: string | null; _count: { _all: number } };
 
 export default async function AdminPage({
   searchParams,
@@ -68,6 +70,29 @@ export default async function AdminPage({
       orderBy: { _sum: { costUsd: "desc" } },
     }),
   ])) as unknown as [UserRow[], RunAggRow[], StatusAggRow[], ModelAggRow[]];
+
+  // Direct (corp-key) generations: real asset counts per model + HeyGen renders.
+  const assetWhere = since ? { createdAt: { gte: since } } : {};
+  const [directAgg, heygenCount] = (await Promise.all([
+    prisma.asset.groupBy({
+      by: ["model"],
+      where: {
+        source: "generated",
+        OR: [{ model: { startsWith: "google/" } }, { model: { startsWith: "openai/" } }],
+        ...assetWhere,
+      },
+      _count: { _all: true },
+    }),
+    prisma.runStep.count({
+      where: { nodeType: "heygenVideo", status: "done", ...(since ? { startedAt: { gte: since } } : {}) },
+    }),
+  ])) as unknown as [DirectAggRow[], number];
+  const directRows = directAgg
+    .filter((d) => d.model)
+    .map((d) => ({ model: d.model!, count: d._count._all, est: d._count._all * directUnitEst(d.model!) }))
+    .sort((a, b) => b.count - a.count);
+  const directTotal = directRows.reduce((s, r) => s + r.count, 0);
+  const directEstTotal = directRows.reduce((s, r) => s + r.est, 0);
 
   const runByUser = new Map(runAgg.map((r) => [r.triggeredBy, r]));
   const doneByUser = new Map<string, number>();
@@ -125,10 +150,51 @@ export default async function AdminPage({
         </div>
 
         {/* Summary */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8">
           <Card label="Total runs" value={String(totalRuns)} />
-          <Card label="Total cost" value={usd(totalCost)} />
+          <Card label="Total cost (fal)" value={usd(totalCost)} />
+          <Card label="Direct generations" value={String(directTotal)} />
+          <Card label="Direct est. cost" value={"~" + usd(directEstTotal)} />
           <Card label="Active users" value={`${activeUsers} / ${users.length}`} />
+        </div>
+
+        {/* Direct (corp keys) - real counts, estimated price. These are billed
+            outside fal, so the fal totals above do NOT include them. */}
+        <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-2">Direct generations (corp keys) - {RANGES.find((r) => r.key === range)?.label ?? "All time"}</h2>
+        <div className="surface p-4 mb-8">
+          {directRows.length === 0 && heygenCount === 0 ? (
+            <div className="text-fg-subtle text-sm">No direct generations in this period.</div>
+          ) : (
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="text-left text-fg-subtle text-[10px] uppercase tracking-wider">
+                  <th className="pb-2">Model</th>
+                  <th className="pb-2 text-right">Generations</th>
+                  <th className="pb-2 text-right">Est. unit</th>
+                  <th className="pb-2 text-right">Est. total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {directRows.map((r) => (
+                  <tr key={r.model} className="border-t border-border/50">
+                    <td className="py-1.5 text-fg">{r.model}</td>
+                    <td className="py-1.5 text-right tabular-nums text-fg-muted">{r.count}</td>
+                    <td className="py-1.5 text-right tabular-nums text-fg-subtle">{usd(directUnitEst(r.model))}</td>
+                    <td className="py-1.5 text-right tabular-nums text-brand">~{usd(r.est)}</td>
+                  </tr>
+                ))}
+                {heygenCount > 0 && (
+                  <tr className="border-t border-border/50">
+                    <td className="py-1.5 text-fg">HeyGen renders (billed in credits)</td>
+                    <td className="py-1.5 text-right tabular-nums text-fg-muted">{heygenCount}</td>
+                    <td className="py-1.5 text-right text-fg-subtle">credits</td>
+                    <td className="py-1.5 text-right text-fg-subtle">-</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+          <div className="text-[10px] text-fg-subtle mt-2">Unit prices are ESTIMATES for corp-key billing control; actual vendor invoices may differ. fal-billed models are tracked precisely in the totals above.</div>
         </div>
 
         {/* By user */}

@@ -8,6 +8,7 @@ import TopNav from "@/components/TopNav";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { setUserRole } from "../../actions";
+import { directUnitEst } from "@/lib/adminPricing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,9 +52,18 @@ type ProjectLite = { id: string; name: string; updatedAt: Date; brand: { name: s
 type WorkflowLite = { id: string; projectId: string; name: string; updatedAt: Date; project: { name: string } | null };
 type GenLite = { id: string; cdnUrl: string; kind: string; model: string | null; createdAt: Date };
 
-export default async function AdminUserPage({ params }: { params: Promise<{ id: string }> }) {
+const USER_RANGES = [
+  { key: "7", label: "7 days" },
+  { key: "30", label: "30 days" },
+  { key: "all", label: "All time" },
+];
+
+export default async function AdminUserPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ range?: string }> }) {
   const admin = await requireAdmin();
   const { id } = await params;
+  const sp = (await searchParams) ?? {};
+  const range = sp.range === "7" || sp.range === "30" ? sp.range : "all";
+  const since = range === "all" ? undefined : new Date(Date.now() - Number(range) * 86_400_000);
 
   const user = (await prisma.user.findUnique({
     where: { id },
@@ -63,17 +73,17 @@ export default async function AdminUserPage({ params }: { params: Promise<{ id: 
 
   const [agg, statusAgg, runs] = (await Promise.all([
     prisma.run.aggregate({
-      where: { triggeredBy: id },
+      where: { triggeredBy: id, ...(since ? { startedAt: { gte: since } } : {}) },
       _count: { _all: true },
       _sum: { totalCostUsd: true },
     }),
     prisma.run.groupBy({
       by: ["status"],
-      where: { triggeredBy: id },
+      where: { triggeredBy: id, ...(since ? { startedAt: { gte: since } } : {}) },
       _count: { _all: true },
     }),
     prisma.run.findMany({
-      where: { triggeredBy: id },
+      where: { triggeredBy: id, ...(since ? { startedAt: { gte: since } } : {}) },
       orderBy: { startedAt: "desc" },
       take: RUN_LIMIT,
       select: {
@@ -112,12 +122,35 @@ export default async function AdminUserPage({ params }: { params: Promise<{ id: 
       select: { id: true, projectId: true, name: true, updatedAt: true, project: { select: { name: true } } },
     }),
     prisma.asset.findMany({
-      where: { source: "generated", runStep: { run: { triggeredBy: id } } },
+      where: { source: "generated", runStep: { run: { triggeredBy: id } }, ...(since ? { createdAt: { gte: since } } : {}) },
       orderBy: { createdAt: "desc" },
       take: 96,
       select: { id: true, cdnUrl: true, kind: true, model: true, createdAt: true },
     }),
   ])) as unknown as [ProjectLite[], WorkflowLite[], GenLite[]];
+
+  // Direct (corp-key) generations by THIS user + HeyGen renders - real counts
+  // with estimated potential price (their recorded costUsd is 0).
+  const [directAgg, heygenCount] = (await Promise.all([
+    prisma.asset.groupBy({
+      by: ["model"],
+      where: {
+        source: "generated",
+        runStep: { run: { triggeredBy: id } },
+        OR: [{ model: { startsWith: "google/" } }, { model: { startsWith: "openai/" } }],
+        ...(since ? { createdAt: { gte: since } } : {}),
+      },
+      _count: { _all: true },
+    }),
+    prisma.runStep.count({
+      where: { nodeType: "heygenVideo", status: "done", run: { triggeredBy: id }, ...(since ? { startedAt: { gte: since } } : {}) },
+    }),
+  ])) as unknown as [{ model: string | null; _count: { _all: number } }[], number];
+  const directRows = directAgg
+    .filter((d) => d.model)
+    .map((d) => ({ model: d.model!, count: d._count._all, est: d._count._all * directUnitEst(d.model!) }))
+    .sort((a, b) => b.count - a.count);
+  const directEstTotal = directRows.reduce((s, r) => s + r.est, 0);
 
   const totalRuns = agg._count._all;
   const totalCost = agg._sum.totalCostUsd ?? 0;
@@ -166,13 +199,50 @@ export default async function AdminUserPage({ params }: { params: Promise<{ id: 
           )}
         </div>
 
+        {/* Period */}
+        <div className="flex gap-1.5 mb-4">
+          {USER_RANGES.map((r) => (
+            <Link key={r.key} href={`/admin/users/${id}?range=${r.key}`}
+              className={`px-3 py-1.5 rounded-md border text-[11px] transition ${range === r.key ? "border-brand text-brand bg-brand/10" : "border-border text-fg-muted hover:text-fg"}`}>
+              {r.label}
+            </Link>
+          ))}
+        </div>
+
         {/* Totals */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
-          <Card label="Runs (all time)" value={String(totalRuns)} />
-          <Card label="Cost (all time)" value={usd(totalCost)} />
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8">
+          <Card label="Runs" value={String(totalRuns)} />
+          <Card label="Cost (fal)" value={usd(totalCost)} />
+          <Card label="Direct est." value={"~" + usd(directEstTotal)} />
           <Card label="Done" value={String(done)} />
           <Card label="Errors" value={String(errors)} accent={errors > 0} />
         </div>
+
+        {/* Direct generations - corp-key billing control */}
+        {(directRows.length > 0 || heygenCount > 0) && (
+          <div className="surface p-4 mb-8">
+            <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-3">Direct generations (corp keys)</h2>
+            <table className="w-full text-[12px]">
+              <tbody>
+                {directRows.map((r) => (
+                  <tr key={r.model} className="border-t border-border/50 first:border-t-0">
+                    <td className="py-1.5 text-fg">{r.model}</td>
+                    <td className="py-1.5 text-right tabular-nums text-fg-muted">{r.count}</td>
+                    <td className="py-1.5 text-right tabular-nums text-brand">~{usd(r.est)}</td>
+                  </tr>
+                ))}
+                {heygenCount > 0 && (
+                  <tr className="border-t border-border/50 first:border-t-0">
+                    <td className="py-1.5 text-fg">HeyGen renders (credits)</td>
+                    <td className="py-1.5 text-right tabular-nums text-fg-muted">{heygenCount}</td>
+                    <td className="py-1.5 text-right text-fg-subtle">-</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            <div className="text-[10px] text-fg-subtle mt-2">Estimated prices - billed on corporate keys, not included in the fal cost column.</div>
+          </div>
+        )}
 
         {/* Their projects and workflows — jump straight into their work */}
         {(projects.length > 0 || workflows.length > 0) && (
