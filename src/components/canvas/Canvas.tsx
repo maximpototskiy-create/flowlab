@@ -1364,15 +1364,30 @@ export default function Canvas({
   }, []);
 
   // ─────────────────────────────── Keyboard shortcuts
-  const clipboard = useRef<GraphNode | null>(null);
+  // Full-fidelity clipboard for THIS tab (survives project switches within
+  // the SPA). localStorage is only the cross-tab transport and may reject
+  // large payloads - it must never limit what pasting in-tab can do.
+  const clipboard = useRef<{ nodes: GraphNode[]; edges: GraphEdge[] } | null>(null);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       // Ignore when typing in a text-entry element (input/textarea/
-      // contentEditable). A focused slider/checkbox/button does NOT block
-      // hotkeys anymore — that made "Ctrl+D bookmarks the page, Ctrl+Z does
-      // nothing" after touching any node slider.
-      if (isTextEntryTarget(e.target)) return;
+      // contentEditable) — EXCEPT Ctrl/Cmd+D: the Chrome bookmark dialog is
+      // never what the user wants on the board, so duplicate works (and the
+      // dialog is suppressed) even mid-typing. Sliders/checkboxes/buttons/
+      // selects do not block hotkeys at all.
+      if (isTextEntryTarget(e.target)) {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+          e.preventDefault();
+          if (selectedIds.size > 0) {
+            const grp = (graph.groups ?? []).find(
+              (gr) => gr.nodeIds.length === selectedIds.size && gr.nodeIds.every((id) => selectedIds.has(id)),
+            );
+            if (grp) duplicateGroup(grp.id); else duplicateSelection();
+          }
+        }
+        return;
+      }
 
       const meta = e.metaKey || e.ctrlKey;
 
@@ -1419,8 +1434,18 @@ export default function Canvas({
         const ids = selectedIds;
         const nodes = graph.nodes.filter((x) => ids.has(x.id));
         const edges = graph.edges.filter((ed) => ids.has(ed.from.nodeId) && ids.has(ed.to.nodeId));
-        try { localStorage.setItem("flowlab.clipboard.v1", JSON.stringify({ nodes, edges })); } catch { /* quota */ }
-        clipboard.current = nodes[0] ?? null;
+        clipboard.current = { nodes, edges };
+        // Cross-tab copy via localStorage: strip huge config values (base64
+        // data URLs from upload nodes) so the 5MB quota can't reject the
+        // write - THAT was why multi-copy pasted only one node.
+        try {
+          const slim = nodes.map((n) => ({
+            ...n,
+            config: Object.fromEntries(Object.entries(n.config ?? {}).map(([k, v]) =>
+              [k, typeof v === "string" && v.length > 100_000 ? "" : v])),
+          }));
+          localStorage.setItem("flowlab.clipboard.v1", JSON.stringify({ nodes: slim, edges, at: Date.now() }));
+        } catch { /* quota - the in-memory clipboard still has everything */ }
         return;
       }
 
@@ -1428,8 +1453,10 @@ export default function Canvas({
       if (meta && e.key.toLowerCase() === "v") {
         e.preventDefault();
         let payload: { nodes: GraphNode[]; edges: { from: { nodeId: string; port: string }; to: { nodeId: string; port: string } }[] } | null = null;
-        try { const raw = localStorage.getItem("flowlab.clipboard.v1"); if (raw) payload = JSON.parse(raw); } catch { /* */ }
-        if ((!payload || !payload.nodes?.length) && clipboard.current) payload = { nodes: [clipboard.current], edges: [] };
+        // Prefer the in-memory clipboard (full fidelity, always complete);
+        // localStorage only serves cross-tab pastes.
+        if (clipboard.current?.nodes.length) payload = clipboard.current;
+        else { try { const raw = localStorage.getItem("flowlab.clipboard.v1"); if (raw) payload = JSON.parse(raw); } catch { /* */ } }
         if (!payload || !payload.nodes?.length) return;
         // Paste into VIEW: centre the pasted group at the current viewport
         // centre, preserving relative layout. Pasting at source position+40
@@ -1497,8 +1524,10 @@ export default function Canvas({
         return;
       }
     }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    // Capture phase: runs before any focused widget can stopPropagation the
+    // event away - one less source of "hotkeys stopped working today".
+    document.addEventListener("keydown", onKey, { capture: true });
+    return () => document.removeEventListener("keydown", onKey, { capture: true });
   }, [selected, selectedIds, expandedNodeId, deleteNode, deleteSelected, groupSelected, ungroupSelected, duplicateGroup, duplicateSelection, undo, redo, graph.nodes, graph.edges, graph.groups, ]);
 
   // ─────────────────────────────── Pan & background interaction

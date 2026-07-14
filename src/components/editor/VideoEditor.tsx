@@ -1683,7 +1683,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
       else if (e.code === "Escape" && cutModeRef.current) { setCutMode(false); }
       else if (e.key === "Delete" || e.key === "Backspace") { if (selectedRef.current.length) { e.preventDefault(); removeMany(selectedRef.current); } }
     };
-    window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, { capture: true }); return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [play, removeMany, undo, redo, duplicateSelected, splitAtPlayhead, stop, seek]);
 
   useEffect(() => {

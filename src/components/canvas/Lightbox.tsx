@@ -155,6 +155,7 @@ export default function Lightbox({
           <video
             src={src}
             controls
+            controlsList="nofullscreen"
             autoPlay
             className="max-w-full max-h-[97vh] object-contain rounded"
           />

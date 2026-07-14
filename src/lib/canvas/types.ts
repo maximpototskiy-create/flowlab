@@ -52,7 +52,11 @@ export function isTextEntryTarget(el: EventTarget | null): boolean {
   if (!t || !t.tagName) return false;
   if (t.isContentEditable) return true;
   const tag = t.tagName;
-  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  // NOTE: SELECT is deliberately NOT treated as a typing context. A <select>
+  // keeps focus after you pick an option, and every node/inspector has one -
+  // treating it as typing made hotkeys die "randomly" until the user clicked
+  // empty space. Ctrl-combos and Delete do nothing natively on a select.
+  if (tag === "TEXTAREA") return true;
   if (tag === "INPUT") {
     const type = (t as HTMLInputElement).type;
     return !(type === "range" || type === "checkbox" || type === "radio" || type === "button" || type === "color" || type === "file" || type === "submit");
