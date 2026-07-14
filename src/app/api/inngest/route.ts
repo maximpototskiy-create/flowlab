@@ -7,7 +7,9 @@ import { runWorkflowFn } from "@/lib/inngest/functions";
 // HeyGen Avatar IV renders (polled up to 9 min) room to finish inside one
 // invocation. If a deploy ever rejects this value, the plan does not allow it
 // — lower back to 300.
-export const maxDuration = 600;
+// Vercel Pro + Fluid Compute allows up to 800s - long HeyGen renders and
+// multi-node runs get full headroom (was 600).
+export const maxDuration = 800;
 
 // CRITICAL: pin the served host to the STABLE production alias in production.
 // Vercel's auto-detected URL (VERCEL_URL) is always deployment-specific

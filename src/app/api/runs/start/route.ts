@@ -7,9 +7,9 @@ import { inngest, EVENTS } from "@/lib/inngest/client";
 import type { Graph } from "@/lib/canvas/types";
 
 export const runtime = "nodejs";
-// Vercel Hobby plan max is 300s. With after(), the executor runs in background
-// up to this limit — perfect for typical AI node runs (5-60s each).
-export const maxDuration = 300;
+// Vercel Pro + Fluid Compute: up to 800s. Matters for the after() fallback
+// path, which executes the whole run inline when Inngest enqueue fails.
+export const maxDuration = 800;
 
 export async function POST(req: Request) {
   try {
