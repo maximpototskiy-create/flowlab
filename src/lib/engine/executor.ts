@@ -522,6 +522,133 @@ function inferKindFromUrl(url: string, port: string, nodeType?: string): "image"
   return "text";
 }
 
+/** Sig-aware cache reuse pass for subgraph runs. A node's persisted outputs
+ *  are reused ONLY when: it is not the scope node (always re-runs), every
+ *  in-scope upstream was itself reused (dirty ancestors invalidate the whole
+ *  branch), and the staleness signature still matches the node's current
+ *  config + the inputs it would receive right now. Legacy graphs without a
+ *  stored sig are grandfathered as clean. This kills the "stale prompt"
+ *  class of bugs: edited prompts, rewired inputs and changed upstream
+ *  selections all invalidate the cache. */
+export function computeReusable(
+  graph: Graph,
+  scope: Set<string> | undefined | null,
+  scopeNodeId: string | undefined,
+): { outputs: Map<string, Record<string, unknown>>; results: Map<string, { value: string; mime?: string }[]> } {
+  const outputs = new Map<string, Record<string, unknown>>();
+  const results = new Map<string, { value: string; mime?: string }[]>();
+  const done = new Set<string>();
+  const scopeIds = scope ?? new Set(graph.nodes.map((n) => n.id));
+  const scopedOrder = topoSort(graph, scope ?? undefined);
+  for (const nodeId of scopedOrder) {
+    if (nodeId === scopeNodeId) continue; // the scope node itself always re-runs
+    const node = graph.nodes.find((n) => n.id === nodeId);
+    if (!node) continue;
+    const snap = node as GraphNode & {
+      outputs?: Record<string, unknown>;
+      results?: { value: string; mime?: string }[];
+      outputsSig?: string;
+    };
+    const cached = snap.outputs;
+    if (!cached || Object.keys(cached).length === 0) continue;
+    const upstreamClean = graph.edges.every(
+      (e) => e.to.nodeId !== nodeId || !scopeIds.has(e.from.nodeId) || done.has(e.from.nodeId),
+    );
+    if (!upstreamClean) {
+      console.log(`[executor] cache invalidated for ${nodeId} (dirty upstream)`);
+      continue;
+    }
+    if (snap.outputsSig !== undefined) {
+      const wouldReceive = resolveInputs(graph, node, outputs, results);
+      if (snap.outputsSig !== computeExecSig(node, wouldReceive)) {
+        console.log(`[executor] cache invalidated for ${nodeId} (config/inputs changed)`);
+        continue;
+      }
+    }
+    outputs.set(nodeId, cached);
+    done.add(nodeId);
+    // Restore the multi-result array too - multi-result nodes must pass ALL
+    // their URLs downstream, not just the first.
+    if (snap.results && snap.results.length > 0) results.set(nodeId, snap.results);
+  }
+  return { outputs, results };
+}
+
+// ─── Granular execution API (patch 343) ─────────────────────────────────────
+// Used by the Inngest worker to run ONE node per step.run: completed steps are
+// memoised by Inngest, so a retry re-executes ONLY the failed node instead of
+// the whole workflow. Everything dynamic flows through step results (plain
+// JSON), which keeps retries deterministic.
+
+export type NodeStepResult = {
+  outputs: Record<string, unknown>;
+  results?: { value: string; mime?: string }[];
+  costUsd: number;
+  durationMs: number;
+};
+
+/** Build the execution plan for a run: depth layers of node ids that must
+ *  actually execute, plus the reusable cached outputs (plain objects - the
+ *  result is serialised into an Inngest step). */
+export function planRun(
+  graph: Graph,
+  scopeNodeId?: string,
+): {
+  layers: string[][];
+  cachedOutputs: Record<string, Record<string, unknown>>;
+  cachedResults: Record<string, { value: string; mime?: string }[]>;
+} {
+  const scope = scopeNodeId ? ancestorsOf(graph, scopeNodeId) : undefined;
+  const reusable = scopeNodeId
+    ? computeReusable(graph, scope, scopeNodeId)
+    : { outputs: new Map<string, Record<string, unknown>>(), results: new Map<string, { value: string; mime?: string }[]>() };
+  const order = topoSort(graph, scope);
+  const layers = layerByDepth(graph, order)
+    .map((layer) => (layer ?? []).filter((id) => !reusable.outputs.has(id)))
+    .filter((layer) => layer.length > 0);
+  return {
+    layers,
+    cachedOutputs: Object.fromEntries(reusable.outputs),
+    cachedResults: Object.fromEntries(reusable.results),
+  };
+}
+
+/** Execute exactly one node with the accumulated upstream outputs. Throws on
+ *  node failure (after recording the run step error) so the Inngest step can
+ *  retry it. */
+export async function runSingleNode(
+  graph: Graph,
+  nodeId: string,
+  prior: {
+    outputs: Record<string, Record<string, unknown>>;
+    results: Record<string, { value: string; mime?: string }[]>;
+  },
+  ctx: RunnerContext,
+  runId: string,
+): Promise<NodeStepResult> {
+  const node = graph.nodes.find((n) => n.id === nodeId);
+  if (!node) throw new Error(`Node ${nodeId} not found in graph`);
+  const state: ExecState = {
+    graph,
+    outputs: new Map(Object.entries(prior.outputs)),
+    status: new Map(),
+    errors: new Map(),
+    results: new Map(Object.entries(prior.results)),
+    costByNode: new Map(),
+    durationByNode: new Map(),
+    runId,
+    ctx,
+    scope: null,
+  };
+  await executeOne(node, state);
+  return {
+    outputs: state.outputs.get(nodeId) ?? {},
+    results: state.results.get(nodeId),
+    costUsd: state.costByNode.get(nodeId) ?? 0,
+    durationMs: state.durationByNode.get(nodeId) ?? 0,
+  };
+}
+
 /** Execute a whole graph (or scope) — parallel within depth layers */
 export async function executeGraph(
   graph: Graph,
@@ -553,63 +680,13 @@ export async function executeGraph(
   // When user hits "Run All" (no scopeNodeId), nothing is cached — full re-run.
   const isSubgraphRun = Boolean(opts.scopeNodeId);
   if (isSubgraphRun) {
-    let cachedCount = 0;
-    // Walk the scope in topological order so each cache decision can see
-    // whether the node's upstreams were themselves kept-cached. A node's
-    // cached outputs are reused ONLY when:
-    //   1. it is not the requested scope node (that one always re-runs);
-    //   2. every in-scope upstream was kept-cached (a dirty ancestor means
-    //      this node's inputs are about to change — must re-run);
-    //   3. the persisted staleness signature matches the signature of the
-    //      node's CURRENT config + the inputs it would receive right now.
-    //      Legacy graphs without a stored sig are grandfathered as clean.
-    // This kills the "stale prompt" class of bugs: edited prompts, rewired
-    // inputs and changed upstream selections all invalidate the cache.
-    const scopeIds = opts.scope ?? new Set(graph.nodes.map((n) => n.id));
-    const scopedOrder = topoSort(graph, opts.scope ?? undefined);
-    for (const nodeId of scopedOrder) {
-      // The scope node itself is always re-executed.
-      if (nodeId === opts.scopeNodeId) continue;
-      const node = graph.nodes.find((n) => n.id === nodeId);
-      if (!node) continue;
-      const snap = node as GraphNode & {
-        outputs?: Record<string, unknown>;
-        results?: { value: string; mime?: string }[];
-        outputsSig?: string;
-      };
-      const cached = snap.outputs;
-      if (!cached || Object.keys(cached).length === 0) continue;
-      const upstreamClean = graph.edges.every(
-        (e) =>
-          e.to.nodeId !== nodeId ||
-          !scopeIds.has(e.from.nodeId) ||
-          state.status.get(e.from.nodeId) === "done",
-      );
-      if (!upstreamClean) {
-        console.log(`[executor] cache invalidated for ${nodeId} (dirty upstream)`);
-        continue;
-      }
-      if (snap.outputsSig !== undefined) {
-        const wouldReceive = resolveInputs(graph, node, state.outputs, state.results);
-        if (snap.outputsSig !== computeExecSig(node, wouldReceive)) {
-          console.log(`[executor] cache invalidated for ${nodeId} (config/inputs changed)`);
-          continue;
-        }
-      }
-      state.outputs.set(node.id, cached);
-      state.status.set(node.id, "done");
-      // ALSO restore the multi-result array if present. Without this,
-      // brandAssets (and other multi-result nodes) only pass their first
-      // URL downstream on a subgraph run — even though all the URLs
-      // were stored on the graph. Symptom: selected 4 screenshots in
-      // Brand Assets, ran ImageGen alone, only 1 reference reached
-      // Nano Banana.
-      if (snap.results && snap.results.length > 0) {
-        state.results.set(node.id, snap.results);
-      }
-      cachedCount++;
+    const reusable = computeReusable(graph, opts.scope, opts.scopeNodeId);
+    for (const [id, out] of reusable.outputs) {
+      state.outputs.set(id, out);
+      state.status.set(id, "done");
     }
-    console.log(`[executor] subgraph run scope=${opts.scopeNodeId}, ${cachedCount} nodes reused from cache`);
+    for (const [id, res] of reusable.results) state.results.set(id, res);
+    console.log(`[executor] subgraph run scope=${opts.scopeNodeId}, ${reusable.outputs.size} nodes reused from cache`);
   }
 
   const order = topoSort(graph, opts.scope ?? undefined);

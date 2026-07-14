@@ -15,7 +15,7 @@ import type { Graph, GraphNode } from "@/lib/canvas/types";
 // (the user's latest intent); only outputs/results/outputsSig are adopted, and
 // the staleness signature still guards against reusing outputs whose config
 // or inputs no longer match.
-async function mergePersistedOutputs(graph: Graph, workflowId: string): Promise<void> {
+export async function mergePersistedOutputs(graph: Graph, workflowId: string): Promise<void> {
   try {
     const wf = await prisma.workflow.findUnique({ where: { id: workflowId }, select: { graph: true } });
     const dbNodes = (wf?.graph as { nodes?: GraphNode[] } | null)?.nodes;

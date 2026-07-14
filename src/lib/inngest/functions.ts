@@ -1,42 +1,30 @@
 import { inngest, EVENTS } from "@/lib/inngest/client";
-import { executeRunById, markRunError } from "@/lib/engine/runWorkflow";
+import { markRunError, mergePersistedOutputs } from "@/lib/engine/runWorkflow";
+import { planRun, runSingleNode, type NodeStepResult } from "@/lib/engine/executor";
+import { buildBrandContext, getBrandUiScreenshots } from "@/lib/engine/brandContext";
 import { prisma } from "@/lib/prisma";
 import type { Graph } from "@/lib/canvas/types";
 
-// Worker that actually runs a workflow. Replaces the old after() background
-// task. Key benefits vs after():
-//  - concurrency control: caps how many runs execute at once (protects fal.ai /
-//    TwelveLabs rate limits and the DB pool) AND keeps it fair across users —
-//    one user's burst can't starve everyone else;
-//  - retries: a transient crash re-runs automatically;
-//  - no request-lifetime ceiling: the run isn't bound to the start request.
+// Worker that runs a workflow as GRANULAR Inngest steps - one step.run per
+// node (patch 343). Completed steps are memoised by Inngest, so:
+//  - a transient failure (fal hiccup, timeout) retries ONLY the failed node,
+//    not the whole workflow - finished generations are never re-billed;
+//  - a crash/restart resumes from the exact node that was executing;
+//  - the per-workflow concurrency key still serialises runs of one board.
+// Node outputs flow between steps as plain JSON (URLs/text), and each node
+// also persists its outputs into workflow.graph as before - the UI polling
+// path is unchanged.
 export const runWorkflowFn = inngest.createFunction(
   {
     id: "run-workflow",
-    // Concurrency = how many WORKFLOW RUNS execute at once (NOT how many nodes —
-    // the 50 nodes inside one run are parallelised in-process by the executor,
-    // and Inngest sees the whole run as a single function). This is a global
-    // safety valve, not a per-user throttle: it protects the Postgres pool
-    // (connection_limit=1 per instance in prisma.ts — the pooler multiplexes) and
-    // fal.ai / TwelveLabs rate limits. With limit=1, this concurrency cap plus the
-    // request lambdas must stay under Supavisor's real-PG pool (~15): 5 runs + a
-    // handful of request instances ≈ well under it.
-    // MUST be <= the Inngest plan's concurrency limit, otherwise the dashboard
-    // warns and clamps it. Free plan = 5. Set INNGEST_CONCURRENCY in env to
-    // raise it after upgrading the plan (and pair with a bigger DB pool). A
-    // 6th simultaneous run doesn't fail — it queues until a slot frees up.
     concurrency: [
       { limit: Number(process.env.INNGEST_CONCURRENCY) || 5 },
-      // Serialise runs WITHIN one workflow: mass ▶ clicks on several nodes
-      // become an ordered queue instead of parallel runs that re-execute the
-      // same shared ancestors. Later runs then reuse the outputs the earlier
-      // runs persisted (see mergePersistedOutputs) — no duplicate generations,
-      // no racing graph persists. Different workflows still run in parallel
-      // under the global cap above.
+      // Serialise runs WITHIN one workflow: mass run clicks become an ordered
+      // queue instead of parallel runs re-executing the same shared ancestors.
       { key: "event.data.workflowId", limit: 1 },
     ],
-    // One automatic retry on unexpected failure. Node-level results are already
-    // persisted by the executor, so a retry resumes cleanly enough for now.
+    // One automatic retry. With per-node steps this is a TARGETED retry:
+    // memoised (finished) nodes are skipped, only unfinished ones re-execute.
     retries: 1,
     triggers: [{ event: EVENTS.workflowRunRequested }],
   },
@@ -59,8 +47,74 @@ export const runWorkflowFn = inngest.createFunction(
     }
 
     try {
-      await executeRunById(runId, graph, workflowId, scopeNodeId);
-      return { ok: true, runId };
+      // PLAN: merge freshest persisted outputs (earlier runs of this board),
+      // load brand context, compute layers + reusable cache. Everything the
+      // later steps need is returned as JSON so retries are deterministic -
+      // on a function re-run this step is memoised and NOT re-executed.
+      const plan = await step.run("plan", async () => {
+        const workflow = await prisma.workflow.findUnique({
+          where: { id: workflowId },
+          select: { id: true, projectId: true, project: { select: { brandId: true } } },
+        });
+        if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+        if (scopeNodeId) await mergePersistedOutputs(graph, workflowId);
+        const [brandVoice, brandUiScreenshots] = await Promise.all([
+          buildBrandContext(workflow.project.brandId),
+          getBrandUiScreenshots(workflow.project.brandId),
+        ]);
+        const p = planRun(graph, scopeNodeId);
+        console.log(`[runWorkflowFn] ${runId} plan: ${p.layers.length} layers, ${Object.keys(p.cachedOutputs).length} cached`);
+        return {
+          ...p,
+          ctx: {
+            brandId: workflow.project.brandId,
+            projectId: workflow.projectId,
+            workflowId: workflow.id,
+            brandVoice,
+            brandUiScreenshots,
+          },
+        };
+      });
+
+      // Accumulated node outputs: reusable cache + every finished step.
+      const outputs: Record<string, Record<string, unknown>> = { ...plan.cachedOutputs };
+      const results: Record<string, { value: string; mime?: string }[]> = { ...plan.cachedResults };
+      let totalCost = 0;
+
+      for (let li = 0; li < plan.layers.length; li++) {
+        const layer = plan.layers[li];
+        // Cancellation between layers (plain query - not worth a step).
+        const fresh = await prisma.run.findUnique({ where: { id: runId }, select: { status: true } });
+        if (fresh?.status === "cancelled") {
+          return { cancelled: true, runId };
+        }
+        // One Inngest step per node; parallel within the layer. A rejected
+        // step fails this attempt -> Inngest re-runs the function, memoised
+        // steps are skipped, ONLY the failed node executes again.
+        const stepResults = await Promise.all(
+          layer.map((nodeId) =>
+            step.run(`node-${nodeId}`, (): Promise<NodeStepResult> =>
+              runSingleNode(graph, nodeId, { outputs, results }, plan.ctx, runId),
+            ),
+          ),
+        );
+        stepResults.forEach((r, i) => {
+          const id = layer[i];
+          outputs[id] = r.outputs;
+          if (r.results) results[id] = r.results;
+          totalCost += r.costUsd;
+        });
+      }
+
+      await step.run("finalize", async () => {
+        const current = await prisma.run.findUnique({ where: { id: runId }, select: { status: true } });
+        if (current?.status === "cancelled") return;
+        await prisma.run.update({
+          where: { id: runId },
+          data: { status: "done", finishedAt: new Date(), totalCostUsd: totalCost, errorMessage: null },
+        });
+      });
+      return { ok: true, runId, cost: totalCost };
     } catch (err) {
       // Mark the run as errored so the UI doesn't show a stuck spinner, then
       // rethrow so Inngest records the failure (and applies the retry policy).
