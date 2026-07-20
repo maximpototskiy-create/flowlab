@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { llmCall } from "@/lib/engine/runners";
+import { remapAgentModel } from "@/lib/directPolicy";
 import { LLM_MODELS } from "@/lib/canvas/types";
 
 export const runtime = "nodejs";
@@ -90,6 +91,9 @@ export async function POST(req: NextRequest) {
     const prompt = `CURRENT CANVAS STATE:\n${state}\n\n---\nCONVERSATION:\n${convo}\n\n---\nRespond now with the single JSON object (reply / actions / continue).`;
 
     let model = body.model && LLM_MODELS.some((m) => m.id === body.model) ? body.model : "anthropic/claude-sonnet-4.6";
+    // TEMP (key rotation): Gemini picks run on Claude until the new Google
+    // key lands (see src/lib/directPolicy.ts).
+    model = remapAgentModel(model);
     const images = Array.isArray(body.images) ? body.images.filter((u) => typeof u === "string" && u.startsWith("http")).slice(0, 6) : [];
     // If the user attached images but picked a text-only model, fall back to a
     // vision-capable default so the model can actually SEE them.

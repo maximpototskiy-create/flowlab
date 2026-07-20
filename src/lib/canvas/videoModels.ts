@@ -80,8 +80,8 @@ export const VIDEO_MODELS: VideoModelDef[] = [
   // ─── Veo 3.1 DIRECT (Google API via your GEMINI_API_KEY) — fixed 8s, native audio ───
   // One id serves text/image/keyframes; the runner infers the mode from the
   // connected start/end frames. Standard goes up to 4k; Fast (Lite) caps at 1080p.
-  { id: "google/veo-3.1-generate-preview", label: "Veo 3.1 (direct)", family: "Veo 3.1", modes: ["text", "image", "keyframes"], duration: { kind: "enum", values: [8], default: 8 }, audio: true, resolutions: ["720p", "1080p", "4k"], recommended: true },
-  { id: "google/veo-3.1-fast-generate-preview", label: "Veo 3.1 Fast (direct)", family: "Veo 3.1", modes: ["text", "image", "keyframes"], duration: { kind: "enum", values: [8], default: 8 }, audio: true, resolutions: ["720p", "1080p"] },
+  { id: "google/veo-3.1-generate-preview", label: "Veo 3.1 (direct - temp via fal)", family: "Veo 3.1", modes: ["text", "image", "keyframes"], duration: { kind: "enum", values: [8], default: 8 }, audio: true, resolutions: ["720p", "1080p", "4k"], recommended: true },
+  { id: "google/veo-3.1-fast-generate-preview", label: "Veo 3.1 Fast (direct - temp via fal)", family: "Veo 3.1", modes: ["text", "image", "keyframes"], duration: { kind: "enum", values: [8], default: 8 }, audio: true, resolutions: ["720p", "1080p"] },
 
   // ─── Older / budget models ───
   { id: "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", label: "Kling 2.5 Turbo Pro", family: "Other", modes: ["text"], duration: DUR_5_10 },

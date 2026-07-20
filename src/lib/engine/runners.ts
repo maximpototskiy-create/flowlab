@@ -7,6 +7,7 @@ import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, c
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 import { compositeGreenScreen, extractFrame } from "@/lib/video";
+import { remapDirectImageModel, remapDirectVeoModel } from "@/lib/directPolicy";
 import { directLLM } from "@/lib/agent/router";
 import { generateOpenAIImage, editOpenAIImage } from "@/lib/openai/images";
 import { generateGeminiImage, generateImagen } from "@/lib/google/images";
@@ -503,6 +504,16 @@ export async function runNode(
       const refImages = [...userRefs, ...brandRefs].slice(0, 14);
       const hasRefs = refImages.length > 0;
 
+      // TEMP (key rotation): google-direct image models run via fal.
+      // Reverts automatically when DIRECT_GOOGLE_DISABLED is flipped off.
+      if (model.startsWith("google/")) {
+        const remapped = remapDirectImageModel(model, hasRefs);
+        if (remapped !== model) {
+          console.log(`[direct-policy] image ${model} -> ${remapped}`);
+          model = remapped;
+        }
+      }
+
       // ─── Direct OpenAI image (GPT Image 2) ──────────────────────────
       // Routed through the user's own OPENAI_API_KEY (OpenAI Images API)
       // instead of fal. GPT Image returns base64, so we persist the bytes to
@@ -998,7 +1009,7 @@ export async function runNode(
       // Any on-screen text in generated video must be English regardless of
       // the prompt's language.
       const prompt = `${basePrompt}\n\nIMPORTANT: Any on-screen text must be in English only.`;
-      const model = String(config.model ?? "fal-ai/kling-video/v3/pro/image-to-video");
+      let model = String(config.model ?? "fal-ai/kling-video/v3/pro/image-to-video");
       const duration = String(config.duration ?? "5");
       const resolution = String(config.resolution ?? "");
       const aspect = String(config.aspect ?? "9:16");
@@ -1052,6 +1063,16 @@ export async function runNode(
       // hand it to persistAsset). Veo on the Gemini API is a fixed-length 8s
       // clip; mode is inferred from the connected frames (start -> image2video,
       // start+end -> first/last frame, neither -> text2video).
+      // TEMP (key rotation): direct Veo runs via fal Veo 3.1; the endpoint is
+      // picked from the connected frames. Reverts with DIRECT_GOOGLE_DISABLED.
+      if (model.startsWith("google/veo")) {
+        const remapped = remapDirectVeoModel(model, Boolean(startFrame), Boolean(endFrame));
+        if (remapped !== model) {
+          console.log(`[direct-policy] veo ${model} -> ${remapped}`);
+          model = remapped;
+        }
+      }
+
       if (model.startsWith("google/veo")) {
         const apiModel = model.split("/").slice(1).join("/"); // "veo-3.1-generate-preview"
         const veoRes = String(config.resolution || "720p");
@@ -1413,7 +1434,8 @@ export async function runNode(
         // Aspect: only auto / 16:9 / 9:16 supported.
         payload.aspect_ratio = ["auto", "16:9", "9:16"].includes(aspect) ? aspect : "auto";
         if (resolution) {
-          payload.resolution = resolution; // Veo 3.1 accepts 720p / 1080p
+          // 4k exists only on the direct Google endpoint; clamp remapped runs.
+          payload.resolution = resolution === "4k" ? "1080p" : resolution; // Veo 3.1 accepts 720p / 1080p
           // fal Veo: 1080p output is only valid at 8s. Keep the user's quality
           // choice and bump duration to 8s rather than returning a 422.
           if (resolution === "1080p" && pickedDur !== 8) payload.duration = "8s";
