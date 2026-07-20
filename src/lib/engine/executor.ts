@@ -533,7 +533,7 @@ function inferKindFromUrl(url: string, port: string, nodeType?: string): "image"
 export function computeReusable(
   graph: Graph,
   scope: Set<string> | undefined | null,
-  scopeNodeId: string | undefined,
+  scopeNodeIds: string[] | undefined,
 ): { outputs: Map<string, Record<string, unknown>>; results: Map<string, { value: string; mime?: string }[]> } {
   const outputs = new Map<string, Record<string, unknown>>();
   const results = new Map<string, { value: string; mime?: string }[]>();
@@ -541,7 +541,7 @@ export function computeReusable(
   const scopeIds = scope ?? new Set(graph.nodes.map((n) => n.id));
   const scopedOrder = topoSort(graph, scope ?? undefined);
   for (const nodeId of scopedOrder) {
-    if (nodeId === scopeNodeId) continue; // the scope node itself always re-runs
+    if (scopeNodeIds?.includes(nodeId)) continue; // requested nodes always re-run
     const node = graph.nodes.find((n) => n.id === nodeId);
     if (!node) continue;
     const snap = node as GraphNode & {
@@ -592,15 +592,19 @@ export type NodeStepResult = {
  *  result is serialised into an Inngest step). */
 export function planRun(
   graph: Graph,
-  scopeNodeId?: string,
+  scopeNodeIds?: string[],
 ): {
   layers: string[][];
   cachedOutputs: Record<string, Record<string, unknown>>;
   cachedResults: Record<string, { value: string; mime?: string }[]>;
 } {
-  const scope = scopeNodeId ? ancestorsOf(graph, scopeNodeId) : undefined;
-  const reusable = scopeNodeId
-    ? computeReusable(graph, scope, scopeNodeId)
+  const hasScope = (scopeNodeIds?.length ?? 0) > 0;
+  // Union of every requested node's ancestor set.
+  const scope = hasScope
+    ? new Set(scopeNodeIds!.flatMap((id) => [...ancestorsOf(graph, id)]))
+    : undefined;
+  const reusable = hasScope
+    ? computeReusable(graph, scope, scopeNodeIds)
     : { outputs: new Map<string, Record<string, unknown>>(), results: new Map<string, { value: string; mime?: string }[]>() };
   const order = topoSort(graph, scope);
   const layers = layerByDepth(graph, order)
@@ -625,9 +629,39 @@ export async function runSingleNode(
   },
   ctx: RunnerContext,
   runId: string,
+  opts?: {
+    /** Requested (target) nodes always execute. Ancestors get a just-in-time
+     *  reuse check against the freshest persisted graph - closes the race
+     *  where PARALLEL manual runs share a dirty ancestor: whichever run
+     *  executes it first persists the output, the other reuses it. */
+    alwaysRun?: boolean;
+  },
 ): Promise<NodeStepResult> {
   const node = graph.nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error(`Node ${nodeId} not found in graph`);
+  if (!opts?.alwaysRun && ctx.workflowId) {
+    try {
+      const wf = await prisma.workflow.findUnique({ where: { id: ctx.workflowId }, select: { graph: true } });
+      const dbNode = ((wf?.graph as { nodes?: GraphNode[] } | null)?.nodes ?? []).find((n) => n.id === nodeId);
+      if (dbNode?.outputs && Object.keys(dbNode.outputs).length > 0 && dbNode.outputsSig) {
+        const would = resolveInputs(
+          graph,
+          node,
+          new Map(Object.entries(prior.outputs)),
+          new Map(Object.entries(prior.results)),
+        );
+        if (dbNode.outputsSig === computeExecSig(node, would)) {
+          console.log(`[executor] JIT reuse for ${nodeId} (persisted by a concurrent/earlier run)`);
+          return {
+            outputs: dbNode.outputs,
+            results: dbNode.results,
+            costUsd: 0,
+            durationMs: 0,
+          };
+        }
+      }
+    } catch { /* non-fatal - fall through to normal execution */ }
+  }
   const state: ExecState = {
     graph,
     outputs: new Map(Object.entries(prior.outputs)),
@@ -653,7 +687,7 @@ export async function runSingleNode(
 export async function executeGraph(
   graph: Graph,
   ctx: RunnerContext,
-  opts: { scope?: Set<string>; runId: string; scopeNodeId?: string },
+  opts: { scope?: Set<string>; runId: string; scopeNodeIds?: string[] },
 ): Promise<{
   outputs: Map<string, Record<string, unknown>>;
   errors: Map<string, string>;
@@ -678,15 +712,15 @@ export async function executeGraph(
   // outputs from upstream nodes that already have results — don't re-execute them.
   // Only the requested node + downstream nodes that depend on its NEW output are run.
   // When user hits "Run All" (no scopeNodeId), nothing is cached — full re-run.
-  const isSubgraphRun = Boolean(opts.scopeNodeId);
+  const isSubgraphRun = (opts.scopeNodeIds?.length ?? 0) > 0;
   if (isSubgraphRun) {
-    const reusable = computeReusable(graph, opts.scope, opts.scopeNodeId);
+    const reusable = computeReusable(graph, opts.scope, opts.scopeNodeIds);
     for (const [id, out] of reusable.outputs) {
       state.outputs.set(id, out);
       state.status.set(id, "done");
     }
     for (const [id, res] of reusable.results) state.results.set(id, res);
-    console.log(`[executor] subgraph run scope=${opts.scopeNodeId}, ${reusable.outputs.size} nodes reused from cache`);
+    console.log(`[executor] subgraph run scope=${opts.scopeNodeIds?.join('+')}, ${reusable.outputs.size} nodes reused from cache`);
   }
 
   const order = topoSort(graph, opts.scope ?? undefined);

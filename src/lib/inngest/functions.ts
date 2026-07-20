@@ -19,9 +19,12 @@ export const runWorkflowFn = inngest.createFunction(
     id: "run-workflow",
     concurrency: [
       { limit: Number(process.env.INNGEST_CONCURRENCY) || 5 },
-      // Serialise runs WITHIN one workflow: mass run clicks become an ordered
-      // queue instead of parallel runs re-executing the same shared ancestors.
-      { key: "event.data.workflowId", limit: 1 },
+      // Queue semantics via the event's queueKey: FULL runs of one workflow
+      // share "<workflowId>:full" and serialise; MANUAL scoped runs carry
+      // their unique runId, so hand-started nodes execute in PARALLEL.
+      // Shared-ancestor races between parallel runs are closed by the JIT
+      // reuse check inside runSingleNode.
+      { key: "event.data.queueKey", limit: 1 },
     ],
     // One automatic retry. With per-node steps this is a TARGETED retry:
     // memoised (finished) nodes are skipped, only unfinished ones re-execute.
@@ -33,9 +36,11 @@ export const runWorkflowFn = inngest.createFunction(
       runId: string;
       graph: Graph;
       workflowId: string;
-      scopeNodeId?: string;
+      scopeNodeId?: string | string[];
       userId?: string;
+      queueKey?: string;
     };
+    const scopeIds = Array.isArray(scopeNodeId) ? scopeNodeId : scopeNodeId ? [scopeNodeId] : [];
 
     // Respect cancellation requested before the worker picked the job up.
     const pre = await step.run("check-cancelled", async () => {
@@ -57,12 +62,12 @@ export const runWorkflowFn = inngest.createFunction(
           select: { id: true, projectId: true, project: { select: { brandId: true } } },
         });
         if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-        if (scopeNodeId) await mergePersistedOutputs(graph, workflowId);
+        if (scopeIds.length) await mergePersistedOutputs(graph, workflowId);
         const [brandVoice, brandUiScreenshots] = await Promise.all([
           buildBrandContext(workflow.project.brandId),
           getBrandUiScreenshots(workflow.project.brandId),
         ]);
-        const p = planRun(graph, scopeNodeId);
+        const p = planRun(graph, scopeIds.length ? scopeIds : undefined);
         console.log(`[runWorkflowFn] ${runId} plan: ${p.layers.length} layers, ${Object.keys(p.cachedOutputs).length} cached`);
         return {
           ...p,
@@ -94,7 +99,11 @@ export const runWorkflowFn = inngest.createFunction(
         const stepResults = await Promise.all(
           layer.map((nodeId) =>
             step.run(`node-${nodeId}`, (): Promise<NodeStepResult> =>
-              runSingleNode(graph, nodeId, { outputs, results }, plan.ctx, runId),
+              // Requested nodes always execute; ancestors may JIT-reuse a
+              // result persisted by a concurrent run. Full runs re-run all.
+              runSingleNode(graph, nodeId, { outputs, results }, plan.ctx, runId, {
+                alwaysRun: scopeIds.length === 0 || scopeIds.includes(nodeId),
+              }),
             ),
           ),
         );

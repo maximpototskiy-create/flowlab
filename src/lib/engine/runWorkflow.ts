@@ -40,11 +40,14 @@ export async function executeRun(
   runId: string,
   graph: Graph,
   workflow: { id: string; projectId: string; project: { brandId: string | null } },
-  scopeNodeId?: string,
+  scopeNodeId?: string | string[],
 ) {
-  console.log(`[executeRun] ${runId} starting; scope=${scopeNodeId ?? "all"}`);
-  if (scopeNodeId) await mergePersistedOutputs(graph, workflow.id);
-  const scope = scopeNodeId ? ancestorsOf(graph, scopeNodeId) : undefined;
+  const scopeIds = Array.isArray(scopeNodeId) ? scopeNodeId : scopeNodeId ? [scopeNodeId] : [];
+  console.log(`[executeRun] ${runId} starting; scope=${scopeIds.join("+") || "all"}`);
+  if (scopeIds.length) await mergePersistedOutputs(graph, workflow.id);
+  const scope = scopeIds.length
+    ? new Set(scopeIds.flatMap((id) => [...ancestorsOf(graph, id)]))
+    : undefined;
   const brandVoice = await buildBrandContext(workflow.project.brandId);
   const brandUiScreenshots = await getBrandUiScreenshots(workflow.project.brandId);
 
@@ -57,7 +60,7 @@ export async function executeRun(
       brandVoice,
       brandUiScreenshots,
     },
-    { runId, scope, scopeNodeId },
+    { runId, scope, scopeNodeIds: scopeIds.length ? scopeIds : undefined },
   );
   console.log(`[executeRun] ${runId} executeGraph returned; errors=${result.errors.size}, cost=${result.totalCost}`);
 
@@ -81,7 +84,7 @@ export async function executeRun(
 
 // Loads the workflow then runs it. Used by the Inngest worker, which only
 // receives ids in the event payload (keeps event size small).
-export async function executeRunById(runId: string, graph: Graph, workflowId: string, scopeNodeId?: string) {
+export async function executeRunById(runId: string, graph: Graph, workflowId: string, scopeNodeId?: string | string[]) {
   const workflow = await prisma.workflow.findUnique({
     where: { id: workflowId },
     select: { id: true, projectId: true, project: { select: { brandId: true } } },

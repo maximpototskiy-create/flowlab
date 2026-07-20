@@ -10,7 +10,7 @@ export type RunSummary = {
   startedAt: number;
   finishedAt?: number;
   totalCostUsd?: number;
-  scopeNodeId?: string;
+  scopeNodeId?: string | string[];
   steps: {
     nodeId: string;
     nodeName: string;

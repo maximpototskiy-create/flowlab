@@ -1509,10 +1509,11 @@ export default function Canvas({
         return;
       }
 
-      // Cmd/Ctrl+Enter → run selected node
-      if (meta && e.key === "Enter" && selected) {
+      // Cmd/Ctrl+Enter → run the selection: one node or ALL selected nodes
+      // as a single run (its layers execute in parallel).
+      if (meta && e.key === "Enter" && selectedIds.size > 0) {
         e.preventDefault();
-        startRun(selected);
+        startRun(selectedIds.size === 1 ? [...selectedIds][0] : [...selectedIds]);
         return;
       }
 
@@ -2169,8 +2170,14 @@ export default function Canvas({
     } finally { setAgentBusy(false); }
   }, [agentBusy, agentMsgs, agentFiles, buildCanvasState, executeCanvasAction, agentModel]);
 
-  async function startRun(scopeNodeId?: string) {
-    const scopeKey = scopeNodeId ?? "__all__";
+  async function startRun(scopeArg?: string | string[]) {
+    const scopeNodeId = Array.isArray(scopeArg)
+      ? (scopeArg.length === 1 ? scopeArg[0] : scopeArg.length ? [...scopeArg].sort() : undefined)
+      : scopeArg;
+    const targetSet = scopeNodeId
+      ? new Set(Array.isArray(scopeNodeId) ? scopeNodeId : [scopeNodeId])
+      : null;
+    const scopeKey = scopeNodeId ? (Array.isArray(scopeNodeId) ? scopeNodeId.join("+") : scopeNodeId) : "__all__";
     if (inflightScopes.current.has(scopeKey)) {
       console.log("[FlowLab] startRun: ignoring duplicate for scope", scopeKey);
       return;
@@ -2183,7 +2190,7 @@ export default function Canvas({
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) =>
-        scopeNodeId && n.id !== scopeNodeId
+        targetSet && !targetSet.has(n.id)
           ? n
           : { ...n, status: "running", outputs: undefined, error: undefined, results: undefined },
       ),
@@ -2207,7 +2214,9 @@ export default function Canvas({
       }
       const { runId } = (await res.json()) as { runId: string };
 
-      const scopeName = scopeNodeId
+      const scopeName = Array.isArray(scopeNodeId)
+        ? `${scopeNodeId.length} nodes`
+        : scopeNodeId
         ? NODE_TYPES[graph.nodes.find((n) => n.id === scopeNodeId)?.type ?? ""]?.name ?? "subgraph"
         : "Run all";
 
@@ -2236,7 +2245,7 @@ export default function Canvas({
       setGraph((g) => ({
         ...g,
         nodes: g.nodes.map((n) =>
-          scopeNodeId && n.id !== scopeNodeId ? n : { ...n, status: "error", error: err instanceof Error ? err.message : "Run failed" },
+          targetSet && !targetSet.has(n.id) ? n : { ...n, status: "error", error: err instanceof Error ? err.message : "Run failed" },
         ),
       }));
       inflightScopes.current.delete(scopeKey);
@@ -2398,7 +2407,7 @@ export default function Canvas({
     stopForNode: (nodeId: string) => {
       // Find any active run that touches this node and cancel it
       const targetRun = runs.find(
-        (r) => r.status === "running" && (r.scopeNodeId === nodeId || !r.scopeNodeId),
+        (r) => r.status === "running" && (!r.scopeNodeId || (Array.isArray(r.scopeNodeId) ? r.scopeNodeId.includes(nodeId) : r.scopeNodeId === nodeId)),
       );
       if (targetRun) void stopRun(targetRun.id);
     },
@@ -2890,7 +2899,11 @@ export default function Canvas({
           const nodeId = actionMenu.id;
           const multi = selectedIds.size > 1;
           items = [
-            { label: "Run", icon: <Play size={13} />, onClick: () => startRun(nodeId) },
+            {
+              label: multi && selectedIds.has(nodeId) ? `Run selected (${selectedIds.size})` : "Run",
+              icon: <Play size={13} />,
+              onClick: () => startRun(multi && selectedIds.has(nodeId) ? [...selectedIds] : nodeId),
+            },
             {
               label: "Duplicate",
               icon: <Copy size={13} />,

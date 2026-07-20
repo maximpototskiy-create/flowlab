@@ -23,7 +23,7 @@ export async function POST(req: Request) {
     const body = (await req.json()) as {
       workflowId: string;
       graph: Graph;
-      scope?: string;
+      scope?: string | string[];
     };
 
     if (!body.workflowId || !body.graph) {
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
         graphSnapshot: body.graph as never,
       },
     });
-    console.log(`[runs/start] created run ${run.id}, scope=${body.scope ?? 'all'}, nodes=${body.graph.nodes.length}`);
+    console.log(`[runs/start] created run ${run.id}, scope=${Array.isArray(body.scope) ? body.scope.join('+') : body.scope ?? 'all'}, nodes=${body.graph.nodes.length}`);
 
     await prisma.workflow.update({
       where: { id: workflow.id },
@@ -62,7 +62,19 @@ export async function POST(req: Request) {
     try {
       await inngest.send({
         name: EVENTS.workflowRunRequested,
-        data: { runId: run.id, graph: body.graph, workflowId: workflow.id, scopeNodeId: body.scope, userId: user.id },
+        data: {
+          runId: run.id,
+          graph: body.graph,
+          workflowId: workflow.id,
+          scopeNodeId: body.scope,
+          userId: user.id,
+          // Queue semantics: FULL runs of one workflow serialise (they touch
+          // everything - parallel full runs would fight over the same nodes),
+          // while MANUAL scoped runs get a unique key so several hand-started
+          // nodes execute in PARALLEL. Shared-ancestor races are covered by
+          // the just-in-time reuse check in runSingleNode.
+          queueKey: body.scope ? run.id : `${workflow.id}:full`,
+        },
       });
       queued = true;
       console.log(`[runs/start] queued run ${run.id} on Inngest`);
