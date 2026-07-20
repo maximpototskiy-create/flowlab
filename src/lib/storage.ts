@@ -114,6 +114,24 @@ export async function refreshSignedUrl(storagePath: string, ttlSec = 60 * 60 * 2
   return data?.signedUrl ?? "";
 }
 
+/** Re-sign a Supabase signed URL of OUR bucket with a fresh 30-day token.
+ *  Stored URLs (brand assets, old generations) expire after their original
+ *  TTL; models that fetch refs by URL (fal nano-banana /edit, OpenRouter
+ *  vision) then fail with cryptic 422s. Non-Supabase / unparseable URLs are
+ *  returned unchanged, and any signing error falls back to the original URL
+ *  so this can never make things worse. */
+export async function resignSupabaseUrl(url: string): Promise<string> {
+  try {
+    const m = url.match(/\/storage\/v1\/object\/sign\/([^/]+)\/([^?]+)/);
+    if (!m || m[1] !== BUCKET) return url;
+    const path = decodeURIComponent(m[2]);
+    const fresh = await refreshSignedUrl(path);
+    return fresh || url;
+  } catch {
+    return url;
+  }
+}
+
 export function buildStoragePath(parts: {
   brandId?: string | null;
   projectId?: string | null;

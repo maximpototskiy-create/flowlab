@@ -15,6 +15,7 @@
 // info as constraints/colour, not as the primary task definition.
 
 import { prisma } from "@/lib/prisma";
+import { resignSupabaseUrl } from "@/lib/storage";
 
 export async function buildBrandContext(brandId: string | null): Promise<string | undefined> {
   if (!brandId) return undefined;
@@ -88,5 +89,8 @@ export async function getBrandUiScreenshots(
     orderBy: { createdAt: "desc" },
     select: { url: true },
   })) as { url: string }[];
-  return rows.map((r) => r.url).filter((u) => u.startsWith("http"));
+  const urls = rows.map((r) => r.url).filter((u) => u.startsWith("http"));
+  // Fresh signed tokens: stored URLs may be weeks old and expired - models
+  // that fetch refs by URL fail with cryptic 422s otherwise.
+  return Promise.all(urls.map((u) => resignSupabaseUrl(u)));
 }

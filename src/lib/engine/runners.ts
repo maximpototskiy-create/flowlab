@@ -5,7 +5,7 @@
 import { falLLM, falRun, estimateCost } from "@/lib/fal/client";
 import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, createAvatarIVVideo } from "@/lib/heygen/client";
 import { getSystemPrompt } from "./systemPrompts";
-import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
+import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime, resignSupabaseUrl } from "@/lib/storage";
 import { compositeGreenScreen, extractFrame } from "@/lib/video";
 import { DIRECT_GOOGLE_DISABLED, remapDirectImageModel, remapDirectVeoModel } from "@/lib/directPolicy";
 import { directLLM } from "@/lib/agent/router";
@@ -527,7 +527,12 @@ export async function runNode(
         useBrandKit && userRefs.length === 0
           ? (ctx.brandUiScreenshots ?? [])
           : [];
-      const refImages = [...userRefs, ...brandRefs].slice(0, 14);
+      // Fresh signed tokens on every ref: uploads/assets wired weeks ago carry
+      // expired URLs, and fal /edit endpoints fail to FETCH them - surfacing
+      // as 422 "Could not generate images with the given prompts and images".
+      const refImages = await Promise.all(
+        [...userRefs, ...brandRefs].slice(0, 14).map((u) => resignSupabaseUrl(u)),
+      );
       const hasRefs = refImages.length > 0;
 
       // TEMP (key rotation): google-direct image models run via fal.
@@ -635,14 +640,13 @@ export async function runNode(
         // 15 supported ratios incl. 9:16, 16:9, 4:5, 3:4, 2:3, etc.
         input.aspect_ratio = aspect;
         input.num_images = numResults;
-        // CRITICAL: by default Nano Banana sets `limit_generations: true`,
+        // CRITICAL: by default Nano Banana 2 sets `limit_generations: true`,
         // which DISCARDS our num_images request and forces output to 1 image.
         // Without this line, asking for 4 still returns 1 — silent failure.
         // See: https://fal.ai/models/fal-ai/nano-banana-2/api
-        //   "Experimental parameter to limit the number of generations from
-        //    each round of prompting to 1. Set to True to disregard any
-        //    instructions in the prompt regarding the number of images."
-        input.limit_generations = false;
+        // Documented on nano-banana-2 ONLY - the Pro endpoint does not list
+        // it, so we do not send it there.
+        if (model.includes("nano-banana-2")) input.limit_generations = false;
         if (model.includes("/edit") && hasRefs) {
           input.image_urls = refImages;
         }
