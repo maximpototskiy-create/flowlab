@@ -7,7 +7,7 @@ import { createVideoFromPrompt, pollVideo, createAvatarVideo, pollVideoStatus, c
 import { getSystemPrompt } from "./systemPrompts";
 import { uploadFromUrl, uploadBytes, buildStoragePath, extFromUrl, kindFromMime } from "@/lib/storage";
 import { compositeGreenScreen, extractFrame } from "@/lib/video";
-import { remapDirectImageModel, remapDirectVeoModel } from "@/lib/directPolicy";
+import { DIRECT_GOOGLE_DISABLED, remapDirectImageModel, remapDirectVeoModel } from "@/lib/directPolicy";
 import { directLLM } from "@/lib/agent/router";
 import { generateOpenAIImage, editOpenAIImage } from "@/lib/openai/images";
 import { generateGeminiImage, generateImagen } from "@/lib/google/images";
@@ -24,6 +24,12 @@ export async function llmCall(
   images: string[],
   systemPrompt?: string,
 ): Promise<string> {
+  // TEMP (key rotation): direct Gemini text calls run through fal's
+  // OpenRouter wrapper instead of GEMINI_API_KEY. The ids match OpenRouter
+  // naming (google/gemini-...), so the same model id just changes transport.
+  if (DIRECT_GOOGLE_DISABLED && model.startsWith("google/") && isDirectLLM(model)) {
+    return falLLM(prompt, model, temperature, images, systemPrompt);
+  }
   if (isDirectLLM(model)) return directLLM(model, prompt, images, systemPrompt);
   return falLLM(prompt, model, temperature, images, systemPrompt);
 }
@@ -399,7 +405,7 @@ export async function runNode(
       // Gemini natively watches video (frames + audio). Pipeline: download the
       // reference -> Files API resumable upload -> wait ACTIVE -> generateContent.
       const key = process.env.GEMINI_API_KEY;
-      if (!key) throw new Error("GEMINI_API_KEY not set - Video Analysis runs on your direct Gemini key");
+      if (!DIRECT_GOOGLE_DISABLED && !key) throw new Error("GEMINI_API_KEY not set - Video Analysis runs on your direct Gemini key");
       const videoUrl = String(inputs.video || "");
       if (!videoUrl.startsWith("http")) throw new Error("Connect a video (Upload Video or a generator) into the video input");
       const instructions = String(config.instructions ?? "Analyse this video in depth.");
@@ -407,6 +413,26 @@ export async function runNode(
       let model = String(config.model ?? "gemini-3.5-flash");
       // Gemini 1.5 / 2.0 are shut down (404). Silently upgrade legacy configs.
       if (/^gemini-(1\.5|2\.0)/.test(model) || model === "gemini-pro" || model === "gemini-flash") model = "gemini-3.5-flash";
+
+      // TEMP (key rotation): analysis runs on fal's OpenRouter video route -
+      // same Gemini family, billed via fal, no GEMINI_API_KEY involved.
+      // Reverts automatically with DIRECT_GOOGLE_DISABLED = false.
+      if (DIRECT_GOOGLE_DISABLED) {
+        const orModel = model.startsWith("google/") ? model : `google/${model}`;
+        console.log(`[direct-policy] videoAnalysis via fal openrouter/router/video (${orModel})`);
+        const r = await falRun("openrouter/router/video", {
+          video_urls: [videoUrl],
+          prompt: `${instructions}${focus}`,
+          model: orModel,
+        });
+        const text = String(
+          (r.output as string | undefined) ??
+          (r.text as string | undefined) ??
+          ((r.choices as { message?: { content?: string } }[] | undefined)?.[0]?.message?.content ?? ""),
+        ).trim();
+        if (!text) throw new Error("Video analysis returned an empty result - try a shorter video or re-run");
+        return { outputs: { analysis: text }, costUsd: estimateCost("any-llm"), durationMs: Date.now() - t0 };
+      }
 
       const dl = await fetch(videoUrl, { cache: "no-store" });
       if (!dl.ok) throw new Error(`Could not download the video (HTTP ${dl.status})`);

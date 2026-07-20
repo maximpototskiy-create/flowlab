@@ -1,9 +1,14 @@
 // ─── TEMPORARY: direct Google routing disabled (key rotation) ───────────────
-// Nano Banana and Veo direct calls (corporate GEMINI_API_KEY) and the Gemini
-// choice in the canvas agent are rerouted through fal until the NEW Google
-// API key lands. TO REVERT: set DIRECT_GOOGLE_DISABLED = false - nothing else
-// to touch; saved workflows keep their google/* model ids and will resume
-// using the direct path automatically.
+// EVERYTHING that used the corporate GEMINI_API_KEY is rerouted through fal
+// until the NEW Google key lands:
+//   - Nano Banana 2 / Pro, Imagen (imageGen)   -> fal nano-banana-2/pro, imagen4
+//   - Veo direct (videoGen)                    -> fal veo3.1 family
+//   - Gemini in the canvas agent               -> Claude Sonnet
+//   - Gemini TEXT models (llmCall)             -> fal OpenRouter, same ids
+//   - Video Analysis node                      -> fal openrouter/router/video
+// TO REVERT: set DIRECT_GOOGLE_DISABLED = false - nothing else to touch;
+// saved workflows keep their google/* model ids and resume the direct path
+// automatically.
 export const DIRECT_GOOGLE_DISABLED = true;
 
 /** Image models: google-direct id -> fal equivalent (refs switch to /edit). */
