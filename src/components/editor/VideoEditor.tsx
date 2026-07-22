@@ -2193,21 +2193,39 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   // a manual range; double-click on the bar resets to auto (full timeline).
   const onWaHandleDown = (side: "start" | "end") => (e: React.PointerEvent) => {
     e.stopPropagation(); e.preventDefault();
-    const cont = (e.currentTarget as HTMLElement).closest("[data-wa-container]") as HTMLElement | null;
+    const handle = e.currentTarget as HTMLElement;
+    const cont = handle.closest("[data-wa-container]") as HTMLElement | null;
     if (!cont) return;
     const rect = cont.getBoundingClientRect();
-    const pps = pxPerSec;
+    const pps = pxPerSec > 0 ? pxPerSec : 30;
+    // Pointer capture on the handle: moves keep flowing to us even when the
+    // cursor leaves the ruler, and pointercancel cleans up reliably.
+    try { handle.setPointerCapture?.(e.pointerId); } catch { /* */ }
     const move = (ev: PointerEvent) => {
-      const t = Math.max(0, +((ev.clientX - rect.left) / pps).toFixed(2));
-      setWorkArea((prev) => {
-        const cur = prev ?? { start: 0, end: endOf(clipsRef.current) };
-        return side === "start"
-          ? { start: Math.min(t, cur.end - 0.1), end: cur.end }
-          : { start: cur.start, end: Math.max(t, cur.start + 0.1) };
-      });
+      try {
+        const raw = (ev.clientX - rect.left) / pps;
+        if (!Number.isFinite(raw)) return;
+        const t = Math.max(0, Math.min(3600, +raw.toFixed(2)));
+        setWorkArea((prev) => {
+          const end0 = endOf(clipsRef.current);
+          const cur = prev ?? { start: 0, end: Number.isFinite(end0) && end0 > 0 ? end0 : 1 };
+          const next = side === "start"
+            ? { start: Math.min(t, cur.end - 0.1), end: cur.end }
+            : { start: cur.start, end: Math.max(t, cur.start + 0.1) };
+          if (!Number.isFinite(next.start) || !Number.isFinite(next.end)) return prev;
+          return next;
+        });
+      } catch (err) { console.error("[workArea] drag error", err); }
     };
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+    const up = () => {
+      try { handle.releasePointerCapture?.(e.pointerId); } catch { /* */ }
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
 
   const [viewZoom, setViewZoom] = useState(1);
@@ -2264,12 +2282,6 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   //    animation runs from the original pose (no jump);
   //  - on transform END, write/update a keyframe at the current playhead with
   //    the resulting transform.
-  const kfSeedBaseline = (c: EditClip) => {
-    if (c.kind !== "video" && c.kind !== "image" && c.kind !== "shape") return;
-    if (c.kf && c.kf.length) return; // already animated - leave as is
-    const base = { t: 0, x: c.x ?? 0, y: c.y ?? 0, scale: c.scale ?? 1, rot: c.rot ?? 0 };
-    update(c.id, { kf: [base] });
-  };
   const kfWriteAtPlayhead = (id: string) => {
     setClips((prev) => prev.map((cc) => {
       if (cc.id !== id) return cc;
@@ -2300,8 +2312,13 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     const cy0 = box ? box.top + box.height / 2 : e.clientY;
     const angleAt = (px: number, py: number) => (Math.atan2(py - cy0, px - cx0) * 180) / Math.PI;
     const a0 = angleAt(e.clientX, e.clientY);
-    // seed the baseline (first) keyframe for every clip about to be transformed
-    for (const id of groupIds) { const cc = clipsRef.current.find((x) => x.id === id); if (cc) kfSeedBaseline(cc); }
+    // NO auto-keys (patch 359): transforming a keyless clip edits its base
+    // values live - keys are created ONLY explicitly (the diamond button in
+    // the inspector). Auto-seeding froze the viewport during drags (the
+    // renderer trusted the seeded key, not the moving base values) and
+    // sprinkled unwanted keys. For clips that ALREADY have keys, the key at
+    // the playhead is updated live so animation editing stays realtime too.
+    const keyed = new Set(groupIds.filter((id) => (clipsRef.current.find((x) => x.id === id)?.kf?.length ?? 0) > 0));
     const move = (ev: PointerEvent) => {
       const z = viewZoomRef.current || 1; const dxr = (ev.clientX - s.sx) / z, dyr = (ev.clientY - s.sy) / z;
       if (mode === "rotate") {
@@ -2310,6 +2327,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         if (ev.shiftKey) rot = Math.round(rot / 15) * 15; // snap to 15 deg steps
         if (Math.abs(rot) < 3 && !ev.shiftKey) rot = 0; // gentle zero snap
         update(c.id, { rot: Math.round(rot * 10) / 10 });
+        if (keyed.has(c.id)) kfWriteAtPlayhead(c.id);
         return;
       }
       if (mode === "move") {
@@ -2321,16 +2339,19 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         setSnap({ v, h });
         const ddx = nx - s.ox, ddy = ny - s.oy;
         setClips((prev) => prev.map((x) => { const o = orig.get(x.id); return o ? { ...x, x: o.x + ddx, y: o.y + ddy } : x; }));
+        for (const id of keyed) kfWriteAtPlayhead(id);
       } else {
         let ns = +(s.os + (dxr + dyr) / 250).toFixed(2);
         const hit = STEPS.find((st) => Math.abs(ns - st) < 0.05); if (hit) ns = hit;
         update(c.id, { scale: Math.min(8, Math.max(0.05, ns)) });
+        if (keyed.has(c.id)) kfWriteAtPlayhead(c.id);
       }
     };
     const up = () => {
       setSnap({ v: false, h: false });
-      // commit a keyframe at the playhead capturing the new transform
-      for (const id of groupIds) kfWriteAtPlayhead(id);
+      // Keys are committed ONLY for clips that were already animated - a
+      // plain reposition of a static clip stays keyless.
+      for (const id of keyed) kfWriteAtPlayhead(id);
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
@@ -3624,8 +3645,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 {(() => {
                   // Work area bar: auto (follows all layers) or a manual range.
                   const waAuto = !workArea;
-                  const wa = workArea ?? { start: 0, end: totalDur };
-                  const l = wa.start * pxPerSec, w = Math.max(2, (wa.end - wa.start) * pxPerSec);
+                  const safeEnd = Number.isFinite(totalDur) && totalDur > 0 ? totalDur : 1;
+                  const wa = workArea ?? { start: 0, end: safeEnd };
+                  const l = Number.isFinite(wa.start) ? Math.max(0, wa.start * pxPerSec) : 0;
+                  const w = Number.isFinite(wa.end - wa.start) ? Math.max(2, (wa.end - wa.start) * pxPerSec) : 2;
                   return (
                     <div className="absolute top-0 h-2.5 z-10" style={{ left: l, width: w }}
                       title={waAuto ? "Work area (auto: full timeline). Drag an end to export a custom range." : "Work area - export renders only this range. Double-click to reset to auto."}
