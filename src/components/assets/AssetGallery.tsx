@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
+
 import { useState, useCallback, useEffect, useRef } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, Download, X, Image as ImageIcon, Video, Music, FileText, Trash2, Loader2 } from "lucide-react";
+import { Search, Download, X, Image as ImageIcon, Video, Music, FileText, Trash2, Loader2 , Copy, ExternalLink } from "lucide-react";
 import type { AssetItem, FilterOption } from "@/lib/assetsQuery";
 import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
@@ -399,9 +401,32 @@ function LazyVideoThumb({ src }: { src: string }) {
   );
 }
 
+type Provenance = {
+  model: string | null; prompt: string | null; seed: string | null;
+  refs: string[]; nodeType: string | null; config: Record<string, unknown>;
+  author: string | null;
+  workflow: { id: string; projectId: string; name: string } | null;
+};
+
 function Lightbox({ asset, onClose, onDeleted }: { asset: AssetItem; onClose: () => void; onDeleted: () => void }) {
   const ek = effectiveKind(asset);
   const [deleting, setDeleting] = useState(false);
+  // Generation recipe: fetched lazily for generated assets.
+  const [prov, setProv] = useState<Provenance | null>(null);
+  const [copied, setCopied] = useState("");
+  useEffect(() => {
+    if (asset.source !== "generated") return;
+    let dead = false;
+    fetch(`/api/assets/provenance?id=${encodeURIComponent(asset.id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (!dead && j && !j.error) setProv(j); })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, [asset.id, asset.source]);
+  const copy = (label: string, text: string) => {
+    void navigator.clipboard.writeText(text);
+    setCopied(label); setTimeout(() => setCopied(""), 1200);
+  };
   const canDelete = asset.source === "generated" || asset.source === "upload";
   const doDelete = async () => {
     if (!window.confirm("Delete this asset permanently? It will be removed from the site.")) return;
@@ -451,8 +476,62 @@ function Lightbox({ asset, onClose, onDeleted }: { asset: AssetItem; onClose: ()
 
           {asset.prompt && (
             <div>
-              <div className="text-[9px] uppercase tracking-wider text-fg-subtle mb-1">Prompt</div>
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-[9px] uppercase tracking-wider text-fg-subtle">Prompt</div>
+                <button onClick={() => copy("prompt", asset.prompt!)} className="text-[9px] text-fg-subtle hover:text-brand inline-flex items-center gap-1">
+                  <Copy size={9} /> {copied === "prompt" ? "Copied" : "Copy"}
+                </button>
+              </div>
               <p className="text-[12px] text-fg-muted leading-snug max-h-40 overflow-auto">{asset.prompt}</p>
+            </div>
+          )}
+
+          {/* Generation recipe: refs used, extra settings, jump to workflow,
+              one-click copy of the whole recipe. */}
+          {prov && (prov.refs.length > 0 || prov.workflow || prov.author) && (
+            <div className="space-y-2">
+              {prov.refs.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-[9px] uppercase tracking-wider text-fg-subtle">References ({prov.refs.length})</div>
+                    <button onClick={() => copy("refs", prov.refs.join("\n"))} className="text-[9px] text-fg-subtle hover:text-brand inline-flex items-center gap-1">
+                      <Copy size={9} /> {copied === "refs" ? "Copied" : "Copy URLs"}
+                    </button>
+                  </div>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    {prov.refs.map((r, i) => (
+                      <a key={i} href={r} target="_blank" rel="noopener noreferrer"
+                        className="shrink-0 w-12 h-12 rounded-md overflow-hidden border border-border hover:border-brand bg-black"
+                        title="Open reference in a new tab">
+                        {/\.(mp4|webm|mov)(\?|$)/i.test(r.split("?")[0])
+                          ? <video src={r} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+                          // eslint-disable-next-line @next/next/no-img-element
+                          : <img src={r} alt="" loading="lazy" className="w-full h-full object-cover" />}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => copy("recipe", [
+                    prov.model ? `Model: ${prov.model}` : "",
+                    asset.prompt ? `Prompt: ${asset.prompt}` : "",
+                    prov.seed ? `Seed: ${prov.seed}` : "",
+                    Object.keys(prov.config).length ? `Settings: ${JSON.stringify(prov.config)}` : "",
+                    prov.refs.length ? `Refs:\n${prov.refs.join("\n")}` : "",
+                  ].filter(Boolean).join("\n"))}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border text-[10px] text-fg-muted hover:text-fg hover:border-border-strong">
+                  <Copy size={10} /> {copied === "recipe" ? "Recipe copied" : "Copy full recipe"}
+                </button>
+                {prov.workflow && (
+                  <Link href={`/projects/${prov.workflow.projectId}/workflows/${prov.workflow.id}`}
+                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border text-[10px] text-fg-muted hover:text-brand hover:border-brand/60">
+                    <ExternalLink size={10} /> Open workflow
+                  </Link>
+                )}
+              </div>
+              {prov.author && <div className="text-[10px] text-fg-subtle">Generated by {prov.author}</div>}
             </div>
           )}
 

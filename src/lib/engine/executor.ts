@@ -263,6 +263,14 @@ async function executeOne(
   state.status.set(node.id, "running");
   const inputs = resolveInputs(state.graph, node, state.outputs, state.results);
 
+  // Provenance: capture the RESOLVED media inputs (reference images/videos/
+  // audio URLs) next to the config - "which refs produced this asset" is a
+  // top team request and edges/values are not recoverable from config alone.
+  const resolvedRefs: string[] = [];
+  for (const v of Object.values(inputs)) {
+    if (typeof v === "string" && v.startsWith("http")) resolvedRefs.push(v);
+    else if (Array.isArray(v)) for (const x of v) if (typeof x === "string" && x.startsWith("http")) resolvedRefs.push(x);
+  }
   const runStep = await prisma.runStep.create({
     data: {
       runId: state.runId,
@@ -270,7 +278,7 @@ async function executeOne(
       nodeType: node.type,
       model: (node.config?.model as string) ?? null,
       status: "running",
-      inputParams: node.config as never,
+      inputParams: { ...(node.config ?? {}), ...(resolvedRefs.length ? { _refs: resolvedRefs.slice(0, 20) } : {}) } as never,
     },
   });
 
@@ -329,7 +337,7 @@ async function executeOne(
               kind,
               source: "generated",
               model: (node.config?.model as string) ?? null,
-              prompt: (node.config?.instructions as string) ?? null,
+              prompt: ((node.config?.instructions as string) || (typeof inputs.prompt === "string" ? (inputs.prompt as string) : null)) ?? null,
               runStepId: runStep.id,
             },
           });
@@ -354,7 +362,7 @@ async function executeOne(
               kind,
               source: "generated",
               model: (node.config?.model as string) ?? null,
-              prompt: (node.config?.instructions as string) ?? null,
+              prompt: ((node.config?.instructions as string) || (typeof inputs.prompt === "string" ? (inputs.prompt as string) : null)) ?? null,
               runStepId: runStep.id,
             },
           });

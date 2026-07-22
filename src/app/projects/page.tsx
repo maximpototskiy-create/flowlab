@@ -21,6 +21,7 @@ export default async function ProjectsPage({
       include: {
         _count: { select: { workflows: true } },
         brand: { select: { name: true, slug: true } },
+        creator: { select: { name: true, email: true } },
       },
     }),
     prisma.brand.count({ where: { archivedAt: null } }),

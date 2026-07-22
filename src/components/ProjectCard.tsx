@@ -12,6 +12,8 @@ export type ProjectCardData = {
   color: string;
   updatedAt: Date;
   _count: { workflows: number };
+  /** Project owner - shown on the card so it is clear who runs what. */
+  creator?: { name: string | null; email: string } | null;
 };
 
 export default function ProjectCard({ project }: { project: ProjectCardData }) {
@@ -41,7 +43,12 @@ export default function ProjectCard({ project }: { project: ProjectCardData }) {
         )}
       </p>
 
-      <div className="flex justify-between items-end font-mono text-[10px] tracking-wider uppercase text-fg-subtle mt-4 pt-3 border-t border-border">
+      {project.creator && (
+        <div className="font-mono text-[10px] tracking-wider uppercase text-fg-subtle mt-3 truncate" title={project.creator.email}>
+          by {project.creator.name || project.creator.email.split("@")[0]}
+        </div>
+      )}
+      <div className={`flex justify-between items-end font-mono text-[10px] tracking-wider uppercase text-fg-subtle ${project.creator ? "mt-1.5" : "mt-4"} pt-3 border-t border-border`}>
         <span>
           {project._count.workflows} workflow{project._count.workflows === 1 ? "" : "s"}
         </span>
