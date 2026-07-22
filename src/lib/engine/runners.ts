@@ -678,7 +678,31 @@ export async function runNode(
         input.enable_safety_checker = false;
       }
 
-      const r = await falRun(model, input);
+      // Nano Banana (Gemini image) sometimes REFUSES a specific prompt with a
+      // generic 422 "Could not generate images with the given prompts and
+      // images" - usually the people/safety filter firing stochastically
+      // (sibling prompts pass, one fails). One delayed retry clears most of
+      // these; a sticky refusal gets a human error instead of raw JSON.
+      const isRefusal = (e: unknown) =>
+        (e instanceof Error ? e.message : String(e)).includes("Could not generate images with the given prompts");
+      let r: Record<string, unknown>;
+      try {
+        r = await falRun(model, input);
+      } catch (e) {
+        if (!isRefusal(e)) throw e;
+        console.warn(`[imageGen] model refusal on ${model}, retrying once`);
+        await new Promise((res) => setTimeout(res, 1500));
+        try {
+          r = await falRun(model, input);
+        } catch (e2) {
+          if (isRefusal(e2)) {
+            throw new Error(
+              "The model declined this prompt (its people/safety filter fires unpredictably - similar prompts may pass). Run the node again, or soften identity details in the prompt (age/ethnicity wording) and retry.",
+            );
+          }
+          throw e2;
+        }
+      }
 
       const images = (r.images as { url: string }[] | undefined) ?? [];
       if (images.length === 0) throw new Error("Model returned no images");
