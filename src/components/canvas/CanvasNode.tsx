@@ -994,6 +994,9 @@ function CanvasNodeImpl({
             {(def.quickFields ?? []).map((fname) => {
               const f = def.fields.find((x) => x.name === fname);
               if (!f) return null;
+              // Quality is honored only by the GPT Image endpoints - hide the
+              // chip for models where the param does nothing.
+              if (fname === "quality" && !String(node.config.model ?? "").includes("gpt-image")) return null;
               // Kling V3 i2v: aspect_ratio is ignored by the model (aspect
               // is inherited from start_image_url). We grey out the field
               // and explain why on hover instead of silently misleading.

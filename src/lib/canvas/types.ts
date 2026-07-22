@@ -647,7 +647,7 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     primaryPlaceholder: "Your prompt here…",
     examples: ["Static ad — earbuds"],
     starters: ["Lifestyle scene showing…"],
-    quickFields: ["model", "aspect", "num_results", "useBrandKit"],
+    quickFields: ["model", "aspect", "num_results", "quality", "useBrandKit"],
   },
 
   imageResize: {

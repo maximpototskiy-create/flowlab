@@ -1675,8 +1675,8 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
         const step = (e.shiftKey ? 10 : 1) / 30;
         seek(playheadRef.current + (e.code === "ArrowRight" ? step : -step));
       }
-      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
-      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
+      else if ((e.metaKey || e.ctrlKey) && e.code === "KeyZ") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+      else if ((e.metaKey || e.ctrlKey) && e.code === "KeyY") { e.preventDefault(); redo(); }
       else if ((e.metaKey || e.ctrlKey) && e.code === "KeyD") { e.preventDefault(); duplicateSelected(); }
       else if ((e.metaKey || e.ctrlKey) && e.code === "KeyB") { e.preventDefault(); splitAtPlayhead(); }
       else if (!e.metaKey && !e.ctrlKey && e.code === "KeyS") { e.preventDefault(); splitAtPlayhead(); }

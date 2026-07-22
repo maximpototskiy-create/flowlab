@@ -153,7 +153,8 @@ export default function GroupBox({
                   <input
                     type="color"
                     className="absolute inset-0 opacity-0 cursor-pointer"
-                    onChange={(e) => { onColor(e.target.value); setShowColors(false); }}
+                    onInput={(e) => onColor((e.target as HTMLInputElement).value)}
+                    onChange={() => setShowColors(false)}
                   />
                 </label>
               </div>

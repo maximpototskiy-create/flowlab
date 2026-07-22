@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, Download, ChevronLeft, ChevronRight, Maximize2 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,11 +99,20 @@ export default function Lightbox({
     }
   })();
 
-  return (
+  // Portal to <body>: the lightbox used to render INSIDE the canvas transform
+  // container, where position:fixed is resolved against the transformed
+  // ancestor (CSS spec), not the viewport - overlay geometry and click
+  // targets went subtly wrong (arrow clicks could land on the backdrop and
+  // close the viewer). NodeExpandedModal already portals for the same reason.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+  return createPortal(
     <div
       ref={rootRef}
       className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center p-2"
       onClick={onClose}
+      onPointerDown={(e) => e.stopPropagation()}
     >
       {/* Controls — one compact rounded toolbar at the top-right. It carries its
           own solid contrast, so it reads cleanly over media of ANY size/shape
@@ -201,6 +211,7 @@ export default function Lightbox({
           {position.current + 1} / {position.total}
         </div>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }

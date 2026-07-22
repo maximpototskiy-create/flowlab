@@ -1377,7 +1377,7 @@ export default function Canvas({
       // dialog is suppressed) even mid-typing. Sliders/checkboxes/buttons/
       // selects do not block hotkeys at all.
       if (isTextEntryTarget(e.target)) {
-        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+        if ((e.metaKey || e.ctrlKey) && e.code === "KeyD") {
           e.preventDefault();
           if (selectedIds.size > 0) {
             const grp = (graph.groups ?? []).find(
@@ -1392,13 +1392,13 @@ export default function Canvas({
       const meta = e.metaKey || e.ctrlKey;
 
       // Undo / Redo. ⌘/Ctrl+Z = undo, ⌘/Ctrl+Shift+Z or Ctrl+Y = redo.
-      if (meta && e.key.toLowerCase() === "z") {
+      if (meta && e.code === "KeyZ") {
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
         return;
       }
-      if (meta && e.key.toLowerCase() === "y") {
+      if (meta && e.code === "KeyY") {
         e.preventDefault();
         redo();
         return;
@@ -1420,7 +1420,7 @@ export default function Canvas({
       }
 
       // Cmd/Ctrl+A → select all nodes
-      if (meta && e.key.toLowerCase() === "a") {
+      if (meta && e.code === "KeyA") {
         e.preventDefault();
         setSelectedIds(new Set(graph.nodes.map((n) => n.id)));
         return;
@@ -1429,7 +1429,7 @@ export default function Canvas({
       // Cmd/Ctrl+C → copy selected node(s) + their internal edges to a
       // persistent clipboard (localStorage) so they can be pasted into ANY
       // project's canvas, not just this one.
-      if (meta && e.key.toLowerCase() === "c" && selectedIds.size > 0) {
+      if (meta && e.code === "KeyC" && selectedIds.size > 0) {
         e.preventDefault();
         const ids = selectedIds;
         const nodes = graph.nodes.filter((x) => ids.has(x.id));
@@ -1450,7 +1450,7 @@ export default function Canvas({
       }
 
       // Cmd/Ctrl+V → paste clipboard (nodes + internal edges) at an offset.
-      if (meta && e.key.toLowerCase() === "v") {
+      if (meta && e.code === "KeyV") {
         e.preventDefault();
         let payload: { nodes: GraphNode[]; edges: { from: { nodeId: string; port: string }; to: { nodeId: string; port: string } }[] } | null = null;
         // Prefer the in-memory clipboard (full fidelity, always complete);
@@ -1493,7 +1493,7 @@ export default function Canvas({
       // Cmd/Ctrl+D → duplicate. Group (if the selection exactly matches a
       // group) → duplicate the whole group; multi-selection → duplicate all;
       // single node → duplicate it.
-      if (meta && e.key.toLowerCase() === "d") {
+      if (meta && e.code === "KeyD") {
         // Always eat Ctrl/Cmd+D on the board — even with nothing selected the
         // browser bookmark dialog is never what the user wants here.
         e.preventDefault();
@@ -1518,7 +1518,7 @@ export default function Canvas({
       }
 
       // Cmd/Ctrl+G → group selection · Cmd/Ctrl+Shift+G → ungroup
-      if (meta && e.key.toLowerCase() === "g") {
+      if (meta && e.code === "KeyG") {
         e.preventDefault();
         if (e.shiftKey) ungroupSelected();
         else groupSelected();
@@ -2937,6 +2937,9 @@ export default function Canvas({
               inp.type = "color";
               inp.value = /^#[0-9a-fA-F]{6}$/.test(cur) ? cur : "#10b981";
               inp.style.position = "fixed"; inp.style.opacity = "0"; inp.style.pointerEvents = "none";
+              // Anchor the native dialog to the menu instead of the window's
+              // top-left corner (browsers open it next to the input element).
+              inp.style.left = `${actionMenu.x}px`; inp.style.top = `${actionMenu.y}px`;
               inp.oninput = () => updateNodeConfig(nodeId, "_color", inp.value);
               inp.onchange = () => inp.remove();
               document.body.appendChild(inp);
