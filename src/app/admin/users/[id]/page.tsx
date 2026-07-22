@@ -210,10 +210,11 @@ export default async function AdminUserPage({ params, searchParams }: { params: 
         </div>
 
         {/* Totals */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
           <Card label="Runs" value={String(totalRuns)} />
           <Card label="Cost (fal)" value={usd(totalCost)} />
           <Card label="Direct est." value={"~" + usd(directEstTotal)} />
+          <Card label="Combined est." value={"~" + usd(totalCost + directEstTotal)} />
           <Card label="Done" value={String(done)} />
           <Card label="Errors" value={String(errors)} accent={errors > 0} />
         </div>

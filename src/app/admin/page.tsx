@@ -150,11 +150,12 @@ export default async function AdminPage({
         </div>
 
         {/* Summary */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
           <Card label="Total runs" value={String(totalRuns)} />
           <Card label="Total cost (fal)" value={usd(totalCost)} />
           <Card label="Direct generations" value={String(directTotal)} />
           <Card label="Direct est. cost" value={"~" + usd(directEstTotal)} />
+          <Card label="Combined est." value={"~" + usd(totalCost + directEstTotal)} />
           <Card label="Active users" value={`${activeUsers} / ${users.length}`} />
         </div>
 

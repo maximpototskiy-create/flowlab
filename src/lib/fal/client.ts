@@ -308,10 +308,13 @@ export async function falRealCost(
   const info = await getFalPrice(model);
   if (info && info.price > 0) {
     const unit = info.unit.toLowerCase();
-    let falCost = info.price;
-    if (unit.includes("second")) falCost = info.price * (params.duration ?? 1);
-    else if (unit.includes("image") || unit.includes("megapixel") || unit.includes("frame") || unit === "mp") falCost = info.price * (params.numImages ?? 1);
-    return Math.max(falCost, est);
+    // Trust fal's live unit price when we can map the unit to known params;
+    // token/character/unit-billed endpoints fall back to the calibrated
+    // estimate (we cannot know the quantity upfront). The old Math.max(est)
+    // hedge inflated records whenever the estimate itself was wrong.
+    if (unit.includes("second")) return info.price * (params.duration ?? 1);
+    if (unit.includes("image") || unit.includes("megapixel") || unit.includes("frame") || unit === "mp") return info.price * (params.numImages ?? 1);
+    if (unit.includes("minute")) return info.price; // <=1 unit per typical run
   }
   return est;
 }
