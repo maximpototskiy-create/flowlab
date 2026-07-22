@@ -6,11 +6,13 @@ import Link from "next/link";
 import TopNav from "@/components/TopNav";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { setUserRole } from "./actions";
+import { setUserRole, repriceHistory } from "./actions";
 import { directUnitEst } from "@/lib/adminPricing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// repriceHistory (server action) walks every run step - give it room.
+export const maxDuration = 300;
 
 const RANGES = [
   { key: "7", label: "7 days" },
@@ -159,10 +161,17 @@ export default async function AdminPage({
           <Card label="Active users" value={`${activeUsers} / ${users.length}`} />
         </div>
 
-        <div className="mb-6">
+        <div className="mb-6 flex items-center gap-2 flex-wrap">
           <Link href={`/admin/errors`} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-red-500/40 text-red-400 hover:bg-red-500/10 text-[11px] uppercase tracking-wider transition">
             Generation errors &rarr;
           </Link>
+          <form action={repriceHistory}>
+            <button type="submit"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-fg-muted hover:text-fg hover:border-border-strong text-[11px] uppercase tracking-wider transition"
+              title="One-off: re-price all historical run steps with the invoice-verified unit prices and rebuild run totals. Takes up to a minute.">
+              Reprice history
+            </button>
+          </form>
         </div>
 
         {/* Direct (corp keys) - real counts, estimated price. These are billed
