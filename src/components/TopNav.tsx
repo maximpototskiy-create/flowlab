@@ -1,6 +1,7 @@
 // Server component — fetches the current user itself.
 import Link from "next/link";
 import LogoutButton from "./LogoutButton";
+import SearchPalette from "./SearchPalette";
 import ThemeToggle from "./ThemeToggle";
 import ActiveRunsIndicator from "./ActiveRunsIndicator";
 import { requireUser } from "@/lib/auth";
@@ -55,6 +56,7 @@ export default async function TopNav({
             <span className="w-1.5 h-1.5 rounded-full bg-brand animate-pulse" />
             <span className="truncate">{user.email}</span>
           </span>
+          <SearchPalette />
           <ThemeToggle />
           <LogoutButton />
         </div>
