@@ -10,9 +10,24 @@ export default function LoginPage() {
     "idle"
   );
   const [error, setError] = useState("");
+  // Resend cooldown: Supabase rate-limits auth emails PROJECT-WIDE, so rapid
+  // retries from several people burn the shared budget. The countdown stops
+  // pointless resends and gives the limit window time to pass.
+  const [cooldown, setCooldown] = useState(0);
+
+  function startCooldown(sec: number) {
+    setCooldown(sec);
+    const t = setInterval(() => {
+      setCooldown((c) => {
+        if (c <= 1) { clearInterval(t); return 0; }
+        return c - 1;
+      });
+    }, 1000);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (cooldown > 0) return;
     setStatus("sending");
     setError("");
 
@@ -26,9 +41,16 @@ export default function LoginPage() {
 
     if (error) {
       setStatus("error");
-      setError(error.message);
+      const isRate = /rate limit/i.test(error.message);
+      setError(
+        isRate
+          ? "Sign-in emails are rate-limited right now (several teammates signing in at once). Wait a minute and try again - your previous link may still arrive and stays valid."
+          : error.message,
+      );
+      if (isRate) startCooldown(60);
     } else {
       setStatus("sent");
+      startCooldown(30);
     }
   }
 
@@ -150,11 +172,11 @@ export default function LoginPage() {
 
                 <button
                   type="submit"
-                  disabled={status === "sending" || !email}
+                  disabled={status === "sending" || !email || cooldown > 0}
                   className="group w-full flex items-center justify-between bg-brand text-black font-mono text-xs tracking-[0.15em] uppercase py-4 px-5 rounded-sm hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition"
                 >
                   <span>
-                    {status === "sending" ? "Sending link…" : "Send magic link"}
+                    {status === "sending" ? "Sending link…" : cooldown > 0 ? `Wait ${cooldown}s to resend` : "Send magic link"}
                   </span>
                   <span className="group-hover:translate-x-1 transition-transform">
                     →

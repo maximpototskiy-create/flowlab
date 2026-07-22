@@ -158,6 +158,12 @@ export default async function AdminPage({
           <Card label="Active users" value={`${activeUsers} / ${users.length}`} />
         </div>
 
+        <div className="mb-6">
+          <Link href={`/admin/errors`} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-red-500/40 text-red-400 hover:bg-red-500/10 text-[11px] uppercase tracking-wider transition">
+            Generation errors &rarr;
+          </Link>
+        </div>
+
         {/* Direct (corp keys) - real counts, estimated price. These are billed
             outside fal, so the fal totals above do NOT include them. */}
         <h2 className="text-[11px] uppercase tracking-wider text-fg-subtle mb-2">Direct generations (corp keys) - {RANGES.find((r) => r.key === range)?.label ?? "All time"}</h2>
