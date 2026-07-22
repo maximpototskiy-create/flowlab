@@ -232,6 +232,9 @@ export default function Canvas({
 
   // ─────────────────────────────── Drag
   const [drag, setDrag] = useState<Drag | null>(null);
+  // True while the current drag started on a GROUP BOX header - moving a
+  // whole group must not re-evaluate membership against other groups.
+  const dragFromGroupBoxRef = useRef(false);
   // Live drag position — updated every animation frame for INSTANT visual response.
   // We mutate the DOM transform directly instead of going through React state on each frame.
   // Only commit to setGraph on pointer up.
@@ -681,8 +684,14 @@ export default function Canvas({
           newEdges.push(makeEdge(e.from.nodeId, e.from.port, idMap.get(e.to.nodeId)!, e.to.port));
         }
       }
+      // Copies of GROUPED nodes join the same group - a duplicate landing
+      // outside its group (and no way to pull it in) was a top annoyance.
+      const groups = (g.groups ?? []).map((gr) => {
+        const extra = gr.nodeIds.filter((id) => idMap.has(id)).map((id) => idMap.get(id)!);
+        return extra.length ? { ...gr, nodeIds: [...gr.nodeIds, ...extra] } : gr;
+      });
       requestAnimationFrame(() => setSelectedIds(new Set(newNodes.map((n) => n.id))));
-      return { ...g, nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] };
+      return { ...g, groups, nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] };
     });
   }, []);
 
@@ -758,6 +767,7 @@ export default function Canvas({
   function startGroupDrag(groupId: string, e: React.PointerEvent) {
     const gr = (graph.groups ?? []).find((x) => x.id === groupId);
     if (!gr) return;
+    dragFromGroupBoxRef.current = true;
     const group = gr.nodeIds
       .map((id) => {
         const n = graph.nodes.find((x) => x.id === id);
@@ -1202,16 +1212,60 @@ export default function Canvas({
       const isPanning = isPanningRef.current;
       const screenToCanvas = screenToCanvasRef.current;
       if (drag) {
-        // Commit final positions of ALL dragged nodes to graph state.
+        // Commit final positions of ALL dragged nodes to graph state, then
+        // re-evaluate group membership: dropping a node INSIDE a group's box
+        // joins that group, dragging it OUT leaves it (whole-group drags via
+        // the group box header skip this).
         const livePositions = liveDragPositions.current;
+        const fromGroupBox = dragFromGroupBoxRef.current;
+        dragFromGroupBoxRef.current = false;
         if (livePositions && livePositions.size > 0) {
-          setGraph((g) => ({
-            ...g,
-            nodes: g.nodes.map((n) => {
+          setGraph((g) => {
+            const nodes = g.nodes.map((n) => {
               const p = livePositions.get(n.id);
               return p ? { ...n, position: { x: p.x, y: p.y } } : n;
-            }),
-          }));
+            });
+            let groups = g.groups ?? [];
+            if (!fromGroupBox && groups.length > 0) {
+              const PAD = 24, APPROX_H = 240;
+              const heights = measureNodeHeights();
+              const bboxOf = (gr: Group) => {
+                const members = nodes.filter((n) => gr.nodeIds.includes(n.id) && !livePositions.has(n.id));
+                if (members.length === 0) return null;
+                return {
+                  x1: Math.min(...members.map((n) => n.position.x)) - PAD,
+                  y1: Math.min(...members.map((n) => n.position.y)) - PAD,
+                  x2: Math.max(...members.map((n) => n.position.x + NODE_WIDTH)) + PAD,
+                  y2: Math.max(...members.map((n) => n.position.y + (heights.get(n.id) ?? APPROX_H))) + PAD,
+                };
+              };
+              for (const id of livePositions.keys()) {
+                const n = nodes.find((x) => x.id === id);
+                if (!n) continue;
+                const cx = n.position.x + NODE_WIDTH / 2;
+                const cy = n.position.y + (heights.get(id) ?? APPROX_H) / 2;
+                const target = groups.find((gr) => {
+                  const b = bboxOf(gr);
+                  return b && cx >= b.x1 && cx <= b.x2 && cy >= b.y1 && cy <= b.y2;
+                });
+                groups = groups.map((gr) => {
+                  const isMember = gr.nodeIds.includes(id);
+                  if (target && gr.id === target.id) {
+                    return isMember ? gr : { ...gr, nodeIds: [...gr.nodeIds, id] };
+                  }
+                  // Left this group's area (or joined another) - drop membership.
+                  if (isMember) {
+                    const b = bboxOf(gr);
+                    const inside = b && cx >= b.x1 && cx <= b.x2 && cy >= b.y1 && cy <= b.y2;
+                    if (!inside) return { ...gr, nodeIds: gr.nodeIds.filter((x) => x !== id) };
+                  }
+                  return gr;
+                });
+              }
+              groups = groups.filter((gr) => gr.nodeIds.length > 0);
+            }
+            return { ...g, nodes, groups };
+          });
         }
         liveDragPos.current = null;
         liveDragPositions.current = null;

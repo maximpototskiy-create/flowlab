@@ -16,6 +16,9 @@ export default function ContextMenu({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
+  // Keyboard navigation over search results: ArrowDown/Up move the highlight,
+  // Enter inserts - type half a name, arrow, Enter, done (no mouse trip).
+  const [hl, setHl] = useState(0);
 
   useEffect(() => {
     function onDown(e: MouseEvent) {
@@ -40,6 +43,7 @@ export default function ContextMenu({
         ([, d]) => d.name.toLowerCase().includes(q) || d.description.toLowerCase().includes(q),
       )
     : null;
+  const hlSafe = matches && matches.length > 0 ? Math.min(hl, matches.length - 1) : 0;
 
   // Clamp position to viewport
   const W = 320, H = 540;
@@ -60,7 +64,13 @@ export default function ContextMenu({
           type="text"
           placeholder="Search or pick a node…"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => { setQuery(e.target.value); setHl(0); }}
+          onKeyDown={(e) => {
+            if (!matches || matches.length === 0) return;
+            if (e.key === "ArrowDown") { e.preventDefault(); setHl((i) => Math.min(i + 1, matches.length - 1)); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setHl((i) => Math.max(i - 1, 0)); }
+            else if (e.key === "Enter") { e.preventDefault(); const m = matches[hlSafe]; if (m) { onPick(m[0]); onClose(); } }
+          }}
           className="w-full bg-transparent border-none outline-none pl-5 text-[12px] text-fg placeholder:text-fg-subtle"
         />
       </div>
@@ -68,7 +78,7 @@ export default function ContextMenu({
       <div className="flex-1 overflow-y-auto py-1">
         {matches ? (
           <div>
-            {matches.map(([id, def]) => (
+            {matches.map(([id, def], mi) => (
               <button
                 key={id}
                 onMouseDown={(e) => {
@@ -79,7 +89,8 @@ export default function ContextMenu({
                   onPick(id);
                   onClose();
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-1.5 hover:bg-bg-hover text-left"
+                onMouseEnter={() => setHl(mi)}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left ${mi === hlSafe ? "bg-bg-hover ring-1 ring-inset ring-brand/40" : "hover:bg-bg-hover"}`}
               >
                 <NodeIcon name={def.icon} size={13} style={{ color: CATEGORY_COLORS[def.category] }} />
                 <div className="flex-1 min-w-0">
