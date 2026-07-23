@@ -217,6 +217,14 @@ async function makeWavePeaks(url: string, buckets = 220): Promise<number[] | nul
   wavePending.add(url);
   try {
     const ab = await fetch(url, { mode: "cors" }).then((r) => r.arrayBuffer());
+    // MEMORY GUARD: decodeAudioData expands compressed audio to float32 PCM
+    // (an hour of stereo 48k = ~1.4GB). Large sources crashed the renderer -
+    // skip the wave for anything over 40MB compressed; the clip still works.
+    if (ab.byteLength > 40 * 1024 * 1024) {
+      console.warn(`[wave] source too large for waveform (${(ab.byteLength / 1e6).toFixed(0)}MB), skipping`);
+      wavePeaksCache.set(url, null);
+      return null;
+    }
     type ACtor = new () => AudioContext;
     const Ctx: ACtor = (window.AudioContext || (window as unknown as { webkitAudioContext: ACtor }).webkitAudioContext);
     const ac = new Ctx();
@@ -500,6 +508,7 @@ function grabFrame(url: string): Promise<{ img: string | null; dur: number; w: n
         try { v.removeAttribute("src"); v.load(); } catch { /* */ }
         if (retryNoCors) { attempt(false); return; }
         frameActive--; framePump();
+        if (res && !Number.isFinite(res.dur)) res = { ...res, dur: 0 }; // Infinity-duration containers
         if (res) { frameCache.set(url, res); if (res.img) scheduleThumbSave(); }
         framePending.delete(url);
         resolve(res);
@@ -1229,7 +1238,9 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
     return existing ? existing.id : createLayerForType(type);
   };
   const addAssetAt = (a: { kind: EditorAsset["kind"]; url: string; label: string; duration: number | null }, layerId?: string, start?: number) => {
-    const known = a.duration != null && a.duration > 0;
+    // Some containers (MediaRecorder webm, live-ish mp4) report duration as
+    // Infinity/NaN - a clip born with that width crashed the renderer.
+    const known = a.duration != null && Number.isFinite(a.duration) && a.duration > 0 && a.duration <= 7200;
     const duration = known ? (a.duration as number) : DEFAULTS[a.kind];
     let layer: string, at: number;
     if (layerId != null) { layer = layerId; at = Math.max(0, start ?? +playheadRef.current.toFixed(2)); }
@@ -3768,8 +3779,12 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                           const hh = laneH - 12;
                           const scale = hh / fs.fh;
                           const tileW = Math.max(16, fs.fw * scale);
-                          const w = Math.max(24, c.duration * pxPerSec);
-                          const n = Math.max(1, Math.ceil(w / tileW));
+                          const wRaw = c.duration * pxPerSec;
+                          // Finite + bounded: a clip with a broken duration
+                          // (Infinity from some containers) must never turn
+                          // into millions of DOM tiles.
+                          const w = Number.isFinite(wRaw) ? Math.max(24, Math.min(wRaw, 200_000)) : 24;
+                          const n = Math.max(1, Math.min(300, Math.ceil(w / tileW)));
                           const sd = fs.dur > 0 ? fs.dur : (c.srcDur && c.srcDur > 0 ? c.srcDur : (c.inset || 0) + c.duration);
                           return (
                             <span className="absolute inset-0 flex overflow-hidden pointer-events-none opacity-90" aria-hidden>

@@ -106,18 +106,31 @@ export default function Lightbox({
   // close the viewer). NodeExpandedModal already portals for the same reason.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+  const downOnBackdropRef = useRef(false);
   if (!mounted) return null;
+  const isBackdrop = (t: EventTarget | null) => !(t as HTMLElement | null)?.closest?.("[data-lb-keep]");
   return createPortal(
     <div
       ref={rootRef}
       className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center p-2"
-      onClick={onClose}
-      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        // Close ONLY when the interaction started AND ended on the backdrop.
+        // A click whose target got retargeted (element re-rendered between
+        // down and up - e.g. the nav arrows swapping the media) must never
+        // close the viewer.
+        if (downOnBackdropRef.current && isBackdrop(e.target)) onClose();
+        downOnBackdropRef.current = false;
+      }}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        downOnBackdropRef.current = isBackdrop(e.target);
+      }}
     >
       {/* Controls — one compact rounded toolbar at the top-right. It carries its
           own solid contrast, so it reads cleanly over media of ANY size/shape
           (no full-width gradient band stretching across the empty letterbox). */}
       <div
+        data-lb-keep
         className="absolute top-3 right-3 flex items-center gap-0.5 bg-black/55 backdrop-blur rounded-full p-1 z-20"
         onClick={(e) => e.stopPropagation()}
       >
@@ -151,6 +164,7 @@ export default function Lightbox({
 
       {/* Media container — stopPropagation so clicking the media doesn't close */}
       <div
+        data-lb-keep
         className="max-w-[98vw] max-h-[97vh] flex items-center justify-center"
         onClick={(e) => e.stopPropagation()}
       >
@@ -178,10 +192,9 @@ export default function Lightbox({
       {onPrev && (
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPrev();
-          }}
+          data-lb-keep
+          onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); onPrev(); }}
+          onClick={(e) => e.stopPropagation()}
           className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center backdrop-blur"
           title="Previous (←)"
         >
@@ -191,10 +204,9 @@ export default function Lightbox({
       {onNext && (
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onNext();
-          }}
+          data-lb-keep
+          onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); onNext(); }}
+          onClick={(e) => e.stopPropagation()}
           className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center backdrop-blur"
           title="Next (→)"
         >
@@ -205,6 +217,7 @@ export default function Lightbox({
       {/* "n of N" badge at the bottom when navigating a list. */}
       {position && position.total > 1 && (
         <div
+          data-lb-keep
           className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white/10 text-white text-[12px] backdrop-blur"
           onClick={(e) => e.stopPropagation()}
         >

@@ -2320,6 +2320,20 @@ export default function Canvas({
       activeRunPoll.current.delete(runId);
     }
     setRuns((rs) => rs.map((r) => (r.id === runId ? { ...r, status: "cancelled" } : r)));
+    // Immediately clear the spinners: nodes of this run that never got a
+    // final step status used to spin until a manual page reload.
+    const stopped = runs.find((r) => r.id === runId);
+    const scope = stopped?.scopeNodeId;
+    const inScope = (id: string) =>
+      !scope || (Array.isArray(scope) ? scope.includes(id) : scope === id);
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) =>
+        (n.status === "running" || n.status === "pending") && inScope(n.id)
+          ? { ...n, status: "idle" }
+          : n,
+      ),
+    }));
     if (activeRunPoll.current.size === 0) setIsRunning(false);
   }
 
@@ -2432,6 +2446,18 @@ export default function Canvas({
           activeRunPoll.current.delete(runId);
           inflightScopes.current.delete(scopeKey);
           if (activeRunPoll.current.size === 0) setIsRunning(false);
+          // Any node still spinning without a final step (cancelled runs,
+          // steps that never started) goes back to idle - no zombie loaders.
+          const finalStepStatus = new Map(data.steps.map((s) => [s.nodeId, s.status] as const));
+          setGraph((g) => ({
+            ...g,
+            nodes: g.nodes.map((n) => {
+              if (n.status !== "running" && n.status !== "pending") return n;
+              const st = finalStepStatus.get(n.id);
+              if (st === "done" || st === "error") return n; // step mapping handles it
+              return { ...n, status: "idle" };
+            }),
+          }));
         }
       } catch (err) {
         console.error("Poll error:", err);
