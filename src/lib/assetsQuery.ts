@@ -2,6 +2,7 @@
 // /api/assets route (consumed by the canvas drawer). Keeps classification,
 // dedupe and brand-kit merging in one place.
 import { prisma } from "@/lib/prisma";
+import { resignUrlsBatch } from "@/lib/storage";
 
 export type AssetItem = {
   id: string;
@@ -159,6 +160,13 @@ export async function queryAssets(f: AssetFilters): Promise<{
   }
 
   let combined = f.source === "brand_kit" ? brandKit : [...filteredByKind, ...brandKit];
+  // Refresh signed tokens for the PAGE being returned - stored cdnUrls expire
+  // after their original TTL and every thumbnail starts 400ing ("old
+  // generations do not show"). One batched storage call per request.
+  try {
+    const fresh = await resignUrlsBatch(combined.slice(0, limit + 50).map((a) => a.cdnUrl));
+    if (fresh.size > 0) combined = combined.map((a) => (fresh.has(a.cdnUrl) ? { ...a, cdnUrl: fresh.get(a.cdnUrl)! } : a));
+  } catch { /* originals */ }
   if (f.projectFirst) {
     // Stable partition: current project's assets first, everything else after,
     // each group keeping its createdAt order.

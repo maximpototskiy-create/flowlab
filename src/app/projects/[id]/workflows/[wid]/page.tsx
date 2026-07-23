@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import Canvas from "@/components/canvas/Canvas";
 import { EMPTY_GRAPH, type Graph } from "@/lib/canvas/types";
+import { resignGraphUrls } from "@/lib/storage";
 
 export default async function WorkflowPage({
   params,
@@ -69,6 +70,9 @@ export default async function WorkflowPage({
   let graph: Graph = EMPTY_GRAPH;
   try {
     const stored = workflow.graph as unknown as { nodes?: unknown; edges?: unknown };
+  // Old graphs carry expired signed URLs in outputs/results/history/uploads -
+  // refresh them server-side so previews in old projects just work.
+  await resignGraphUrls(stored);
     if (
       stored &&
       typeof stored === "object" &&

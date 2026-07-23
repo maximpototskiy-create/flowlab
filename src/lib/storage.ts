@@ -132,6 +132,82 @@ export async function resignSupabaseUrl(url: string): Promise<string> {
   }
 }
 
+/** Extract our bucket's storage path from a signed URL (null when foreign). */
+export function pathFromSignedUrl(url: string): string | null {
+  const m = url.match(/\/storage\/v1\/object\/sign\/([^/]+)\/([^?]+)/);
+  if (!m || m[1] !== BUCKET) return null;
+  try { return decodeURIComponent(m[2]); } catch { return null; }
+}
+
+/** Re-sign MANY display URLs in one storage call (createSignedUrls). Stored
+ *  cdnUrls carry the token minted at generation time; once the original TTL
+ *  passes, every gallery thumbnail and old canvas preview 400s. Called on
+ *  READ paths (asset feeds, workflow graph load) so old content just works.
+ *  Foreign/unparseable URLs pass through; any error falls back to originals. */
+export async function resignUrlsBatch(urls: string[], ttlSec = 60 * 60 * 24 * 30): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const paths: string[] = [];
+  const byPath = new Map<string, string[]>();
+  for (const u of urls) {
+    const p = pathFromSignedUrl(u);
+    if (!p) continue;
+    if (!byPath.has(p)) { byPath.set(p, []); paths.push(p); }
+    byPath.get(p)!.push(u);
+  }
+  if (paths.length === 0) return out;
+  try {
+    const supa = adminClient();
+    // createSignedUrls caps large batches - chunk defensively.
+    for (let i = 0; i < paths.length; i += 100) {
+      const chunk = paths.slice(i, i + 100);
+      const { data, error } = await supa.storage.from(BUCKET).createSignedUrls(chunk, ttlSec);
+      if (error || !data) continue;
+      for (const row of data) {
+        if (!row.signedUrl || !row.path) continue;
+        for (const orig of byPath.get(row.path) ?? []) out.set(orig, row.signedUrl);
+      }
+    }
+  } catch { /* fall back to originals */ }
+  return out;
+}
+
+/** Walk a workflow graph and refresh every signed media URL found in node
+ *  outputs, results, history and upload-node configs. Mutates in place. */
+export async function resignGraphUrls(graph: { nodes?: unknown } | null | undefined): Promise<void> {
+  const nodes = (graph as { nodes?: Record<string, unknown>[] } | null | undefined)?.nodes;
+  if (!Array.isArray(nodes)) return;
+  const found = new Set<string>();
+  const collect = (v: unknown) => {
+    if (typeof v === "string" && v.includes("/storage/v1/object/sign/")) found.add(v);
+    else if (Array.isArray(v)) v.forEach(collect);
+    else if (v && typeof v === "object") Object.values(v).forEach(collect);
+  };
+  for (const n of nodes) {
+    collect(n.outputs); collect(n.results); collect(n.history);
+    const cfg = n.config as Record<string, unknown> | undefined;
+    if (cfg) { collect(cfg.cdnUrl); collect(cfg.dataUrl); collect(cfg.url); collect(cfg.selected); }
+  }
+  if (found.size === 0) return;
+  const fresh = await resignUrlsBatch([...found]);
+  if (fresh.size === 0) return;
+  const swap = (v: unknown): unknown => {
+    if (typeof v === "string") return fresh.get(v) ?? v;
+    if (Array.isArray(v)) return v.map(swap);
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      for (const k of Object.keys(o)) o[k] = swap(o[k]);
+      return o;
+    }
+    return v;
+  };
+  for (const n of nodes) {
+    if (n.outputs) n.outputs = swap(n.outputs);
+    if (n.results) n.results = swap(n.results);
+    if (n.history) n.history = swap(n.history);
+    if (n.config) n.config = swap(n.config);
+  }
+}
+
 export function buildStoragePath(parts: {
   brandId?: string | null;
   projectId?: string | null;
