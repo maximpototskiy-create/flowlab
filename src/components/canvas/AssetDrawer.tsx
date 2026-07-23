@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Search, X, Image as ImageIcon, Video, Music, Loader2, Plus, Download, Sparkles, Play, Pause, Trash2, RefreshCw, Cloud } from "lucide-react";
 import type { AssetItem } from "@/lib/assetsQuery";
+import RecipeModal from "@/components/RecipeModal";
 import SaveToLibraryButton from "@/components/SaveToLibraryButton";
 
 const KINDS = [
@@ -58,6 +59,7 @@ export default function AssetDrawer({
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [preview, setPreview] = useState<AssetItem | null>(null);
+  const [recipeFor, setRecipeFor] = useState<string | null>(null);
   // "Find similar" mode: search fal by a reference media URL.
   const [similar, setSimilar] = useState<{ url: string; kind: string; label: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -707,6 +709,14 @@ export default function AssetDrawer({
                 onMouseLeave={(e) => { const v = e.currentTarget.querySelector("video"); if (v) { (v as HTMLVideoElement).pause(); (v as HTMLVideoElement).currentTime = 0; } }}
                 className="group relative aspect-square rounded-md overflow-hidden bg-bg border border-border hover:border-brand cursor-grab active:cursor-grabbing"
               >
+                {a.source === "generated" && !a.id.startsWith("ba-") && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setRecipeFor(a.id); }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="absolute top-1 left-1 z-10 w-5 h-5 rounded bg-black/60 hover:bg-black/85 text-white text-[9px] items-center justify-center hidden group-hover:flex"
+                    title="Generation recipe"
+                  >i</button>
+                )}
                 {a.kind === "image" && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={a.cdnUrl} alt="" onLoad={(e) => noteDims(a.cdnUrl, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} className="w-full h-full object-cover pointer-events-none" loading="lazy" />
@@ -873,6 +883,7 @@ export default function AssetDrawer({
           )}
         </div>
       )}
+      {recipeFor && <RecipeModal assetId={recipeFor} onClose={() => setRecipeFor(null)} />}
     </div>
   );
 }

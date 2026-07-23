@@ -7,16 +7,31 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { pathFromSignedUrl } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request): Promise<NextResponse> {
   await requireUser();
-  const id = new URL(req.url).searchParams.get("id");
-  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+  const sp = new URL(req.url).searchParams;
+  const id = sp.get("id");
+  const url = sp.get("url");
+  if (!id && !url) return NextResponse.json({ error: "Missing id or url" }, { status: 400 });
   try {
+    let lookupId = id;
+    if (!lookupId && url) {
+      // Match by storage path: signed tokens rotate, the path never does.
+      const path = pathFromSignedUrl(url);
+      const found = (await prisma.asset.findFirst({
+        where: path ? { cdnUrl: { contains: path.split("/").pop() ?? path } } : { cdnUrl: url },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      })) as { id: string } | null;
+      if (!found) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      lookupId = found.id;
+    }
     const asset = (await prisma.asset.findUnique({
-      where: { id },
+      where: { id: lookupId! },
       select: {
         id: true,
         model: true,

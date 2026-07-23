@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp, Info, MoreHorizontal, Play, Maximize2, X, Alert
 import { WheelScroll } from "./WheelScroll";
 import VideoGenControls from "./VideoGenControls";
 import Lightbox, { downloadAsset } from "./Lightbox";
+import RecipeModal from "@/components/RecipeModal";
 import TrackEditor, { type TrackKey } from "./TrackEditor";
 import { NODE_TYPES, getActiveInputs, getActiveOutputs, type GraphNode, type GraphEdge, type FieldDef } from "@/lib/canvas/types";
 import { NodeIcon } from "@/lib/canvas/icons";
@@ -1539,6 +1540,7 @@ function OutputPreview({
   expanded?: boolean;
 }) {
   const [showHistory, setShowHistory] = useState(false);
+  const [recipeUrl, setRecipeUrl] = useState<string | null>(null);
   const hiddenUrl = typeof outputs.track_url === "string" ? outputs.track_url : null;
   const cleanResults = results ? results.filter((r) => typeof r.value === "string" && r.value !== hiddenUrl && !r.value.includes("screen-track")) : [];
   const list = cleanResults.length > 0 ? cleanResults : Object.entries(outputs).filter(([k, v]) => typeof v === "string" && k !== "track_url" && !k.startsWith("_")).map(([, v]) => ({ value: v as string }));
@@ -1585,7 +1587,20 @@ function OutputPreview({
             <DownloadIcon size={13} />
           </button>
         )}
+        {/* Generation recipe: model / prompt / refs with copy buttons */}
+        {canExpand && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setRecipeUrl(url); }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="absolute top-1.5 right-[4.6rem] w-7 h-7 rounded-md bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover/preview:opacity-100 transition-opacity backdrop-blur-sm"
+            title="Generation recipe (model, prompt, refs)"
+          >
+            <Info size={13} />
+          </button>
+        )}
       </div>
+      {recipeUrl && <RecipeModal url={recipeUrl} onClose={() => setRecipeUrl(null)} />}
       {list.length > 1 && (
         <div className="mt-1 flex gap-1 overflow-x-auto">
           {list.map((r, i) => (

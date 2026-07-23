@@ -11,6 +11,7 @@ import {
   Scissors, Eye, EyeOff, Lock, Unlock, Folder, ArrowUp, Minus, Paperclip, Subtitles, SlidersHorizontal, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Tag, X, Layers, Info, Volume2, VolumeX,
 } from "lucide-react";
 import TrackEditor from "@/components/canvas/TrackEditor";
+import RecipeModal from "@/components/RecipeModal";
 
 // After Effects-style keyframe glyph. The shape encodes the easing of the
 // segment ARRIVING at this key (matching the applyEase semantics):
@@ -612,6 +613,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
   const [brands, setBrands] = useState<{ value: string; label: string }[]>([]);
   const [projects, setProjects] = useState<{ value: string; label: string }[]>([]);
   const [binLoading, setBinLoading] = useState(false);
+  const [recipeUrl, setRecipeUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [resKey, setResKey] = useState("9:16");
   // Per-format layout overrides: layouts[formatKey][clipId] = { x, y, scale }.
@@ -2826,6 +2828,10 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
                 </span>
               )}
               <span className="absolute top-1 left-1 px-1 rounded bg-black/60 text-[8px] uppercase text-white/80">{a.kind}</span>
+              <button onClick={(e) => { e.stopPropagation(); setRecipeUrl(a.url); }}
+                onPointerDown={(e) => e.stopPropagation()}
+                title="Generation recipe (model, prompt, refs)"
+                className="absolute top-1 right-1 w-5 h-5 rounded bg-black/60 hover:bg-black/85 text-white text-[9px] items-center justify-center hidden group-hover:flex">i</button>
               {extOf(a.url) && <span className="absolute bottom-1 left-1 px-1 rounded bg-black/60 text-[8px] text-white/70">{extOf(a.url)}</span>}
               {a.subpath && <span className="absolute top-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/80">{a.subpath.split("/")[0]}</span>}
               {a.duration != null && a.duration > 0 && <span className="absolute bottom-1 right-1 px-1 rounded bg-black/60 text-[8px] text-white/70">{Math.round(a.duration)}s</span>}
@@ -4337,6 +4343,7 @@ export default function VideoEditor({ assets, workflowId, projectId, projectName
           </div>
         );
       })()}
+      {recipeUrl && <RecipeModal url={recipeUrl} onClose={() => setRecipeUrl(null)} />}
       {trackOpen && sel && sel.sr?.green && (
         <TrackEditor
           source={sel.sr.green}
