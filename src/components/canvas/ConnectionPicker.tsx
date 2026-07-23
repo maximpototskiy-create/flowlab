@@ -24,10 +24,14 @@ export default function ConnectionPicker({
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
-    setTimeout(() => document.addEventListener("mousedown", onDown), 50);
+    // Capture phase: canvas internals stopPropagation on pointerdown all over
+    // the place, which used to swallow the outside-click and leave the menu
+    // hanging ("clicked empty space, menu stayed"). Capture fires first.
+    const t = setTimeout(() => document.addEventListener("pointerdown", onDown as EventListener, { capture: true }), 50);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      clearTimeout(t);
+      document.removeEventListener("pointerdown", onDown as EventListener, { capture: true });
       document.removeEventListener("keydown", onKey);
     };
   }, [onClose]);

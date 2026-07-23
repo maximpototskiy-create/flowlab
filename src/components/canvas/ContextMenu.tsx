@@ -29,10 +29,14 @@ export default function ContextMenu({
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
-    setTimeout(() => document.addEventListener("mousedown", onDown), 50);
+    // Capture phase: canvas internals stopPropagation on pointerdown all over
+    // the place, which used to swallow the outside-click and leave the menu
+    // hanging ("clicked empty space, menu stayed"). Capture fires first.
+    const t = setTimeout(() => document.addEventListener("pointerdown", onDown as EventListener, { capture: true }), 50);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      clearTimeout(t);
+      document.removeEventListener("pointerdown", onDown as EventListener, { capture: true });
       document.removeEventListener("keydown", onKey);
     };
   }, [onClose]);
@@ -58,7 +62,7 @@ export default function ContextMenu({
     >
       {/* Search */}
       <div className="px-3 py-2 border-b border-border relative">
-        <Search size={12} className="absolute left-5 top-1/2 -translate-y-1/2 text-fg-subtle" strokeWidth={1.5} />
+        <Search size={12} className="absolute left-4 top-1/2 -translate-y-1/2 text-fg-subtle pointer-events-none" strokeWidth={1.5} />
         <input
           autoFocus
           type="text"
@@ -71,7 +75,7 @@ export default function ContextMenu({
             else if (e.key === "ArrowUp") { e.preventDefault(); setHl((i) => Math.max(i - 1, 0)); }
             else if (e.key === "Enter") { e.preventDefault(); const m = matches[hlSafe]; if (m) { onPick(m[0]); onClose(); } }
           }}
-          className="w-full bg-transparent border-none outline-none pl-5 text-[12px] text-fg placeholder:text-fg-subtle"
+          className="w-full bg-transparent border-none outline-none pl-6 text-[12px] text-fg placeholder:text-fg-subtle"
         />
       </div>
 

@@ -35,10 +35,13 @@ export default function ActionMenu({
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
-    setTimeout(() => document.addEventListener("mousedown", onDown), 50);
+    // Capture phase - see ContextMenu: outside clicks must close the menu
+    // even when the press lands on an element that stopPropagation()s.
+    const t = setTimeout(() => document.addEventListener("pointerdown", onDown as EventListener, { capture: true }), 50);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      clearTimeout(t);
+      document.removeEventListener("pointerdown", onDown as EventListener, { capture: true });
       document.removeEventListener("keydown", onKey);
     };
   }, [onClose]);
